@@ -53,7 +53,7 @@ sha256sum -c --ignore-missing SHA256SUMS && sudo bash install.sh
 ```sh
 o-ui info | port [端口] | path | reset-admin
 o-ui status | start | stop | restart | log
-o-ui update [--version v1.2.3]     # 升级程序，数据保留；新版本启动失败自动回退，上一版保留在/opt/o-ui.prev
+o-ui update [--version 2026-10-21]     # 升级程序，数据保留；新版本启动失败自动回退，上一版保留在/opt/o-ui.prev
 o-ui cert                          # 重新申请证书或改用扫描到的已有证书
 o-ui cert renew [--force]          # 手动续期
 o-ui bbr status | on | off
@@ -79,10 +79,10 @@ o-ui uninstall --purge             # 输入DELETE后删除全部数据、证书�
 ### 6. 生成Release文件
 
 ```sh
-npm run build:release -- --version v0.1.0
+npm run build:release -- --version 2026-10-21
 ```
 
-在`artifacts/release/o-ui-v0.1.0-*/`生成`o-ui-linux-amd64.tar.gz`、`o-ui-linux-arm64.tar.gz`、`install.sh`与`SHA256SUMS`（只这两个平台）。包内结构同本机包，另含`install.sh`、`LICENSE`、`VERSION`，均计入包内清单。`install.sh`仍含发布仓库或acme.sh摘要占位符时拒绝生成。只在本机生成，不上传或发布。
+版本号按发布日期：当天第一个为`2026-10-21`，同一天第二个起为`2026-10-21-v1`、`2026-10-21-v2`……；此前发布的`v0.1.0`–`v0.3.1`保留，任何日期版本都视为比它们新（面板“检测更新”按此比较）。在`artifacts/release/o-ui-2026-10-21-*/`生成`o-ui-linux-amd64.tar.gz`、`o-ui-linux-arm64.tar.gz`、`install.sh`与`SHA256SUMS`（只这两个平台）。包内结构同本机包，另含`install.sh`、`LICENSE`、`VERSION`，均计入包内清单。`install.sh`仍含发布仓库或acme.sh摘要占位符时拒绝生成。只在本机生成，不上传或发布。
 
 ### 7. 验证范围
 

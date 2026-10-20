@@ -9,9 +9,12 @@ const project = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 // 发布平台只保留这两种（用户2026-10-19决定）
 export const releaseArchitectures = ['amd64', 'arm64'];
 
+// 版本号按发布日期（用户2026-10-21决定）：当天第一个为2026-10-21，第二个起为2026-10-21-v1、-v2……
 export function releaseVersion(args = []) {
-  if (args.length !== 2 || args[0] !== '--version' || !/^v\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$/.test(args[1])) {
-    throw new Error('用法：npm run build:release -- --version v1.2.3');
+  const match = args.length === 2 && args[0] === '--version' ? /^(\d{4})-(\d{2})-(\d{2})(-v[1-9]\d{0,3})?$/.exec(args[1]) : null;
+  const day = match ? new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]))) : null;
+  if (!match || !day || day.getUTCFullYear() !== Number(match[1]) || day.getUTCMonth() !== Number(match[2]) - 1 || day.getUTCDate() !== Number(match[3])) {
+    throw new Error('用法：npm run build:release -- --version 2026-10-21（同日第二个起为2026-10-21-v1、-v2……）');
   }
   return args[1];
 }

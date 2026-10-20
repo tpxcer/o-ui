@@ -17,7 +17,42 @@ import (
 
 const releaseAPI = "https://api.github.com/repos/tpxcer/o-ui/releases/latest"
 
-var releaseTag = regexp.MustCompile(`^v(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z.]+)?$`)
+// 版本号按发布日期（用户2026-10-21决定）：当天第一个为2026-10-21，第二个起为2026-10-21-v1、-v2……；
+// 兼容此前的vX.Y.Z（含预发布后缀），任何日期版本都比旧版本新。
+var (
+	releaseTag = regexp.MustCompile(`^v(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z.]+)?$`)
+	dateTag    = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2})(?:-v([1-9][0-9]{0,3}))?$`)
+)
+
+type versionKey struct {
+	kind       int // 1为旧vX.Y.Z，2为日期版本
+	parts      [4]int
+	prerelease bool
+}
+
+func parseVersion(version string) (versionKey, bool) {
+	if m := dateTag.FindStringSubmatch(version); m != nil {
+		day, err := time.Parse("2006-01-02", m[1])
+		if err != nil {
+			return versionKey{}, false
+		}
+		n, _ := strconv.Atoi(m[2])
+		return versionKey{kind: 2, parts: [4]int{day.Year(), int(day.Month()), day.Day(), n}}, true
+	}
+	if m := releaseTag.FindStringSubmatch(version); m != nil {
+		key := versionKey{kind: 1, prerelease: m[4] != ""}
+		for i := 0; i < 3; i++ {
+			key.parts[i], _ = strconv.Atoi(m[i+1])
+		}
+		return key, true
+	}
+	return versionKey{}, false
+}
+
+func validVersion(version string) bool {
+	_, ok := parseVersion(version)
+	return ok
+}
 
 // panelUpdates只读当前包版本并按需查询GitHub最新正式版；不在网页里执行升级。
 type panelUpdates struct {
@@ -48,28 +83,30 @@ func installedVersion() string {
 		return "dev"
 	}
 	data, err := os.ReadFile(filepath.Join(filepath.Dir(filepath.Dir(executable)), "VERSION"))
-	if version := strings.TrimSpace(string(data)); err == nil && releaseTag.MatchString(version) {
+	if version := strings.TrimSpace(string(data)); err == nil && validVersion(version) {
 		return version
 	}
 	return "dev"
 }
 
 func newerVersion(latest, current string) bool {
-	a, b := releaseTag.FindStringSubmatch(latest), releaseTag.FindStringSubmatch(current)
-	if a == nil || a[4] != "" {
+	a, ok := parseVersion(latest)
+	if !ok || a.prerelease {
 		return false
 	}
-	if b == nil {
+	b, ok := parseVersion(current)
+	if !ok {
 		return true
 	}
-	for i := 1; i <= 3; i++ {
-		x, _ := strconv.Atoi(a[i])
-		y, _ := strconv.Atoi(b[i])
-		if x != y {
-			return x > y
+	if a.kind != b.kind {
+		return a.kind > b.kind
+	}
+	for i := range a.parts {
+		if a.parts[i] != b.parts[i] {
+			return a.parts[i] > b.parts[i]
 		}
 	}
-	return b[4] != ""
+	return b.prerelease
 }
 
 func fetchLatestRelease(ctx context.Context) (string, string, error) {
@@ -92,7 +129,7 @@ func fetchLatestRelease(ctx context.Context) (string, string, error) {
 		Tag string `json:"tag_name"`
 		URL string `json:"html_url"`
 	}
-	if json.NewDecoder(io.LimitReader(response.Body, 256<<10)).Decode(&release) != nil || !releaseTag.MatchString(release.Tag) || !strings.HasPrefix(release.URL, "https://github.com/") {
+	if json.NewDecoder(io.LimitReader(response.Body, 256<<10)).Decode(&release) != nil || !validVersion(release.Tag) || !strings.HasPrefix(release.URL, "https://github.com/") {
 		return "", "", i18n.New("GitHub 返回的版本信息无效", "GitHub returned invalid release information")
 	}
 	return release.Tag, release.URL, nil

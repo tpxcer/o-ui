@@ -10,7 +10,10 @@ func TestPanelVersionComparesReleasesOnly(t *testing.T) {
 	for _, c := range []struct {
 		latest, current string
 		newer           bool
-	}{{"v0.2.0", "v0.1.0", true}, {"v0.1.0", "v0.1.0", false}, {"v0.1.0", "v0.2.0", false}, {"v1.0.0", "v0.9.9", true}, {"v0.1.0", "v0.1.0-rc.1", true}, {"v0.2.0-rc.1", "v0.1.0", false}, {"v0.1.0", "dev", true}, {"", "v0.1.0", false}} {
+	}{{"v0.2.0", "v0.1.0", true}, {"v0.1.0", "v0.1.0", false}, {"v0.1.0", "v0.2.0", false}, {"v1.0.0", "v0.9.9", true}, {"v0.1.0", "v0.1.0-rc.1", true}, {"v0.2.0-rc.1", "v0.1.0", false}, {"v0.1.0", "dev", true}, {"", "v0.1.0", false},
+		{"2026-10-21", "v0.3.1", true}, {"v9.9.9", "2026-10-21", false}, {"2026-10-21-v1", "2026-10-21", true}, {"2026-10-21", "2026-10-21-v1", false},
+		{"2026-10-21-v10", "2026-10-21-v9", true}, {"2026-10-22", "2026-10-21-v3", true}, {"2026-10-21", "2026-10-21", false}, {"2026-02-30", "v0.1.0", false},
+		{"2026-10-21-v0", "v0.1.0", false}, {"2026-1-21", "v0.1.0", false}, {"2026-10-21", "dev", true}} {
 		if newerVersion(c.latest, c.current) != c.newer {
 			t.Fatal(c)
 		}

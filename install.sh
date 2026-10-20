@@ -235,7 +235,7 @@ parse_pkg_opts() {
       *) die "未知参数：$1" "unknown option: $1" ;;
     esac
   done
-  case $OPT_VERSION in ''|v[0-9]*) ;; *) die "版本应形如v1.2.3" "version must look like v1.2.3" ;; esac
+  case $OPT_VERSION in ''|v[0-9]*|[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]|[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-v[0-9]*) ;; *) die "版本应形如2026-10-21或2026-10-21-v1" "version must look like 2026-10-21 or 2026-10-21-v1" ;; esac
   case $OPT_VERSION in *[!A-Za-z0-9.-]*) die "版本含无效字符" "invalid characters in version" ;; esac
 }
 
@@ -1321,7 +1321,7 @@ cmd_menu() {
 
 usage() {
   info "o-ui 管理命令：
-  install [--version vX.Y.Z | --package 文件 [--sums SHA256SUMS]]  安装
+  install [--version 2026-10-21 | --package 文件 [--sums SHA256SUMS]]  安装
   update  [同上]          升级程序（保留数据，失败自动回退）
   uninstall [--purge]     卸载（默认保留数据；--purge删除全部）
   start|stop|restart|status|log
@@ -1334,7 +1334,7 @@ usage() {
   cert renew [--force]    手动续期ACME证书
   bbr [status|on|off]     查看/开启/回退BBR
   version" "o-ui management:
-  install [--version vX.Y.Z | --package FILE [--sums SHA256SUMS]]  install
+  install [--version 2026-10-21 | --package FILE [--sums SHA256SUMS]]  install
   update  [same options]  upgrade the program (data kept, automatic rollback on failure)
   uninstall [--purge]     uninstall (data kept by default; --purge deletes everything)
   start|stop|restart|status|log

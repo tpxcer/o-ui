@@ -411,6 +411,11 @@ test('从GitHub Release下载最新或指定版本，并按发布清单校验', 
   const pinned = second.run(['install', '--version', 'v0.1.0'], [...start(), ...acme(), 'n'], { O_UI_REPO: 'owner/o-ui', FAKE_ARCH: 'aarch64' });
   assert.notEqual(pinned.status, 0);
   assert.match(await second.log('calls.log'), /releases\/download\/v0\.1\.0\/o-ui-linux-arm64\.tar\.gz/);
+  const dated = await sandbox();
+  dated.run(['install', '--version', '2026-10-21-v1'], [...start(), ...acme(), 'n'], { O_UI_REPO: 'owner/o-ui' });
+  assert.match(await dated.log('calls.log'), /releases\/download\/2026-10-21-v1\/o-ui-linux-amd64\.tar\.gz/);
+  const badVersion = (await sandbox()).run(['install', '--version', 'latest'], ['1'], { O_UI_REPO: 'owner/o-ui' });
+  assert.notEqual(badVersion.status, 0); assert.match(badVersion.out, /版本应形如2026-10-21|version must look like 2026-10-21/);
   const official = await sandbox();
   assert.equal(official.run(['install'], [...start(), ...acme(), 'n']).status, 0);
   assert.match(await official.log('calls.log'), /^curl https:\/\/github\.com\/tpxcer\/o-ui\/releases\/latest\/download\/o-ui-linux-amd64\.tar\.gz$/m);

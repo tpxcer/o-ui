@@ -11,10 +11,10 @@ import { packBundle, releaseArchitectures, releaseVersion, writeReleaseSums } fr
 process.env.LC_ALL = 'zh_CN.UTF-8';
 const startScript = new URL('../scripts/start-local.sh', import.meta.url);
 
-test('Release版本号必须显式且形如v1.2.3，平台只有linux-amd64与linux-arm64', () => {
+test('Release版本号必须显式且按日期（2026-10-21、同日第二个起-v1），平台只有linux-amd64与linux-arm64', () => {
   assert.deepEqual(releaseArchitectures, ['amd64', 'arm64']);
-  for (const version of ['v1.2.3', 'v0.1.0', 'v1.0.0-rc.1']) assert.equal(releaseVersion(['--version', version]), version);
-  for (const args of [[], ['v1.2.3'], ['--version'], ['--version', '1.2.3'], ['--version', 'v1.2'], ['--version', 'v1.2.3;rm'], ['--version', 'v1.2.3', 'x']]) assert.throws(() => releaseVersion(args), /用法/);
+  for (const version of ['2026-10-21', '2026-10-21-v1', '2026-10-21-v12', '2028-02-29']) assert.equal(releaseVersion(['--version', version]), version);
+  for (const args of [[], ['2026-10-21'], ['--version'], ['--version', 'v1.2.3'], ['--version', '2026-10-21-v0'], ['--version', '2026-10-21-1'], ['--version', '2026-02-30'], ['--version', '2026-1-21'], ['--version', '2026-10-21;rm'], ['--version', '2026-10-21', 'x']]) assert.throws(() => releaseVersion(args), /用法/);
 });
 
 async function fixture(installer = '#!/usr/bin/env bash\nREPO=${O_UI_REPO:-owner/o-ui}\nACME_SH_SHA256=' + 'a'.repeat(64) + '\n') {
