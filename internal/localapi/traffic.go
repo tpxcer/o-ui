@@ -205,6 +205,8 @@ func (rt *Runtime) apply(ctx context.Context, c engine.Candidate) error {
 		}
 		return err
 	}
+	// 核心已切换：收尾不随关闭信号或请求断开中止，否则历史停在切换未完成、下次启动拒绝恢复；关闭流程持rt.mu等待收尾。
+	ctx = context.WithoutCancel(ctx)
 	if c.Inbounds > 0 {
 		if err = rt.checkpointCurrent(ctx); err != nil {
 			_ = rt.engine.Stop()

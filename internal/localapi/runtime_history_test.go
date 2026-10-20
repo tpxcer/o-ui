@@ -285,6 +285,65 @@ func TestAutoResumeIntentFollowsStop(t *testing.T) {
 	}
 }
 
+// 核心已切换、启动确认未结束时收到关闭信号（或请求断开）：收尾不得中止，运行历史不能停在切换未完成。
+func TestApplyCancelledDuringStartFinishesHistory(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	rt, err := NewRuntime(nil, s, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rt.Close()
+	dir, err := os.MkdirTemp(rt.root, "candidate-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 假核心：预检直接通过，正式运行时先留下启动标记再常驻。
+	started, binary := filepath.Join(t.TempDir(), "started"), filepath.Join(t.TempDir(), "xray")
+	if err = os.WriteFile(binary, []byte("#!/bin/sh\n[ \"$2\" = -test ] && exit 0\n: > '"+started+"'\nexec sleep 600\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	c := engine.Candidate{Binary: binary, Version: "26.7.28", WorkspaceRevision: 1, SettingsRevision: 2, Inbounds: 1, File: filepath.Join(dir, "config.json"), PolicyFile: filepath.Join(dir, "policy.json")}
+	data, _ := json.Marshal(map[string]any{"inbounds": []config.CompiledInbound{{Tag: "in-one", Listen: "127.0.0.1", Settings: config.ProtocolSettings{Clients: []config.User{{Email: "client-a"}}}}}})
+	if err = writePrivate(c.File, data); err != nil {
+		t.Fatal(err)
+	}
+	data, _ = json.Marshal(runtimePolicy{Clients: map[string]clientLimit{"a": {}}})
+	if err = writePrivate(c.PolicyFile, data); err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		for ctx.Err() == nil {
+			if _, err := os.Stat(started); err == nil {
+				cancel()
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}()
+	rt.mu.Lock()
+	err = rt.apply(ctx, c)
+	rt.mu.Unlock()
+	if ctx.Err() == nil {
+		t.Fatal("cancellation did not arrive while the core was starting")
+	}
+	if err != nil || !rt.engine.Status().Running {
+		t.Fatal("apply aborted after the core switched", err)
+	}
+	rt.mu.Lock()
+	record, _, err := rt.history(context.Background())
+	resume := rt.autoResume.resume
+	rt.mu.Unlock()
+	if err != nil || record.Pending || record.Candidate.File != c.File || !resume {
+		t.Fatal("run history left unfinished after cancellation", err)
+	}
+}
+
 func TestOfficialHistoryExpiredCertificate(t *testing.T) {
 	root := os.Getenv("PANEL_RUNTIME_QA_CORE")
 	if root == "" {

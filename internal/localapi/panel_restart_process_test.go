@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"os"
@@ -187,4 +188,65 @@ func TestPanelRestartProcessResumesCore(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("restarted panel did not stop after SIGTERM")
 	}
+	// 自动恢复的官方核心一开始监听就发SIGTERM（此时应用收尾通常未结束）：面板应等收尾完成再退出，下次启动仍自动恢复。
+	relaunch := func() {
+		t.Helper()
+		command = exec.Command(binary, "-listen", address, "-state", stateRoot, "-data", coreRoot, "-dist", filepath.Join(project, "dist"))
+		command.Stdout, command.Stderr = io.Discard, io.Discard
+		if err := command.Start(); err != nil {
+			t.Fatal(err)
+		}
+		current, finished := command, make(chan error, 1)
+		done, exited = finished, false
+		go func() { finished <- current.Wait() }()
+	}
+	terminate := func() {
+		t.Helper()
+		if err := command.Process.Signal(syscall.SIGTERM); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case err := <-done:
+			exited = true
+			if err != nil {
+				t.Fatal("panel did not stop cleanly after SIGTERM", err)
+			}
+		case <-time.After(15 * time.Second):
+			t.Fatal("panel did not stop after SIGTERM")
+		}
+	}
+	relaunch()
+	inbound := fmt.Sprintf("127.0.0.1:%d", draft.Inbounds[0].Port)
+	deadline = time.Now().Add(15 * time.Second)
+	for {
+		select {
+		case err := <-done:
+			exited = true
+			t.Fatal("panel exited during auto-resume", err)
+		default:
+		}
+		if connection, err := net.DialTimeout("tcp", inbound, 100*time.Millisecond); err == nil {
+			connection.Close()
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("auto-resumed core never listened")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	terminate()
+	relaunch()
+	ready()
+	deadline = time.Now().Add(15 * time.Second)
+	for {
+		after := status()
+		if after.Running && after.Version == version && after.WorkspaceRevision == 1 && after.SettingsRevision == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("core was not auto-resumed after SIGTERM during auto-resume", after, string(call("GET", "runtime/history", nil, 200)))
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	terminate()
 }
