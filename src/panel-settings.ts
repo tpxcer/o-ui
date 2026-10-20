@@ -5,6 +5,7 @@ import { settingsToolbar, settingSection, settingRow, toggle, selectControl, tex
 import { accessURL, generalForm, generalRequest, type GeneralForm, type GeneralStatus } from './panel-access.ts';
 import { subscriptionForm, subscriptionRequest, type SubscriptionForm, type SubscriptionStatus } from './subscription-settings.ts';
 import { planForm, planRows } from './server-plan.ts';
+import { telegramForm, telegramRequest, type TelegramForm, type TelegramStatus } from './telegram-settings.ts';
 import { parsePlanForm, type PlanStatus } from './server-plan-model.ts';
 import { passwordChangeError } from './password.ts';
 import { connectionQR } from './connection-qr.ts';
@@ -14,21 +15,24 @@ export interface PanelTLSStatus {
   active: boolean; serverNames: string[]; revision: number; activeRevision: number;
   data: { certificateFile: string; keyFile: string } | null;
 }
-type Tab = 'general' | 'security' | 'subscription';
-interface Values { general: GeneralForm; plan: Record<string, string>; language: string; subscription: SubscriptionForm }
+type Tab = 'general' | 'security' | 'subscription' | 'telegram';
+interface Values { general: GeneralForm; plan: Record<string, string>; language: string; subscription: SubscriptionForm; telegram: TelegramForm }
 type Section = keyof Values;
 // 表单字段所属分区；账号表单与两步验证不在其中，它们是即时操作。
 const sections: Record<string, Section> = {
   listenIP: 'general', domain: 'general', port: 'general', path: 'general', sessionMinutes: 'general', certificateFile: 'general', keyFile: 'general',
   node: 'plan', name: 'plan', resources: 'plan', quotaGB: 'plan', resetDay: 'plan', billing: 'plan', interfaces: 'plan', usedGB: 'plan',
   language: 'language', enabled: 'subscription', title: 'subscription', updateHours: 'subscription', showInfo: 'subscription', remarkClientName: 'subscription',
+  clashEnabled: 'subscription', jsonEnabled: 'subscription', jsonFragment: 'subscription', fragmentPackets: 'subscription', fragmentLength: 'subscription', fragmentInterval: 'subscription',
+  jsonDirectIP: 'subscription', jsonDirectDomain: 'subscription',
+  tgEnabled: 'telegram', tgToken: 'telegram', tgChatIds: 'telegram', tgReportTime: 'telegram', tgNotifyLogin: 'telegram', tgCpuThreshold: 'telegram', tgBackupEnabled: 'telegram', tgBackupPassword: 'telegram',
 };
 const copy = (values: Values): Values => JSON.parse(JSON.stringify(values));
 
 // 参照OUI的面板设置：顶部“保存/重启面板”，常规、安全、订阅三个标签，每项为“标题+一行说明 | 控件”。
 // 整页共用一个“保存”；表单值保存在draft中，重绘不丢未保存的修改。
 export function initPanelSettings(root: HTMLElement, persistent: boolean): { render: () => void; clearPassword: () => void } {
-  let general: GeneralStatus | null = null, plan: PlanStatus | null = null, subscription: SubscriptionStatus | null = null;
+  let general: GeneralStatus | null = null, plan: PlanStatus | null = null, subscription: SubscriptionStatus | null = null, telegram: TelegramStatus | null = null;
   let interfaces: string[] = [], username = '', twoFactor = false;
   let loading = false, saving = false, reloadRequired = false, error = '', note = '', tab: Tab = 'general';
   let baseline: Values | null = null, draft: Values | null = null;
@@ -37,9 +41,9 @@ export function initPanelSettings(root: HTMLElement, persistent: boolean): { ren
   document.body.append(dialog);
   window.addEventListener('panel-session-expired', () => { if (dialog.open) dialog.close(); });
 
-  const saved = (): Values => ({ general: generalForm(general!), plan: planForm(plan), language: lang, subscription: subscriptionForm(subscription!.data) });
+  const saved = (): Values => ({ general: generalForm(general!), plan: planForm(plan), language: lang, subscription: subscriptionForm(subscription!.data), telegram: telegramForm(telegram!.data) });
   const changed = (key: Section) => Boolean(draft && baseline) && JSON.stringify(draft![key]) !== JSON.stringify(baseline![key]);
-  const dirty = () => (['general', 'plan', 'language', 'subscription'] as Section[]).some(changed);
+  const dirty = () => (['general', 'plan', 'language', 'subscription', 'telegram'] as Section[]).some(changed);
 
   function status(): void {
     const save = root.querySelector<HTMLButtonElement>('#settings-save');
@@ -89,12 +93,40 @@ export function initPanelSettings(root: HTMLElement, persistent: boolean): { ren
     ].join(''))}${settingSection(t('信息', 'Information'), [
       settingRow(t('显示使用信息', 'Show usage info'), t('客户端中显示已用流量、总额度和到期时间', 'Clients show used traffic, quota and expiry'), toggle('showInfo', v.showInfo, t('显示使用信息', 'Show usage info'))),
       settingRow(t('节点名称包含客户端名', 'Client name in node name'), t('节点名称为“入站名-客户端名”，关闭则只用入站名', 'Node names become "inbound-client"; when off only the inbound name is used'), toggle('remarkClientName', v.remarkClientName, t('节点名称包含客户端名', 'Client name in node name'))),
-    ].join(''))}</form>`;
+    ].join(''))}${settingSection(t('订阅格式', 'Subscription formats'), [
+      settingRow(t('Clash / Mihomo 订阅', 'Clash / Mihomo subscription'), t('同一订阅链接加 /clash/，返回 Clash 配置（Mihomo、Clash Verge、Stash 等）', 'Add /clash/ to the same link to get a Clash profile (Mihomo, Clash Verge, Stash and others)'), toggle('clashEnabled', v.clashEnabled, t('Clash / Mihomo 订阅', 'Clash / Mihomo subscription'))),
+      settingRow(t('Xray JSON 订阅', 'Xray JSON subscription'), t('同一订阅链接加 /json/，返回完整 Xray 客户端配置（v2rayN、v2rayNG 等）', 'Add /json/ to the same link to get a full Xray client config (v2rayN, v2rayNG and others)'), toggle('jsonEnabled', v.jsonEnabled, t('Xray JSON 订阅', 'Xray JSON subscription'))),
+    ].join(''))}${settingSection(t('JSON 订阅选项', 'JSON subscription options'), [
+      settingRow(t('TLS 握手分片', 'TLS handshake fragment'), t('把 TLS 握手拆成小片发送，可绕过部分按 SNI 的封锁；只作用于 TCP 节点，HY2 不受影响', 'Splits the TLS handshake into small pieces to get around some SNI blocking; TCP nodes only, HY2 is not affected'), toggle('jsonFragment', v.jsonFragment, t('TLS 握手分片', 'TLS handshake fragment'))),
+      settingRow(t('分片包', 'Packets'), t('tlshello 只分片握手，或填包序号范围如 1-3', 'tlshello fragments only the handshake; or a packet range such as 1-3'), textControl('fragmentPackets', v.fragmentPackets, t('分片包', 'Packets'), 'maxlength="11"')),
+      settingRow(t('分片长度', 'Length'), t('每片字节数，如 100-200', 'Bytes per piece, e.g. 100-200'), textControl('fragmentLength', v.fragmentLength, t('分片长度', 'Length'), 'maxlength="11"')),
+      settingRow(t('分片间隔', 'Interval'), t('片间隔毫秒，如 10-20', 'Milliseconds between pieces, e.g. 10-20'), textControl('fragmentInterval', v.fragmentInterval, t('分片间隔', 'Interval'), 'maxlength="11"')),
+      settingRow(t('直连 IP', 'Direct IPs'), t('每行一项，如 geoip:private、geoip:cn 或 IP/CIDR；匹配的目标不走代理', 'One per line, e.g. geoip:private, geoip:cn or IP/CIDR; matching targets bypass the proxy'), `<textarea name="jsonDirectIP" rows="3" spellcheck="false" aria-label="${t('直连 IP', 'Direct IPs')}" placeholder="geoip:private">${esc(v.jsonDirectIP)}</textarea>`),
+      settingRow(t('直连域名', 'Direct domains'), t('每行一项，如 geosite:private、geosite:cn 或域名；匹配的目标不走代理', 'One per line, e.g. geosite:private, geosite:cn or a domain; matching targets bypass the proxy'), `<textarea name="jsonDirectDomain" rows="3" spellcheck="false" aria-label="${t('直连域名', 'Direct domains')}" placeholder="geosite:cn">${esc(v.jsonDirectDomain)}</textarea>`),
+    ].join(''), false)}</form>`;
   }
 
-  const tabs: [Tab, string][] = [['general', t('常规', 'General')], ['security', t('安全', 'Security')], ['subscription', t('订阅', 'Subscription')]];
+  function telegramTab(v: TelegramForm): string {
+    const view = telegram?.data;
+    const secret = (name: string, value: string, set: boolean | undefined, label: string) => `<input name="${name}" type="password" value="${esc(value)}" aria-label="${label}" autocomplete="new-password" spellcheck="false" placeholder="${set ? t('已设置，留空保持不变', 'Set; leave empty to keep') : t('未设置', 'Not set')}">`;
+    return `<form id="settings-telegram" novalidate>${settingSection(t('Telegram 机器人', 'Telegram bot'), [
+      settingRow(t('启用机器人', 'Enable bot'), t('只发送通知，不接收或执行 Telegram 里的命令', 'Sends notifications only; never receives or runs commands from Telegram'), toggle('tgEnabled', v.tgEnabled, t('启用机器人', 'Enable bot'))),
+      settingRow('Bot Token', t('在 Telegram 找 @BotFather 创建机器人后获得；只写不读', 'Create a bot with @BotFather in Telegram to get it; write-only'), secret('tgToken', v.tgToken, view?.tokenSet, 'Bot Token')),
+      settingRow(t('管理员 Chat ID', 'Admin chat IDs'), t('可向 @userinfobot 查询自己的 ID；多个用英文逗号分隔，并先给机器人发一条消息', 'Ask @userinfobot for your ID; separate several with commas, and message the bot once first'), textControl('tgChatIds', v.tgChatIds, t('管理员 Chat ID', 'Admin chat IDs'), 'maxlength="230" inputmode="numeric" placeholder="123456789"')),
+    ].join(''))}${settingSection(t('通知', 'Notifications'), [
+      settingRow(t('登录提醒', 'Sign-in alerts'), t('面板登录成功或失败时发送用户名、IP 和时间', 'Sends the username, IP and time on each successful or failed sign-in'), toggle('tgNotifyLogin', v.tgNotifyLogin, t('登录提醒', 'Sign-in alerts'))),
+      settingRow(t('每日报告时间', 'Daily report time'), t('服务器本地时间；报告含 Xray 状态、资源、业务流量和即将到期的客户端。留空不发送', 'Server local time; includes Xray status, resources, proxy traffic and clients expiring soon. Leave empty to disable'), textControl('tgReportTime', v.tgReportTime, t('每日报告时间', 'Daily report time'), 'type="time"')),
+      settingRow(t('CPU 提醒阈值（%）', 'CPU alert threshold (%)'), t('CPU 使用率达到该值时提醒，30 分钟内不重复；0 表示关闭', 'Alerts when CPU usage reaches this value, at most once per 30 minutes; 0 turns it off'), textControl('tgCpuThreshold', v.tgCpuThreshold, t('CPU 提醒阈值（%）', 'CPU alert threshold (%)'), 'type="number" min="0" max="100" inputmode="numeric"')),
+    ].join(''))}${settingSection(t('备份', 'Backup'), [
+      settingRow(t('随每日报告发送备份', 'Send backup with the daily report'), t('发送加密业务备份文件（.ixpb），可在“备份和恢复”中用下方口令恢复', 'Sends an encrypted business backup (.ixpb) that can be restored under Backup and restore with the password below'), toggle('tgBackupEnabled', v.tgBackupEnabled, t('随每日报告发送备份', 'Send backup with the daily report'))),
+      settingRow(t('备份加密口令', 'Backup password'), t('12 至 256 个字符；遗忘则备份无法恢复。只写不读', '12–256 characters; backups cannot be restored without it. Write-only'), secret('tgBackupPassword', v.tgBackupPassword, view?.backupPasswordSet, t('备份加密口令', 'Backup password'))),
+    ].join(''))}</form>
+    <div class="settings-table-actions"><button type="button" class="secondary-button" id="telegram-test">${t('发送测试消息', 'Send test message')}</button><button type="button" class="secondary-button" id="telegram-report">${t('立即发送报告', 'Send report now')}</button></div>`;
+  }
+
+  const tabs: [Tab, string][] = [['general', t('常规', 'General')], ['security', t('安全', 'Security')], ['subscription', t('订阅', 'Subscription')], ['telegram', 'Telegram']];
   function paint(): void {
-    const v = draft ?? { general: { listenIP: '', domain: '', port: '', path: '/', sessionMinutes: '720', certificateFile: '', keyFile: '' }, plan: planForm(null), language: lang, subscription: { enabled: true, title: 'o-ui', updateHours: '12', showInfo: true, remarkClientName: true } };
+    const v = draft ?? { general: { listenIP: '', domain: '', port: '', path: '/', sessionMinutes: '720', certificateFile: '', keyFile: '' }, plan: planForm(null), language: lang, subscription: { enabled: true, title: 'o-ui', updateHours: '12', showInfo: true, remarkClientName: true, clashEnabled: true, jsonEnabled: true, jsonFragment: false, fragmentPackets: 'tlshello', fragmentLength: '100-200', fragmentInterval: '10-20', jsonDirectIP: '', jsonDirectDomain: '' }, telegram: { tgEnabled: false, tgToken: '', tgChatIds: '', tgReportTime: '', tgNotifyLogin: false, tgCpuThreshold: '0', tgBackupEnabled: false, tgBackupPassword: '' } };
     root.innerHTML = `<header class="page-heading"><div><h1 class="page-title" tabindex="-1">${t('面板设置', 'Panel settings')}</h1></div></header>
       ${settingsToolbar(`<button type="button" class="primary-button" id="settings-save" disabled>${t('保存', 'Save')}</button><button type="button" class="secondary-button" id="settings-reload">${t('重新读取', 'Reload')}</button><button type="button" class="danger-button" id="panel-restart">${t('重启面板', 'Restart panel')}</button>`, t('此处的修改需要保存，重启面板后生效', 'Every change made here needs to be saved. Restart the panel to apply changes.'))}
       <p class="form-error settings-feedback" id="settings-error" role="alert" tabindex="-1" ${error ? '' : 'hidden'}>${esc(error)}</p><p class="core-message settings-feedback" id="settings-note" role="status">${esc(note)}</p>
@@ -102,14 +134,15 @@ export function initPanelSettings(root: HTMLElement, persistent: boolean): { ren
       ${!persistent ? `<p class="form-hint">${t('离线演示不读取或保存设置，请使用面板服务。', 'The offline demo does not read or save settings; use the running panel.')}</p>` : ''}
       <div role="tabpanel" data-settings-panel="general" ${tab === 'general' ? '' : 'hidden'}>${generalTab(v.general, v.language)}</div>
       <div role="tabpanel" data-settings-panel="security" ${tab === 'security' ? '' : 'hidden'}>${securityTab()}</div>
-      <div role="tabpanel" data-settings-panel="subscription" ${tab === 'subscription' ? '' : 'hidden'}>${subscriptionTab(v.subscription)}</div></section>`;
-    root.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>('#settings-general input, #settings-general select, #settings-subscription input, #settings-account input, #settings-account button, #settings-twofactor input').forEach(element => { element.disabled = !draft; });
+      <div role="tabpanel" data-settings-panel="subscription" ${tab === 'subscription' ? '' : 'hidden'}>${subscriptionTab(v.subscription)}</div>
+      <div role="tabpanel" data-settings-panel="telegram" ${tab === 'telegram' ? '' : 'hidden'}>${telegramTab(v.telegram)}</div></section>`;
+    root.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>('#settings-general input, #settings-general select, #settings-subscription input, #settings-subscription textarea, #settings-telegram input, #telegram-test, #telegram-report, #settings-account input, #settings-account button, #settings-twofactor input').forEach(element => { element.disabled = !draft; });
     status();
   }
 
   function edit(target: HTMLInputElement): void {
     const section = sections[target.name];
-    if (!draft || !section || !target.closest?.('#settings-general, #settings-subscription')) return;
+    if (!draft || !section || !target.closest?.('#settings-general, #settings-subscription, #settings-telegram')) return;
     const value = target.type === 'checkbox' ? target.checked : target.value;
     if (section === 'language') draft.language = String(value);
     else (draft[section] as unknown as Record<string, string | boolean>)[target.name] = value;
@@ -134,6 +167,8 @@ export function initPanelSettings(root: HTMLElement, persistent: boolean): { ren
     if (target.closest('#settings-save')) void save();
     else if (target.closest('#settings-reload')) void reload();
     else if (target.closest('#panel-restart')) void restart(target.closest<HTMLButtonElement>('#panel-restart')!);
+    else if (target.closest('#telegram-test')) void testTelegram(false);
+    else if (target.closest('#telegram-report')) void testTelegram(true);
   });
   root.addEventListener('submit', event => {
     event.preventDefault();
@@ -152,13 +187,14 @@ export function initPanelSettings(root: HTMLElement, persistent: boolean): { ren
   }
 
   async function save(): Promise<void> {
-    if (saving || loading || reloadRequired || !draft || !baseline || !general || !plan || !subscription) return;
+    if (saving || loading || reloadRequired || !draft || !baseline || !general || !plan || !subscription || !telegram) return;
     const now = copy(draft);
-    let generalBody: ReturnType<typeof generalRequest> | null = null, planBody: ReturnType<typeof parsePlanForm> | null = null, subscriptionBody: ReturnType<typeof subscriptionRequest> | null = null;
+    let generalBody: ReturnType<typeof generalRequest> | null = null, planBody: ReturnType<typeof parsePlanForm> | null = null, subscriptionBody: ReturnType<typeof subscriptionRequest> | null = null, telegramBody: ReturnType<typeof telegramRequest> | null = null;
     try {
       if (changed('general')) generalBody = generalRequest(now.general, general);
       if (changed('plan')) planBody = parsePlanForm(now.plan);
       if (changed('subscription')) subscriptionBody = subscriptionRequest(now.subscription);
+      if (changed('telegram')) telegramBody = telegramRequest(now.telegram, telegram.data);
     } catch (reason) { note = ''; error = (reason as Error).message; status(); root.querySelector<HTMLElement>('#settings-error')?.focus(); return; }
     if (generalBody?.enablesRemote && !window.confirm(t('确认允许从其他设备经 HTTPS 访问面板和订阅？持有订阅链接者可取得代理凭据。', 'Allow the panel and subscriptions to be reached over HTTPS from other devices? Anyone with a subscription link can obtain proxy credentials.'))) return;
     saving = true; error = ''; note = ''; status();
@@ -170,11 +206,25 @@ export function initPanelSettings(root: HTMLElement, persistent: boolean): { ren
         baseline.plan = planForm(plan); draft.plan = { ...draft.plan, usedGB: '' };
       }
       if (subscriptionBody) { subscription = await api<SubscriptionStatus>('panel/subscription', jsonBody('PUT', { revision: subscription.revision, data: subscriptionBody })); baseline.subscription = now.subscription; }
+      // 令牌与口令只写不读：保存后清空输入框，只显示“已设置”。
+      if (telegramBody) { telegram = await api<TelegramStatus>('panel/telegram', jsonBody('PUT', { revision: telegram.revision, data: telegramBody })); baseline.telegram = telegramForm(telegram.data); draft.telegram = telegramForm(telegram.data); }
       saving = false;
       if (changed('language')) { setLang(now.language as Lang); return; }
       note = generalBody ? t('已保存。监听、域名、端口、路径与证书在重启面板后生效；会话时长对之后的登录生效。', 'Saved. Listen, domain, port, path and certificates apply after the panel restarts; the session duration applies to new sign-ins.') : t('已保存。', 'Saved.');
       paint();
     } catch (reason) { saving = false; fail(reason); }
+  }
+
+  // 按已保存的令牌与Chat ID发送；有未保存的Telegram修改时先提示保存。
+  async function testTelegram(report: boolean): Promise<void> {
+    if (saving || loading || !telegram) return;
+    if (changed('telegram')) { note = ''; error = t('请先保存 Telegram 设置，再发送测试。', 'Save the Telegram settings before sending a test.'); status(); return; }
+    error = ''; note = t('正在发送…', 'Sending…'); status();
+    try {
+      const result = await api<{ sent: number; total: number }>(`panel/telegram/test${report ? '?report=1' : ''}`, jsonBody('POST', {}));
+      note = `${t('已发送到 ', 'Sent to ')}${result.sent}/${result.total}${t(' 个 Chat。', ' chats.')}`;
+    } catch (reason) { note = ''; error = (reason as Error).message; }
+    status();
   }
 
   async function reload(): Promise<void> {
@@ -262,11 +312,11 @@ export function initPanelSettings(root: HTMLElement, persistent: boolean): { ren
     if (loading) return;
     loading = true; error = ''; note = ''; status();
     try {
-      const [g, p, s, auth, factor] = await Promise.all([
+      const [g, p, s, auth, factor, tg] = await Promise.all([
         api<GeneralStatus>('panel/general'), api<PlanStatus>('system/plan'), api<SubscriptionStatus>('panel/subscription'),
-        api<{ username: string }>('auth/status'), api<{ enabled: boolean }>('auth/2fa'),
+        api<{ username: string }>('auth/status'), api<{ enabled: boolean }>('auth/2fa'), api<TelegramStatus>('panel/telegram'),
       ]);
-      general = g; plan = p; subscription = s; username = auth.username; twoFactor = factor.enabled;
+      general = g; plan = p; subscription = s; username = auth.username; twoFactor = factor.enabled; telegram = tg;
       try { interfaces = (await api<{ interfaces: string[] }>('system/status')).interfaces ?? []; } catch { interfaces = []; }
       baseline = saved(); draft = copy(baseline); reloadRequired = false;
     } catch (reason) { error = `${(reason as Error).message}${t('；点“重新读取”重试。', '; click Reload to retry.')}`; }

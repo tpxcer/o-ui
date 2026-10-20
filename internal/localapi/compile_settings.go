@@ -6,7 +6,8 @@ import (
 	"strings"
 )
 
-func compileSettings(data json.RawMessage) (map[string]any, error) {
+// reverseTags是入站客户端的反向代理标签：核心为每个桥接连接生成同名出站，路由可以引用，但不能与静态出站重名。
+func compileSettings(data json.RawMessage, reverseTags ...string) (map[string]any, error) {
 	if string(data) == "null" {
 		data = json.RawMessage(`{"freedomStrategy":"AsIs","routingStrategy":"AsIs","probeURL":"https://www.google.com/generate_204","statistics":true,"logLevel":"warning","accessLog":false,"dnsLog":false,"rules":"[]","outbounds":"[{\"tag\":\"direct\",\"protocol\":\"freedom\",\"settings\":{}},{\"tag\":\"block\",\"protocol\":\"blackhole\",\"settings\":{}}]","balancers":"[]","dns":"{\"servers\":[\"localhost\"],\"queryStrategy\":\"UseIP\"}","advanced":"{}"}`)
 	}
@@ -35,6 +36,11 @@ func compileSettings(data json.RawMessage) (map[string]any, error) {
 		protocol, _ := outbound["protocol"].(string)
 		switch protocol {
 		case "freedom", "blackhole", "vless", "vmess", "trojan", "shadowsocks", "socks", "http", "hysteria", "dns", "loopback":
+		case "wireguard":
+			// 只接受用户态网络栈（如WARP出站），不创建系统网卡、不需要额外权限。
+			if settings, _ := outbound["settings"].(map[string]any); settings == nil || settings["noKernelTun"] != true {
+				return nil, i18n.New("WireGuard出站须设置noKernelTun为true（只用用户态网络栈，不创建系统网卡）", "WireGuard outbounds must set noKernelTun to true (userspace stack only, no system interface)")
+			}
 		default:
 			return nil, i18n.New("当前本机应用不接受该出站协议，避免创建系统接口或扩大权限", "This outbound protocol is not accepted, to avoid creating system interfaces or extending privileges")
 		}
@@ -50,6 +56,16 @@ func compileSettings(data json.RawMessage) (map[string]any, error) {
 			delete(settings, "domainStrategy")
 			outbound["settings"] = settings
 		}
+	}
+	routable := map[string]bool{}
+	for tag := range tags {
+		routable[tag] = true
+	}
+	for _, tag := range reverseTags {
+		if tags[tag] {
+			return nil, i18n.New("反向代理标签与出站标识重复", "A reverse tag duplicates an outbound tag")
+		}
+		routable[tag] = true
 	}
 	balancerTags := map[string]bool{}
 	for _, balancer := range balancers {
@@ -91,7 +107,7 @@ func compileSettings(data json.RawMessage) (map[string]any, error) {
 		}
 		if hasOut {
 			tag, _ := out.(string)
-			if !tags[tag] {
+			if !routable[tag] {
 				return nil, i18n.New("路由引用不存在的出站", "Routing rule references a missing outbound")
 			}
 		}

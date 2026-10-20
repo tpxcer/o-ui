@@ -232,6 +232,7 @@ func run() int {
 	defer runtime.Close()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	go runtime.RunTelegram(ctx)
 	go func() {
 		if started, err := runtime.ResumeOnStart(ctx); err != nil {
 			log.Print(say("自动恢复上次应用失败，核心保持停止：", "Auto-resume of the last applied configuration failed; the core stays stopped: "), text(err))

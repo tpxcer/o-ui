@@ -7,7 +7,7 @@ import { settingsStatusText } from './settings-status.ts';
 import { settingRow, settingSection, settingsToolbar, selectControl, textControl, toggle } from './settings-ui.ts';
 import {
   balancerForm, balancerFromForm, balancerStrategies, blockDomainOptions, blockIPOptions, directDomainOptions, directIPOptions, dnsPresets, dnsServerForm,
-  dnsServerFromForm, emptyBalancer, emptyDNSServer, emptyOutbound, emptyRule, ensureOutbound, outboundAddress, outboundForm, outboundFromForm, outboundFromLink,
+  dnsServerFromForm, emptyBalancer, emptyDNSServer, emptyOutbound, emptyRule, ensureOutbound, outboundAddress, outboundForm, outboundFromForm, outboundFromLink, outboundReverseTag,
   outboundProtocolOptions, parseParts, proxyProtocols, ruleForm, ruleFromForm, ruleSummary, ruleValues, setRuleValues, ssMethods, streamProtocols, syncObservatory, writeParts,
   type BalancerForm, type DNSServerForm, type Json, type OutboundForm, type Parts, type RuleForm,
 } from './xray-config.ts';
@@ -32,6 +32,7 @@ export function initXraySettings(root: HTMLElement, icons: () => void, persisten
   dialog.className = 'edit-dialog xray-dialog';
   document.body.append(dialog);
   const dirty = () => JSON.stringify(draft) !== JSON.stringify(saved);
+  const reverseTags = () => workspace.clients.flatMap(client => client.reverseTag ? [client.reverseTag] : []);
   const parts = (): Parts | null => { try { return parseParts(draft); } catch { return null; } };
   function change(mutate: (current: Parts) => Parts): void {
     const current = parts();
@@ -79,7 +80,7 @@ export function initXraySettings(root: HTMLElement, icons: () => void, persisten
   }
 
   // ---- 表格页 ----
-  const targets = (p: Parts): [string, string][] => [...p.outbounds.map(item => [`outbound:${item.tag}`, `${t('出站', 'Outbound')} · ${item.tag}`] as [string, string]), ...p.balancers.map(item => [`balancer:${item.tag}`, `${t('均衡', 'Balancer')} · ${item.tag}`] as [string, string])];
+  const targets = (p: Parts): [string, string][] => [...p.outbounds.map(item => [`outbound:${item.tag}`, `${t('出站', 'Outbound')} · ${item.tag}`] as [string, string]), ...p.balancers.map(item => [`balancer:${item.tag}`, `${t('均衡', 'Balancer')} · ${item.tag}`] as [string, string]), ...reverseTags().map(tag => [`outbound:${tag}`, `${t('反向代理', 'Reverse')} · ${tag}`] as [string, string])];
   const actions = (kind: string, index: number, count: number) => `<div class="row-actions">${button('↑', `data-op="${kind}:up" data-index="${index}" aria-label="${t('上移', 'Move up')}" ${index === 0 ? 'disabled' : ''}`, 'icon-button')}${button('↓', `data-op="${kind}:down" data-index="${index}" aria-label="${t('下移', 'Move down')}" ${index === count - 1 ? 'disabled' : ''}`, 'icon-button')}${button(t('编辑', 'Edit'), `data-op="${kind}:edit" data-index="${index}"`, 'text-button')}${button(t('删除', 'Delete'), `data-op="${kind}:delete" data-index="${index}"`, 'text-button danger-text')}</div>`;
   const table = (heads: string[], rows: string[], empty: string) => rows.length ? `<div class="table-scroll"><table class="xray-table"><thead><tr>${heads.map(head => `<th scope="col">${head}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table></div>` : `<p class="form-intro">${empty}</p>`;
   function routingTab(p: Parts): string {
@@ -87,7 +88,7 @@ export function initXraySettings(root: HTMLElement, icons: () => void, persisten
       table(['#', t('匹配条件', 'Conditions'), t('目标', 'Target'), t('操作', 'Actions')], p.rules.map((rule, index) => `<tr><td>${index + 1}</td><td>${esc(ruleSummary(rule))}</td><td><span class="tag-chip">${esc(String(rule.balancerTag ? `${t('均衡', 'Balancer')} · ${rule.balancerTag}` : rule.outboundTag ?? ''))}</span></td><td>${actions('rule', index, p.rules.length)}</td></tr>`), t('还没有路由规则，所有流量走第一个出站。', 'No routing rules yet; all traffic uses the first outbound.'));
   }
   function outboundsTab(p: Parts): string {
-    return `<div class="settings-table-actions">${button(t('添加出站', 'Add outbound'), 'data-op="outbound:add"', 'primary-button')}</div><p class="form-hint">${t('第一个出站是默认出站。', 'The first outbound is the default.')}</p>` +
+    return `<div class="settings-table-actions">${button(t('添加出站', 'Add outbound'), 'data-op="outbound:add"', 'primary-button')}${persistent ? button('WARP', 'data-op="warp:open"', 'secondary-button') : ''}</div><p class="form-hint">${t('第一个出站是默认出站。', 'The first outbound is the default.')}</p>` +
       table(['#', t('标识', 'Tag'), t('协议', 'Protocol'), t('地址', 'Address'), t('流量', 'Traffic'), t('操作', 'Actions')], p.outbounds.map((item, index) => {
         const used = traffic[String(item.tag)];
         return `<tr><td>${index + 1}${index === 0 ? ` <small class="table-secondary">${t('默认', 'default')}</small>` : ''}</td><td>${esc(String(item.tag ?? ''))}</td><td><span class="tag-chip">${esc(String(item.protocol ?? ''))}</span></td><td>${esc(outboundAddress(item))}</td><td>${used ? `↑ ${bytes(used.uplink)} / ↓ ${bytes(used.downlink)}` : '—'}</td><td>${actions('outbound', index, p.outbounds.length)}</td></tr>`;
@@ -110,7 +111,7 @@ export function initXraySettings(root: HTMLElement, icons: () => void, persisten
   function advancedTab(): string {
     const key = part === 'preview' ? '' : part;
     let text = key ? draft[key] : '';
-    if (!key) { try { text = JSON.stringify(buildSettings(draft), null, 2); } catch (reason) { text = (reason as Error).message; } }
+    if (!key) { try { text = JSON.stringify(buildSettings(draft, reverseTags()), null, 2); } catch (reason) { text = (reason as Error).message; } }
     return `<div class="segmented" role="radiogroup" aria-label="${t('配置部分', 'Config part')}">${advancedParts.map(([id, label]) => `<label><input type="radio" name="advanced-part" value="${id}" ${id === part ? 'checked' : ''}><span>${label}</span></label>`).join('')}</div>
       <p class="form-hint">${part === 'preview' ? t('根据当前设置生成的配置片段（不含入站），只读。', 'Generated config fragment (inbounds excluded), read-only.') : t('直接编辑这一部分的 JSON；其他标签页会同步显示。', 'Edit this part as JSON; the other tabs show the same data.')}</p>
       <textarea id="xray-json-editor" class="json-editor" rows="22" spellcheck="false" ${part === 'preview' ? 'readonly' : ''} aria-label="JSON">${esc(text)}</textarea>${jsonError ? `<p class="form-error" role="alert">${esc(jsonError)}</p>` : ''}`;
@@ -166,7 +167,7 @@ export function initXraySettings(root: HTMLElement, icons: () => void, persisten
     const p = parts(); if (!p) return;
     const existing = index === null ? emptyRule() : ruleForm(p.rules[index]);
     if (!existing) { jsonDialog(t('编辑路由规则', 'Edit routing rule'), p.rules[index!], next => change(current => ({ ...current, rules: current.rules.map((rule, i) => i === index ? next : rule) }))); return; }
-    const inbounds: [string, string][] = workspace.inbounds.map(item => [`in-${item.id}`, item.name]);
+    const inbounds: [string, string][] = [...workspace.inbounds.map(item => [`in-${item.id}`, item.name] as [string, string]), ...p.outbounds.map(outboundReverseTag).filter(Boolean).map(tag => [tag, `${t('反向代理', 'Reverse')} · ${tag}`] as [string, string])];
     const users: [string, string][] = workspace.clients.map(item => [`client-${item.id}`, item.name]);
     openDialog(index === null ? t('添加路由规则', 'Add routing rule') : t('编辑路由规则', 'Edit routing rule'), [
       field(t('目标', 'Target'), select('target', existing.target, [['', t('请选择出站或负载均衡', 'Choose an outbound or balancer')], ...targets(p)])),
@@ -195,6 +196,7 @@ export function initXraySettings(root: HTMLElement, icons: () => void, persisten
       proxy ? `<div class="field-row">${field(t('地址', 'Address'), input('address', form.address, 'required'))}${field(t('端口', 'Port'), input('port', form.port, 'type="number" min="1" max="65535" required'))}</div>` : '',
       form.protocol === 'vless' || form.protocol === 'vmess' ? field('UUID', input('id', form.id, 'required')) : '',
       form.protocol === 'vless' ? field('Flow', select('flow', form.flow, [['', t('无', 'None')], ['xtls-rprx-vision', 'xtls-rprx-vision']])) : '',
+      form.protocol === 'vless' ? field(t('反向代理标签（可选）', 'Reverse tag (optional)'), input('reverseTag', form.reverseTag, 'maxlength="64" placeholder="r-home"'), t('填写后本机作为反向代理桥接端：服务器经此连接把流量送回本机，在路由规则里以该标签作为入站转发（如转到直连）。服务器上对应客户端需填同一 UUID 并设置反向代理标签。', 'This machine becomes a reverse-proxy bridge: the server sends traffic back through this connection, which enters routing with this tag as the inbound (e.g. route it to direct). The matching client on the server needs the same UUID and its own reverse tag.')) : '',
       ['trojan', 'shadowsocks', 'hysteria'].includes(form.protocol) ? field(hy2 ? t('认证密码', 'Auth password') : t('密码', 'Password'), input('password', form.password, 'required')) : '',
       form.protocol === 'shadowsocks' ? field(t('加密方式', 'Method'), select('method', form.method, ssMethods.map(item => [item, item]))) : '',
       form.protocol === 'socks' || form.protocol === 'http' ? `<div class="field-row">${field(t('用户名（可选）', 'Username (optional)'), input('user', form.user))}${field(t('密码（可选）', 'Password (optional)'), input('pass', form.pass, 'type="password"'))}</div>` : '',
@@ -236,6 +238,51 @@ export function initXraySettings(root: HTMLElement, icons: () => void, persisten
     }, element => { const before = `${form.protocol}|${form.network}|${form.security}`; form = readOutbound(element, form); if (`${form.protocol}|${form.network}|${form.security}` !== before) refresh(element); });
     wireImport(dialog.querySelector('form')!);
   }
+  // Cloudflare WARP（参照OUI）：服务器注册免费设备并生成tag为warp的WireGuard出站，加入草稿后需“保存”才生效。
+  async function warpDialog(): Promise<void> {
+    type WarpView = { registered: boolean; accountType?: string; premiumData: number; quota: number; usage: number; licenseSuffix?: string; outbound?: Json };
+    let view: WarpView = { registered: false, premiumData: 0, quota: 0, usage: 0 }, busy = true, message = t('正在读取…', 'Loading…'), failure = '';
+    const render = () => {
+      const exists = parts()?.outbounds.some(item => item.tag === 'warp') ?? false;
+      const info = (label: string, text: string) => `<div class="setting-row"><div class="setting-copy"><strong>${label}</strong></div><div class="setting-control">${esc(text)}</div></div>`;
+      dialog.innerHTML = `<form novalidate><header class="dialog-heading"><h2>Cloudflare WARP</h2><button type="button" class="icon-button" data-close aria-label="${t('关闭弹窗', 'Close dialog')}">×</button></header><div class="edit-body">
+        ${view.registered ? `<div class="setting-list">${info(t('账户类型', 'Account type'), view.accountType || '—')}${info(t('WARP+ 流量', 'WARP+ data'), bytes(view.premiumData))}${info(t('配额 / 已用', 'Quota / used'), `${bytes(view.quota)} / ${bytes(view.usage)}`)}${info(t('许可证', 'License'), view.licenseSuffix ? `••••${view.licenseSuffix}` : '—')}</div>
+          ${field(t('WARP+ 许可证（可选）', 'WARP+ license (optional)'), input('license', '', 'placeholder="xxxxxxxx-xxxxxxxx-xxxxxxxx" maxlength="26"'), t('填入 WARP+ 许可证可升级为 WARP+ 账户。', 'Enter a WARP+ license to upgrade the account.'))}
+          <div class="settings-table-actions">${button(exists ? t('更新 warp 出站', 'Update warp outbound') : t('添加 warp 出站', 'Add warp outbound'), 'data-warp="outbound"', 'primary-button')}${button(t('更新许可证', 'Update license'), 'data-warp="license"')}${button(t('刷新账户信息', 'Refresh account'), 'data-warp="refresh"')}${button(t('删除 WARP 账户', 'Delete WARP account'), 'data-warp="delete"', 'text-button danger-text')}</div>`
+        : `<p class="form-hint">${t('由服务器向 Cloudflare（api.cloudflareclient.com）注册一个免费 WARP 设备，生成 WireGuard 出站（tag 为 warp，只用用户态网络栈，不创建系统网卡）。私钥与设备令牌只保存在面板数据库。之后在路由规则里把目标选为 warp，匹配的流量就经 WARP 出去（常用于解锁 ChatGPT、Netflix 等）。', 'The server registers a free WARP device with Cloudflare (api.cloudflareclient.com) and builds a WireGuard outbound tagged warp (userspace stack only, no system interface). The private key and device token stay in the panel database. Then choose warp as a routing rule target to send matching traffic through WARP (often used to unlock ChatGPT, Netflix and others).')}</p>
+          <div class="settings-table-actions">${button(t('创建 WARP 账户', 'Create WARP account'), 'data-warp="register"', 'primary-button')}</div>`}
+        <p class="form-hint" role="status">${esc(message)}</p><p class="form-error" role="alert" ${failure ? '' : 'hidden'}>${esc(failure)}</p></div>
+        <footer>${button(t('关闭', 'Close'), 'data-close')}</footer></form>`;
+      dialog.querySelectorAll<HTMLButtonElement>('[data-warp]').forEach(item => { item.disabled = busy; });
+      dialog.querySelectorAll('[data-close]').forEach(item => item.addEventListener('click', () => dialog.close()));
+      dialog.querySelector('form')!.addEventListener('submit', event => event.preventDefault());
+      dialog.querySelectorAll<HTMLButtonElement>('[data-warp]').forEach(item => item.addEventListener('click', () => { void run(item.dataset.warp!); }));
+    };
+    const run = async (action: string) => {
+      if (busy) return;
+      if (action === 'outbound') {
+        if (!view.outbound) return;
+        const outbound = view.outbound;
+        change(now => ({ ...now, outbounds: now.outbounds.some(item => item.tag === 'warp') ? now.outbounds.map(item => item.tag === 'warp' ? outbound : item) : [...now.outbounds, outbound] }));
+        message = t('已把 warp 出站加入设置；点“保存”后生效。', 'The warp outbound is in the settings; click Save to apply.'); failure = ''; render(); return;
+      }
+      if (action === 'register' && !window.confirm(t('确认由服务器向 Cloudflare 注册一个免费 WARP 设备？', 'Register a free WARP device with Cloudflare from the server?'))) return;
+      if (action === 'delete' && !window.confirm(t('删除本机保存的 WARP 账户记录？已加入的 warp 出站需在出站列表里另行删除。', 'Delete the WARP account record saved on this server? A warp outbound already added must be removed from the outbound list separately.'))) return;
+      const license = action === 'license' ? String(new FormData(dialog.querySelector('form')!).get('license') ?? '').trim() : '';
+      busy = true; failure = ''; message = t('正在处理…', 'Working…'); render();
+      try {
+        view = action === 'register' ? await api<WarpView>('xray/warp/register', jsonBody('POST', { confirm: true }))
+          : action === 'license' ? await api<WarpView>('xray/warp/license', jsonBody('POST', { license }))
+          : action === 'refresh' ? await api<WarpView>('xray/warp?refresh=1')
+          : await api<WarpView>('xray/warp', jsonBody('DELETE', {}));
+        message = action === 'register' ? t('WARP 账户已创建，可以添加 warp 出站。', 'WARP account created; you can add the warp outbound.') : action === 'delete' ? t('已删除本机 WARP 记录。', 'The local WARP record was deleted.') : t('已更新。', 'Updated.');
+      } catch (reason) { failure = (reason as Error).message; message = ''; }
+      busy = false; if (dialog.open) render();
+    };
+    render(); dialog.showModal();
+    try { view = await api<WarpView>('xray/warp'); message = ''; } catch (reason) { failure = (reason as Error).message; message = ''; }
+    busy = false; if (dialog.open) render();
+  }
   const referenced = (p: Parts, tag: string) => p.rules.some(rule => rule.outboundTag === tag) || p.balancers.some(item => balancerForm(item).fallbackTag === tag || balancerForm(item).selector.some(prefix => tag.startsWith(prefix)));
 
   function balancerDialog(index: number | null): void {
@@ -276,6 +323,7 @@ export function initXraySettings(root: HTMLElement, icons: () => void, persisten
   function move<T>(list: T[], index: number, offset: number): T[] { const next = [...list]; const [item] = next.splice(index, 1); next.splice(index + offset, 0, item); return next; }
   function operate(op: string, index: number): void {
     const [kind, action] = op.split(':');
+    if (kind === 'warp') { void warpDialog(); return; }
     const p = parts(); if (!p) return;
     if (action === 'add') void ({ rule: ruleDialog, outbound: outboundDialog, balancer: balancerDialog, dns: dnsDialog } as Record<string, (i: number | null) => unknown>)[kind](null);
     if (action === 'edit') void ({ rule: ruleDialog, outbound: outboundDialog, balancer: balancerDialog, dns: dnsDialog } as Record<string, (i: number | null) => unknown>)[kind](index);
@@ -339,7 +387,7 @@ export function initXraySettings(root: HTMLElement, icons: () => void, persisten
     if (!loaded || saving || loading || reloadRequired || !dirty()) return;
     error = ''; feedback = '';
     try {
-      buildSettings(draft);
+      buildSettings(draft, reverseTags());
       if (persistent) {
         saving = true; paint();
         const document = await api<{ revision: number; data: SettingsDraft; applied?: boolean; applyError?: string }>('settings', jsonBody('PUT', { revision, data: draft })).catch(reason => { if (!(reason instanceof APIError) || reason.status === 409 || reason.status >= 500) reloadRequired = true; throw reason; });
@@ -357,9 +405,10 @@ export function initXraySettings(root: HTMLElement, icons: () => void, persisten
     if (force && loaded && dirty() && !window.confirm(t('刷新会丢弃未保存的修改，确认继续？', 'Refreshing discards unsaved changes. Continue?'))) return;
     loading = true; error = ''; feedback = ''; paint();
     try {
-      const document = await api<{ revision: number; data: SettingsDraft | null }>('settings');
+      const [document, current] = await Promise.all([api<{ revision: number; data: SettingsDraft | null }>('settings'), api<{ data: Workspace | null }>('workspace').catch(() => null)]);
+      if (current?.data) workspace = current.data;
       const next = document.data ?? defaultSettings();
-      buildSettings(next); draft = next; saved = structuredClone(next);
+      buildSettings(next, reverseTags()); draft = next; saved = structuredClone(next);
       revision = document.revision; loaded = true; reloadRequired = false; jsonError = '';
       if (force) feedback = `${t('已刷新（修订', 'Refreshed (revision ')}${revision}${t('）。', ').')}`;
     } catch (reason) { error = (reason as Error).message; if (force) reloadRequired = true; }

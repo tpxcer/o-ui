@@ -206,6 +206,24 @@ func TestCompileSettingsProtectsManagedFields(t *testing.T) {
 	if freedom["targetStrategy"] != "UseIPv4" || freedom["domainStrategy"] != nil {
 		t.Fatal("freedom strategy mismatch")
 	}
+	// 反向代理标签只在由入站客户端提供时可作路由目标，且不能与静态出站重名，也不能被负载均衡选择。
+	draft.Rules = `[{"type":"field","user":["client-two"],"outboundTag":"r-home"}]`
+	data, _ = json.Marshal(draft)
+	if _, err := compileSettings(data); err == nil {
+		t.Fatal("unknown reverse target accepted")
+	}
+	if _, err := compileSettings(data, "r-home"); err != nil {
+		t.Fatal("reverse target rejected", err)
+	}
+	if _, err := compileSettings(data, "r-home", "direct"); err == nil {
+		t.Fatal("reverse tag duplicating an outbound accepted")
+	}
+	draft.Rules, draft.Balancers = "[]", `[{"tag":"auto","selector":["r-"]}]`
+	data, _ = json.Marshal(draft)
+	if _, err := compileSettings(data, "r-home"); err == nil {
+		t.Fatal("balancer selected a dynamic reverse outbound")
+	}
+	draft.Balancers = "[]"
 	for _, rule := range []string{`{"type":"field","outboundTag":"direct"}`, `{"type":"field","outboundTag":"direct","network":"bogus"}`, `{"type":"field","outboundTag":"direct","ip":[]}`} {
 		draft.Rules = "[" + rule + "]"
 		data, _ := json.Marshal(draft)

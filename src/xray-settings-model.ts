@@ -35,7 +35,8 @@ function tags(items: ObjectValue[], label: string): Set<string> {
 }
 
 // 只作面板草稿结构/引用校验，不替代所选官方核心的完整预检。
-export function buildSettings(draft: SettingsDraft): ObjectValue {
+// reverseTags是入站客户端的反向代理标签：核心为每个桥接连接生成同名出站，路由可直接引用。
+export function buildSettings(draft: SettingsDraft, reverseTags: string[] = []): ObjectValue {
   if (!freedomStrategies.includes(draft.freedomStrategy) || !routingStrategies.includes(draft.routingStrategy)) throw new Error(t('协议或路由域策略无效。', 'Invalid protocol or routing domain strategy.'));
   let url: URL;
   try { url = new URL(draft.probeURL); } catch { throw new Error(t('出站测试URL应为有效的HTTP/HTTPS地址。', 'Outbound test URL must be a valid HTTP/HTTPS address.')); }
@@ -49,6 +50,8 @@ export function buildSettings(draft: SettingsDraft): ObjectValue {
   if (!outbounds.length) throw new Error(t('至少保留一个明确出站，不自动补充直连。', 'Keep at least one explicit outbound; Direct is not added automatically.'));
   const outboundTags = tags(outbounds, t('出站规则', 'Outbounds'));
   const balancerTags = tags(balancers, t('负载均衡', 'Balancers'));
+  const clash = reverseTags.find(tag => outboundTags.has(tag));
+  if (clash) throw new Error(`${t('反向代理标签与出站标识重复：', 'A reverse tag duplicates an outbound tag: ')}${clash}`);
   for (const outbound of outbounds) {
     if (typeof outbound.protocol !== 'string' || !outbound.protocol.trim()) throw new Error(t('每个出站必须声明protocol。', 'Every outbound must declare a protocol.'));
     if (outbound.protocol === 'freedom') {
@@ -69,7 +72,7 @@ export function buildSettings(draft: SettingsDraft): ObjectValue {
   for (const rule of rules) {
     if (rule.type !== 'field') throw new Error(t('当前草稿路由规则仅支持type为field。', 'Draft routing rules support only type field.'));
     if (('outboundTag' in rule) === ('balancerTag' in rule)) throw new Error(t('每条路由规则必须且只能指定outboundTag或balancerTag。', 'Each routing rule must specify exactly one of outboundTag or balancerTag.'));
-    if ('outboundTag' in rule && (typeof rule.outboundTag !== 'string' || !outboundTags.has(rule.outboundTag))) throw new Error(t('路由引用了不存在的出站，或outboundTag不是字符串。', 'A routing rule references a missing outbound, or outboundTag is not a string.'));
+    if ('outboundTag' in rule && (typeof rule.outboundTag !== 'string' || !(outboundTags.has(rule.outboundTag) || reverseTags.includes(rule.outboundTag)))) throw new Error(t('路由引用了不存在的出站，或outboundTag不是字符串。', 'A routing rule references a missing outbound, or outboundTag is not a string.'));
     if ('balancerTag' in rule && (typeof rule.balancerTag !== 'string' || !balancerTags.has(rule.balancerTag))) throw new Error(t('路由引用了不存在的负载均衡，或balancerTag不是字符串。', 'A routing rule references a missing balancer, or balancerTag is not a string.'));
     const arrayConditions = ['domain', 'ip', 'source', 'protocol', 'inboundTag', 'user', 'process'];
     const textConditions = ['port', 'sourcePort', 'network', 'attrs'];

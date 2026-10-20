@@ -10,9 +10,9 @@ export type Sniffing = { enabled: boolean; http: boolean; tls: boolean; quic: bo
 export type Connection = { certificateFile: string; keyFile: string; target: string; serverName: string; path: string; mode: string; usePanelCertificate?: boolean; mihomoCompatibility?: boolean };
 export const defaultConnection = (): Connection => ({ certificateFile: '', keyFile: '', target: '', serverName: '', path: '/', mode: 'auto' });
 export type Inbound = { id: string; name: string; preset: Preset; port: number; enabled: boolean; sniffing: Sniffing; connection?: Connection; listen?: string; shareHost?: string };
-export type Client = { id: string; inboundId: string; name: string; enabled: boolean; quotaGB: number; usedGB: number; expiresAt: number | null; ipLimit: number; subscription: boolean };
+export type Client = { id: string; inboundId: string; name: string; enabled: boolean; quotaGB: number; usedGB: number; expiresAt: number | null; ipLimit: number; subscription: boolean; reverseTag?: string };
 export type Workspace = { inbounds: Inbound[]; clients: Client[] };
-export type ClientInput = Pick<Client, 'name' | 'quotaGB' | 'expiresAt' | 'ipLimit' | 'subscription'>;
+export type ClientInput = Pick<Client, 'name' | 'quotaGB' | 'expiresAt' | 'ipLimit' | 'subscription' | 'reverseTag'>;
 
 export const defaultSniffing = (): Sniffing => ({
   enabled: true, http: true, tls: true, quic: true, routeOnly: true, fakeDns: false, metadataOnly: false,
@@ -32,6 +32,16 @@ export function validateClient(input: ClientInput): void {
   if (!Number.isFinite(input.quotaGB) || input.quotaGB < 0 || input.quotaGB > 1_000_000 || (input.quotaGB > 0 && input.quotaGB * 1e9 < 1)) throw new Error(t('流量上限需为0至1000000 GB，0表示不限；非零额度最小1字节。', 'Traffic quota must be 0–1000000 GB (0 means unlimited); a non-zero quota is at least 1 byte.'));
   if (!Number.isInteger(input.ipLimit) || input.ipLimit < 0 || input.ipLimit > 10000) throw new Error(t('IP上限需为0至10000的整数，0表示不限。', 'IP limit must be an integer from 0 to 10000 (0 means unlimited).'));
   if (input.expiresAt !== null && (!Number.isFinite(input.expiresAt) || input.expiresAt < 0 || input.expiresAt > 8.64e15)) throw new Error(t('请选择有效的到期日期。', 'Choose a valid expiry date.'));
+  if (input.reverseTag?.trim() && !/^[A-Za-z0-9_.-]{1,64}$/.test(input.reverseTag.trim())) throw new Error(t('反向代理标签只能含字母、数字、点、下划线和连字符（最多64个）。', 'Reverse tags may contain only letters, digits, dots, underscores and hyphens (up to 64).'));
+}
+
+// 反向代理标签只用于VLESS入站，且全局唯一（核心按标签生成同名出站）。
+function validateReverse(state: Workspace, inboundId: string, input: ClientInput, exceptId?: string): Pick<Client, 'reverseTag'> {
+  const tag = input.reverseTag?.trim() ?? '';
+  if (!tag) return { reverseTag: undefined };
+  if (state.inbounds.find(item => item.id === inboundId)?.preset === 'hy2') throw new Error(t('HY2 入站不支持反向代理，请选择 VLESS 入站。', 'HY2 inbounds do not support reverse proxy; choose a VLESS inbound.'));
+  if (state.clients.some(item => item.id !== exceptId && item.reverseTag === tag)) throw new Error(t('反向代理标签已被其他客户端使用。', 'This reverse tag is already used by another client.'));
+  return { reverseTag: tag };
 }
 
 function validatePort(state: Workspace, preset: Preset, port: number, exceptId?: string): void {
@@ -68,7 +78,8 @@ export function editClient(state: Workspace, id: string, input: ClientInput & { 
   if (!state.clients.some(item => item.id === id)) throw new Error(t('客户端不存在，请刷新列表。', 'The client does not exist; refresh the list.'));
   validateClient(input);
   if (state.clients.some(item => item.id !== id && item.name === input.name.trim())) throw new Error(t('客户端名称已存在。', 'This client name already exists.'));
-  return { ...state, clients: state.clients.map(item => item.id === id ? { ...item, ...input, name: input.name.trim() } : item) };
+  const reverse = validateReverse(state, state.clients.find(item => item.id === id)!.inboundId, input, id);
+  return { ...state, clients: state.clients.map(item => item.id === id ? { ...item, ...input, name: input.name.trim(), ...reverse } : item) };
 }
 
 export function addClient(state: Workspace, inboundId: string, input: ClientInput, id: string): Workspace {
@@ -76,7 +87,8 @@ export function addClient(state: Workspace, inboundId: string, input: ClientInpu
   validateClient(input);
   if (state.clients.some(item => item.name === input.name.trim())) throw new Error(t('客户端名称已存在。', 'This client name already exists.'));
   if (!id || state.clients.some(item => item.id === id)) throw new Error(t('演示记录标识重复。', 'Duplicate demo record ID.'));
-  return { ...state, clients: [...state.clients, { ...input, name: input.name.trim(), id, inboundId, enabled: true, usedGB: 0 }] };
+  const reverse = validateReverse(state, inboundId, input);
+  return { ...state, clients: [...state.clients, { ...input, name: input.name.trim(), id, inboundId, enabled: true, usedGB: 0, ...reverse }] };
 }
 
 export function deleteInbound(state: Workspace, id: string): Workspace {

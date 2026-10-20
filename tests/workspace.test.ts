@@ -82,3 +82,15 @@ test('中文日期、闰月日历与HTML转义', () => {
   assert.equal(calendarDays(2026, 9).slice(0, 4).every(value => value === null), true);
   assert.equal(escapeHtml('<img onerror="x">&\''), '&lt;img onerror=&quot;x&quot;&gt;&amp;&#39;');
 });
+
+test('反向代理标签只用于VLESS入站且唯一，留空时不写入', () => {
+  let state: Workspace = createQuick({ inbounds: [], clients: [] }, { ...client, preset: 'reality', port: 18443 }, 'vless');
+  state = createQuick(state, { ...client, name: 'hy2one', preset: 'hy2', port: 18444 }, 'hy');
+  state = editClient(state, 'vless-client', { ...client, enabled: true, reverseTag: ' r-home ' });
+  assert.equal(state.clients[0].reverseTag, 'r-home');
+  assert.throws(() => addClient(state, 'vless', { ...client, name: 'other', reverseTag: 'r-home' }, 'dup'), /已被|already/);
+  assert.throws(() => editClient(state, 'hy-client', { ...client, name: 'hy2one', enabled: true, reverseTag: 'r-hy' }), /HY2/);
+  assert.throws(() => editClient(state, 'vless-client', { ...client, enabled: true, reverseTag: 'r home' }), /反向|Reverse/);
+  state = editClient(state, 'vless-client', { ...client, enabled: true, reverseTag: undefined });
+  assert.equal('reverseTag' in JSON.parse(JSON.stringify(state.clients[0])), false);
+});

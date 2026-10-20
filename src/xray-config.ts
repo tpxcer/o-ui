@@ -84,13 +84,16 @@ export function ruleSummary(rule: Json): string {
 }
 
 // ---- 出站 ----
+export const reverseTagPattern = /^[A-Za-z0-9_.-]{1,64}$/;
+// 桥接端出站的反向代理标签（只有简化写法的VLESS出站有）。
+export const outboundReverseTag = (outbound: Json): string => outbound.protocol === 'vless' ? str(record(record(outbound.settings).reverse).tag) : '';
 export const outboundProtocolOptions: [string, string][] = [['freedom', t('直连 freedom', 'Direct (freedom)')], ['blackhole', t('阻断 blackhole', 'Block (blackhole)')], ['vless', 'VLESS'], ['vmess', 'VMess'], ['trojan', 'Trojan'], ['shadowsocks', 'Shadowsocks'], ['hysteria', 'Hysteria2'], ['socks', 'SOCKS'], ['http', 'HTTP']];
 export type OutboundForm = {
   tag: string; protocol: string; address: string; port: string; id: string; flow: string; password: string; method: string; user: string; pass: string;
   network: string; path: string; host: string; serviceName: string; mode: string; security: string; serverName: string; fingerprint: string; alpn: string; allowInsecure: boolean;
-  publicKey: string; shortId: string; spiderX: string; domainStrategy: string;
+  publicKey: string; shortId: string; spiderX: string; domainStrategy: string; reverseTag: string;
 };
-export const emptyOutbound = (): OutboundForm => ({ tag: '', protocol: 'vless', address: '', port: '443', id: '', flow: '', password: '', method: '2022-blake3-aes-128-gcm', user: '', pass: '', network: 'tcp', path: '/', host: '', serviceName: '', mode: 'auto', security: 'none', serverName: '', fingerprint: 'chrome', alpn: '', allowInsecure: false, publicKey: '', shortId: '', spiderX: '/', domainStrategy: '' });
+export const emptyOutbound = (): OutboundForm => ({ tag: '', protocol: 'vless', address: '', port: '443', id: '', flow: '', password: '', method: '2022-blake3-aes-128-gcm', user: '', pass: '', network: 'tcp', path: '/', host: '', serviceName: '', mode: 'auto', security: 'none', serverName: '', fingerprint: 'chrome', alpn: '', allowInsecure: false, publicKey: '', shortId: '', spiderX: '/', domainStrategy: '', reverseTag: '' });
 export const ssMethods = ['2022-blake3-aes-128-gcm', '2022-blake3-aes-256-gcm', '2022-blake3-chacha20-poly1305', 'aes-128-gcm', 'aes-256-gcm', 'chacha20-poly1305', 'xchacha20-poly1305', 'none'];
 export const proxyProtocols = ['vless', 'vmess', 'trojan', 'shadowsocks', 'hysteria', 'socks', 'http'];
 export const streamProtocols = ['vless', 'vmess', 'trojan', 'shadowsocks'];
@@ -100,6 +103,7 @@ const str = (value: unknown) => typeof value === 'string' ? value : typeof value
 
 export function outboundAddress(outbound: Json): string {
   const settings = record(outbound.settings);
+  if (Array.isArray(settings.peers)) return str(record(settings.peers[0]).endpoint);
   const server = Array.isArray(settings.vnext) ? record(settings.vnext[0]) : Array.isArray(settings.servers) ? record(settings.servers[0]) : settings;
   const address = str(server.address), port = str(server.port);
   return address ? `${address}${port ? `:${port}` : ''}` : '';
@@ -114,7 +118,12 @@ export function outboundForm(outbound: Json): OutboundForm | null {
   if (protocol === 'freedom') { form.domainStrategy = str(settings.domainStrategy); return form; }
   if (protocol === 'blackhole') return form;
   const first = (value: unknown) => record(Array.isArray(value) ? value[0] : undefined);
-  if (protocol === 'vless' || protocol === 'vmess') {
+  if (protocol === 'vless' && !settings.vnext) {
+    // 简化写法（反向代理只能用这种写法）；reverse里有tag以外的字段时改用JSON编辑。
+    const reverse = record(settings.reverse);
+    if (Object.keys(reverse).some(key => key !== 'tag')) return null;
+    Object.assign(form, { address: str(settings.address), port: str(settings.port), id: str(settings.id), flow: str(settings.flow), reverseTag: str(reverse.tag) });
+  } else if (protocol === 'vless' || protocol === 'vmess') {
     const server = first(settings.vnext), user = first(server.users);
     Object.assign(form, { address: str(server.address), port: str(server.port), id: str(user.id), flow: str(user.flow) });
   } else if (protocol === 'hysteria') {
@@ -146,7 +155,11 @@ export function outboundFromForm(form: OutboundForm): Json {
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error(t('端口需为 1–65535。', 'Port must be 1–65535.'));
   const out: Json = { tag, protocol: form.protocol };
   const need = (value: string, message: string) => { if (!value.trim()) throw new Error(message); return value.trim(); };
-  if (form.protocol === 'vless') out.settings = { vnext: [{ address, port, users: [{ id: need(form.id, t('请填写 UUID。', 'Enter the UUID.')), encryption: 'none', ...(form.flow ? { flow: form.flow } : {}) }] }] };
+  const reverseTag = form.protocol === 'vless' ? form.reverseTag.trim() : '';
+  if (reverseTag && !reverseTagPattern.test(reverseTag)) throw new Error(t('反向代理标签只能含字母、数字、点、下划线和连字符（最多64个）。', 'Reverse tags may contain only letters, digits, dots, underscores and hyphens (up to 64).'));
+  // Xray只允许简化写法带reverse：此时出站作为反向代理桥接端，隧道里的连接以该标签作为入站进入路由。
+  if (form.protocol === 'vless' && reverseTag) out.settings = { address, port, id: need(form.id, t('请填写 UUID。', 'Enter the UUID.')), encryption: 'none', ...(form.flow ? { flow: form.flow } : {}), reverse: { tag: reverseTag } };
+  else if (form.protocol === 'vless') out.settings = { vnext: [{ address, port, users: [{ id: need(form.id, t('请填写 UUID。', 'Enter the UUID.')), encryption: 'none', ...(form.flow ? { flow: form.flow } : {}) }] }] };
   if (form.protocol === 'vmess') out.settings = { vnext: [{ address, port, users: [{ id: need(form.id, t('请填写 UUID。', 'Enter the UUID.')), security: 'auto' }] }] };
   if (form.protocol === 'trojan') out.settings = { servers: [{ address, port, password: need(form.password, t('请填写密码。', 'Enter the password.')) }] };
   if (form.protocol === 'shadowsocks') out.settings = { servers: [{ address, port, method: form.method, password: need(form.password, t('请填写密码。', 'Enter the password.')) }] };

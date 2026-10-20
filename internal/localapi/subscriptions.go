@@ -16,12 +16,14 @@ import (
 	"strings"
 	"time"
 
+	"independent-panel/internal/config"
 	"independent-panel/internal/store"
 )
 
 const subscriptionsDocument = "subscriptions"
 
-var subscriptionPath = regexp.MustCompile(`^/sub/[A-Za-z0-9_-]{43}$`)
+// 同一订阅密钥：/sub/为Base64分享链接，/sub/clash/为Clash/Mihomo YAML，/sub/json/为Xray客户端JSON。
+var subscriptionPath = regexp.MustCompile(`^/sub/(?:(?:clash|json)/)?[A-Za-z0-9_-]{43}$`)
 
 type subscriptionToken struct {
 	Hash       string `json:"hash"`
@@ -43,6 +45,8 @@ type subscriptionResult struct {
 	Allowed  bool   `json:"allowed"`
 	Active   bool   `json:"active"`
 	Path     string `json:"path,omitempty"`
+	Clash    bool   `json:"clash"`
+	JSON     bool   `json:"json"`
 }
 
 func readSubscriptions(doc store.Document) (subscriptionState, error) {
@@ -162,6 +166,9 @@ func registerSubscriptions(mux *http.ServeMux, rt *Runtime) {
 			}
 			item, exists := state.Clients[client.ID]
 			result := subscriptionResult{Revision: doc.Revision, Allowed: client.Subscription, Active: exists && item.Generation == state.Generation}
+			if settings, _, err := readSubscriptionSettings(r.Context(), rt.state); err == nil {
+				result.Clash, result.JSON = settings.ClashEnabled, settings.JSONEnabled
+			}
 			if action == "status" {
 				respond(w, 200, result)
 				return
@@ -228,7 +235,17 @@ func registerSubscriptions(mux *http.ServeMux, rt *Runtime) {
 			respond(w, 503, map[string]string{"error": i18n.T("订阅暂不可用", "Subscription temporarily unavailable")})
 			return
 		}
-		hash := sha256.Sum256([]byte(strings.TrimPrefix(r.URL.Path, "/sub/")))
+		format, token := "", strings.TrimPrefix(r.URL.Path, "/sub/")
+		for _, prefix := range []string{"clash", "json"} {
+			if rest, ok := strings.CutPrefix(token, prefix+"/"); ok {
+				format, token = prefix, rest
+			}
+		}
+		if format == "clash" && !settings.ClashEnabled || format == "json" && !settings.JSONEnabled {
+			respond(w, 404, map[string]string{"error": i18n.T("订阅不存在或已失效", "Subscription does not exist or has expired")})
+			return
+		}
+		hash := sha256.Sum256([]byte(token))
 		wanted, id := hex.EncodeToString(hash[:]), ""
 		for clientID, item := range state.Clients {
 			if item.Generation == state.Generation && subtle.ConstantTimeCompare([]byte(item.Hash), []byte(wanted)) == 1 {
@@ -268,9 +285,30 @@ func registerSubscriptions(mux *http.ServeMux, rt *Runtime) {
 			respond(w, 404, map[string]string{"error": i18n.T("订阅不存在或已失效", "Subscription does not exist or has expired")})
 			return
 		}
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		var body []byte
+		contentType, name := "text/plain; charset=utf-8", subscriptionNodeName(settings.RemarkClientName, workspace, client)
+		switch format {
+		case "clash":
+			proxy, err := config.ClashProxy(result.Outbound, name)
+			if err == nil {
+				contentType, body = "text/yaml; charset=utf-8", []byte(config.ClashConfig(proxy))
+			}
+		case "json":
+			if cfg, err := config.XrayClientConfig(result.Outbound, name, settings.jsonOptions()); err == nil {
+				if data, err := json.MarshalIndent(cfg, "", "  "); err == nil {
+					contentType, body = "application/json; charset=utf-8", data
+				}
+			}
+		default:
+			body = []byte(base64.StdEncoding.EncodeToString([]byte(subscriptionLinkName(result.Link, settings.RemarkClientName, workspace, client) + "\n")))
+		}
+		if len(body) == 0 {
+			respond(w, 503, map[string]string{"error": i18n.T("订阅暂不可用", "Subscription temporarily unavailable")})
+			return
+		}
+		w.Header().Set("Content-Type", contentType)
 		used := ledger.Totals[id]
 		subscriptionHeaders(w, settings, limit, used.Uplink, used.Downlink)
-		_, _ = w.Write([]byte(base64.StdEncoding.EncodeToString([]byte(subscriptionLinkName(result.Link, settings.RemarkClientName, workspace, client) + "\n"))))
+		_, _ = w.Write(body)
 	})
 }

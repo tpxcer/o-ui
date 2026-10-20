@@ -378,6 +378,33 @@ func (rt *Runtime) restore(ctx context.Context, b businessBackup, current busine
 	return name, rollback, nil
 }
 
+// exportBackup生成加密业务备份；调用方须持有backupMu与rt.mu（网页导出与Telegram定时备份共用）。
+func (rt *Runtime) exportBackup(ctx context.Context, password string) (string, []byte, error) {
+	if err := rt.checkpointCurrent(ctx); err != nil {
+		return "", nil, err
+	}
+	workspace, err := rt.state.ReadDocument(ctx, "workspace")
+	if err == nil && string(workspace.Data) != "null" {
+		var draft workspaceDraft
+		if err = validateWorkspaceDraft(workspace.Data, nil); err == nil {
+			_ = json.Unmarshal(workspace.Data, &draft)
+			_, err = rt.credentials(ctx, draft)
+		}
+	}
+	if err != nil {
+		return "", nil, i18n.New("无法读取或保存连接身份，未生成备份", "Cannot read or save connection identities; no backup created")
+	}
+	b, _, err := rt.capture(ctx)
+	if err != nil {
+		return "", nil, err
+	}
+	file, err := sealBackup(b, password)
+	if err != nil {
+		return "", nil, err
+	}
+	return "xray-panel-" + b.CreatedAt.Format("20060102-150405") + ".ixpb", file, nil
+}
+
 func registerBackup(mux *http.ServeMux, rt *Runtime) {
 	for _, action := range []string{"export", "preview", "restore"} {
 		mux.HandleFunc("POST /api/backup/"+action, func(w http.ResponseWriter, r *http.Request) {
@@ -405,32 +432,12 @@ func registerBackup(mux *http.ServeMux, rt *Runtime) {
 				return
 			}
 			if action == "export" {
-				if err := rt.checkpointCurrent(r.Context()); err != nil {
-					respond(w, 422, map[string]string{"error": err.Error()})
-					return
-				}
-				workspace, err := rt.state.ReadDocument(r.Context(), "workspace")
-				if err == nil && string(workspace.Data) != "null" {
-					var draft workspaceDraft
-					if err = validateWorkspaceDraft(workspace.Data, nil); err == nil {
-						_ = json.Unmarshal(workspace.Data, &draft)
-						_, err = rt.credentials(r.Context(), draft)
-					}
-				}
-				if err != nil {
-					respond(w, 422, map[string]string{"error": i18n.T("无法读取或保存连接身份，未生成备份", "Cannot read or save connection identities; no backup created")})
-					return
-				}
-				b, _, err := rt.capture(r.Context())
-				var file []byte
-				if err == nil {
-					file, err = sealBackup(b, request.Password)
-				}
+				filename, file, err := rt.exportBackup(r.Context(), request.Password)
 				if err != nil {
 					respond(w, 422, map[string]string{"error": err.Error()})
 					return
 				}
-				respond(w, 200, map[string]string{"archive": base64.StdEncoding.EncodeToString(file), "filename": "xray-panel-" + b.CreatedAt.Format("20060102-150405") + ".ixpb"})
+				respond(w, 200, map[string]string{"archive": base64.StdEncoding.EncodeToString(file), "filename": filename})
 				return
 			}
 			if rt.engine.Status().Running {

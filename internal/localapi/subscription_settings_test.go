@@ -13,6 +13,18 @@ func TestSubscriptionSettingsValidationAndHeaders(t *testing.T) {
 			t.Fatal("accepted", raw)
 		}
 	}
+	for _, raw := range []string{`{"fragmentPackets":"all"}`, `{"fragmentLength":"1-2-3"}`, `{"fragmentInterval":""}`, `{"jsonDirectIP":["geoip:cn","bad entry"]}`, `{"jsonDirectDomain":["-x"]}`} {
+		if _, err := validateSubscriptionSettings(json.RawMessage(raw)); err == nil {
+			t.Fatal("accepted", raw)
+		}
+	}
+	formats, err := validateSubscriptionSettings(json.RawMessage(`{"jsonFragment":true,"fragmentPackets":"1-3","jsonDirectIP":["geoip:private","10.0.0.0/8"],"jsonDirectDomain":["geosite:cn","full:example.com"]}`))
+	if err != nil || !formats.ClashEnabled || !formats.JSONEnabled || formats.jsonOptions().FragmentLength != "100-200" || len(formats.JSONDirectDomain) != 2 {
+		t.Fatal("format settings", formats, err)
+	}
+	if old, _ := validateSubscriptionSettings(json.RawMessage(`{"enabled":true,"updateHours":12,"title":"","showInfo":true}`)); old.JSONDirectIP == nil || !old.ClashEnabled {
+		t.Fatal("settings saved before formats existed should get defaults")
+	}
 	s, err := validateSubscriptionSettings(json.RawMessage(`{"enabled":true,"updateHours":24,"title":"我的节点","showInfo":true}`))
 	if err != nil {
 		t.Fatal(err)

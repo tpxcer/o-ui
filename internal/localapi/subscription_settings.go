@@ -7,11 +7,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"independent-panel/internal/config"
 	"independent-panel/internal/i18n"
 	"independent-panel/internal/store"
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"unicode"
@@ -20,17 +22,36 @@ import (
 
 const subscriptionSettingsDocument = "subscription-settings"
 
-// 订阅服务的全局设置（参照OUI订阅页）：总开关、客户端更新间隔、订阅名称、流量/到期信息与节点名称格式。
+// 订阅服务的全局设置（参照OUI订阅页）：总开关、客户端更新间隔、订阅名称、流量/到期信息与节点名称格式，
+// 以及Clash/Mihomo与Xray JSON两种附加格式（JSON可选TLS握手分片与直连规则）。
 type subscriptionSettings struct {
-	Enabled          bool   `json:"enabled"`
-	UpdateHours      int    `json:"updateHours"`
-	Title            string `json:"title"`
-	ShowInfo         bool   `json:"showInfo"`
-	RemarkClientName bool   `json:"remarkClientName"`
+	Enabled          bool     `json:"enabled"`
+	UpdateHours      int      `json:"updateHours"`
+	Title            string   `json:"title"`
+	ShowInfo         bool     `json:"showInfo"`
+	RemarkClientName bool     `json:"remarkClientName"`
+	ClashEnabled     bool     `json:"clashEnabled"`
+	JSONEnabled      bool     `json:"jsonEnabled"`
+	JSONFragment     bool     `json:"jsonFragment"`
+	FragmentPackets  string   `json:"fragmentPackets"`
+	FragmentLength   string   `json:"fragmentLength"`
+	FragmentInterval string   `json:"fragmentInterval"`
+	JSONDirectIP     []string `json:"jsonDirectIP"`
+	JSONDirectDomain []string `json:"jsonDirectDomain"`
 }
 
 func defaultSubscriptionSettings() subscriptionSettings {
-	return subscriptionSettings{Enabled: true, UpdateHours: 12, Title: "o-ui", ShowInfo: true, RemarkClientName: true}
+	return subscriptionSettings{Enabled: true, UpdateHours: 12, Title: "o-ui", ShowInfo: true, RemarkClientName: true, ClashEnabled: true, JSONEnabled: true,
+		FragmentPackets: "tlshello", FragmentLength: "100-200", FragmentInterval: "10-20", JSONDirectIP: []string{}, JSONDirectDomain: []string{}}
+}
+
+var (
+	fragmentRange = regexp.MustCompile(`^[0-9]{1,5}(-[0-9]{1,5})?$`)
+	directEntry   = regexp.MustCompile(`^(?:geoip:|geosite:|domain:|full:|keyword:)?[A-Za-z0-9][A-Za-z0-9._:/@!-]{0,127}$`)
+)
+
+func (s subscriptionSettings) jsonOptions() config.JSONOptions {
+	return config.JSONOptions{Fragment: s.JSONFragment, FragmentPackets: s.FragmentPackets, FragmentLength: s.FragmentLength, FragmentInterval: s.FragmentInterval, DirectIP: s.JSONDirectIP, DirectDomain: s.JSONDirectDomain}
 }
 
 // 未出现的字段取默认值，旧版保存的设置不会因新增字段改变行为。
@@ -52,6 +73,25 @@ func validateSubscriptionSettings(data json.RawMessage) (subscriptionSettings, e
 			return s, i18n.New("订阅名称不能包含控制字符", "Subscription title must not contain control characters")
 		}
 	}
+	if s.FragmentPackets != "tlshello" && !fragmentRange.MatchString(s.FragmentPackets) || !fragmentRange.MatchString(s.FragmentLength) || !fragmentRange.MatchString(s.FragmentInterval) {
+		return s, i18n.New("分片参数须为数字或“最小-最大”范围（packets另可为tlshello）", "Fragment values must be a number or a min-max range (packets may also be tlshello)")
+	}
+	if s.JSONDirectIP == nil {
+		s.JSONDirectIP = []string{}
+	}
+	if s.JSONDirectDomain == nil {
+		s.JSONDirectDomain = []string{}
+	}
+	for _, list := range [][]string{s.JSONDirectIP, s.JSONDirectDomain} {
+		if len(list) > 64 {
+			return s, i18n.New("直连规则每组最多64项", "Each direct rule list allows at most 64 entries")
+		}
+		for _, entry := range list {
+			if !directEntry.MatchString(entry) {
+				return s, i18n.New("直连规则只能填写geoip:/geosite:、IP/CIDR或域名", "Direct rules accept only geoip:/geosite: entries, IP/CIDR or domains")
+			}
+		}
+	}
 	return s, nil
 }
 
@@ -69,6 +109,12 @@ func readSubscriptionSettings(ctx context.Context, state *store.Store) (subscrip
 
 // subscriptionLinkName按设置把分享链接的节点名称改为“入站名-客户端名”或仅入站名；找不到入站时保留客户端名。
 func subscriptionLinkName(link string, withClient bool, workspace store.Document, client clientDraft) string {
+	base, _, _ := strings.Cut(link, "#")
+	return base + (&url.URL{Fragment: subscriptionNodeName(withClient, workspace, client)}).String()
+}
+
+// subscriptionNodeName是订阅中的节点名称：“入站名-客户端名”或仅入站名；找不到入站时为客户端名。
+func subscriptionNodeName(withClient bool, workspace store.Document, client clientDraft) string {
 	var draft workspaceDraft
 	inbound := ""
 	if json.Unmarshal(workspace.Data, &draft) == nil {
@@ -84,8 +130,7 @@ func subscriptionLinkName(link string, withClient bool, workspace store.Document
 	} else if inbound != "" {
 		name = inbound
 	}
-	base, _, _ := strings.Cut(link, "#")
-	return base + (&url.URL{Fragment: name}).String()
+	return name
 }
 
 // subscriptionHeaders写入常见客户端识别的更新间隔、名称与流量/到期信息。
@@ -114,7 +159,7 @@ func registerSubscriptionSettings(mux *http.ServeMux, state *store.Store) {
 	})
 	mux.HandleFunc("PUT /api/panel/subscription", func(w http.ResponseWriter, r *http.Request) {
 		var request store.Document
-		if !readJSON(w, r, &request, 4096) {
+		if !readJSON(w, r, &request, 32<<10) {
 			return
 		}
 		s, err := validateSubscriptionSettings(request.Data)

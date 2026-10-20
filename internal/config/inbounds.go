@@ -87,15 +87,25 @@ type Client struct {
 	IPLimit    uint32
 	UUID       string
 	Auth       string
+	ReverseTag string
 }
 
 type User struct {
-	ID    string `json:"id,omitempty"`
-	Auth  string `json:"auth,omitempty"`
-	Flow  string `json:"flow,omitempty"`
-	Level uint32 `json:"level"`
-	Email string `json:"email"`
+	ID      string       `json:"id,omitempty"`
+	Auth    string       `json:"auth,omitempty"`
+	Flow    string       `json:"flow,omitempty"`
+	Level   uint32       `json:"level"`
+	Email   string       `json:"email"`
+	Reverse *UserReverse `json:"reverse,omitempty"`
 }
+
+// UserReverse让VLESS客户端作为反向代理的桥接端接入：其隧道在本机成为同名出站，供路由使用。
+type UserReverse struct {
+	Tag string `json:"tag"`
+}
+
+// ReverseTagPattern是反向代理标签的允许格式（门户端客户端与桥接端出站共用）。
+var ReverseTagPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,64}$`)
 
 type ProtocolSettings struct {
 	Clients    []User `json:"clients"`
@@ -271,6 +281,12 @@ func CompileInbounds(inbounds []Inbound, clients []Client, now time.Time) ([]Com
 			if in.Preset == "reality" {
 				user.Flow = "xtls-rprx-vision"
 			}
+		}
+		if client.ReverseTag != "" {
+			if in.Preset == "hy2" || !ReverseTagPattern.MatchString(client.ReverseTag) {
+				return nil, i18n.New("反向代理标签只用于VLESS入站，且只能含字母、数字、点、下划线和连字符", "Reverse tags apply only to VLESS inbounds and may contain only letters, digits, dots, underscores and hyphens")
+			}
+			user.Reverse = &UserReverse{Tag: client.ReverseTag}
 		}
 		identity := in.ID + ":" + user.ID + user.Auth
 		if seenCredentials[identity] {

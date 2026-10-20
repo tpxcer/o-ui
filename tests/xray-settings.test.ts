@@ -52,3 +52,10 @@ test('路由空条件、错误字段类型与DNS空地址不应被当作结构�
   assert.throws(() => buildSettings({ ...defaultSettings(), rules: '[{"type":"field","domain":["example.test"],"outboundTag":["direct"]}]' }));
   for (const dns of ['{"servers":[""]}', '{"servers":[{}]}', '{"servers":[{"address":""}]}']) assert.throws(() => buildSettings({ ...defaultSettings(), dns }));
 });
+
+test('路由可引用入站客户端的反向代理标签，但不能与出站重名', () => {
+  const draft = { ...defaultSettings(), rules: JSON.stringify([{ type: 'field', user: ['client-two'], outboundTag: 'r-home' }]) };
+  assert.throws(() => buildSettings(draft), /不存在的出站|missing outbound/);
+  assert.doesNotThrow(() => buildSettings(draft, ['r-home']));
+  assert.throws(() => buildSettings(draft, ['r-home', 'direct']), /反向代理标签|reverse tag/);
+});

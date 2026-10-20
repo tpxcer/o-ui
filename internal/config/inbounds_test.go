@@ -225,3 +225,29 @@ func TestPureDeterministicOutput(t *testing.T) {
 		t.Fatal("compiler output aliases input")
 	}
 }
+
+func TestReverseTagCompile(t *testing.T) {
+	for _, preset := range []string{"reality", "xhttp-tls", "xhttp-reality"} {
+		in, client := fixture(preset)
+		client.ReverseTag = "r-home"
+		compiled, err := compileOne(in, client)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, _ := json.Marshal(compiled[0].Settings.Clients[0])
+		if !strings.Contains(string(data), `"reverse":{"tag":"r-home"}`) {
+			t.Fatal("reverse tag missing", string(data))
+		}
+	}
+	in, client := fixture("reality")
+	if compiled, _ := compileOne(in, client); compiled[0].Settings.Clients[0].Reverse != nil {
+		t.Fatal("reverse emitted without a tag")
+	}
+	for _, test := range []struct{ preset, tag string }{{"hy2", "r-home"}, {"reality", "r home"}} {
+		in, client := fixture(test.preset)
+		client.ReverseTag = test.tag
+		if _, err := compileOne(in, client); err == nil {
+			t.Fatal("invalid reverse accepted", test)
+		}
+	}
+}

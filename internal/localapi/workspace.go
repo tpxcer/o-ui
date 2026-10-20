@@ -54,6 +54,7 @@ type clientDraft struct {
 	ExpiresAt    *int64  `json:"expiresAt"`
 	IPLimit      int     `json:"ipLimit"`
 	Subscription bool    `json:"subscription"`
+	ReverseTag   string  `json:"reverseTag,omitempty"`
 }
 type workspaceDraft struct {
 	Inbounds []inboundDraft `json:"inbounds"`
@@ -110,7 +111,10 @@ func validateWorkspaceDraft(data, previous json.RawMessage) error {
 		ports[port] = true
 		ids[in.ID] = true
 	}
-	clientIDs := map[string]bool{}
+	clientIDs, reverseTags, presets := map[string]bool{}, map[string]bool{}, map[string]string{}
+	for _, in := range draft.Inbounds {
+		presets[in.ID] = in.Preset
+	}
 	for _, client := range draft.Clients {
 		if !draftID.MatchString(client.ID) || clientIDs[client.ID] || !ids[client.InboundID] || strings.TrimSpace(client.Name) == "" || len([]rune(client.Name)) > 64 || names[client.Name] {
 			return i18n.New("客户端标识、名称或关联入站无效", "Invalid client ID, name or linked inbound")
@@ -120,6 +124,12 @@ func validateWorkspaceDraft(data, previous json.RawMessage) error {
 		}
 		if client.ExpiresAt != nil && (*client.ExpiresAt < 0 || *client.ExpiresAt > 8640000000000000) {
 			return i18n.New("客户端到期时间无效", "Invalid client expiry time")
+		}
+		if client.ReverseTag != "" {
+			if !config.ReverseTagPattern.MatchString(client.ReverseTag) || presets[client.InboundID] == "hy2" || reverseTags[client.ReverseTag] {
+				return i18n.New("反向代理标签只用于VLESS入站，须唯一，且只能含字母、数字、点、下划线和连字符", "Reverse tags apply only to VLESS inbounds, must be unique and may contain only letters, digits, dots, underscores and hyphens")
+			}
+			reverseTags[client.ReverseTag] = true
 		}
 		clientIDs[client.ID] = true
 		names[client.Name] = true

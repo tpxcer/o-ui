@@ -189,6 +189,26 @@ func TestOfficialFourExportedConnections(t *testing.T) {
 			if err != nil || !sameShareLink(string(decoded), exported.Link) {
 				t.Fatal("subscription differs from applied single-client export")
 			}
+			// 订阅节点名为“入站名-客户端名”，第三方客户端按订阅里的链接核对节点。
+			subscriptionLink := strings.TrimSuffix(string(decoded), "\n")
+			token := strings.TrimPrefix(grant.Path, "/sub/")
+			clashPayload := subscriptionGET(t, handler, "/sub/clash/"+token, 200)
+			if !strings.HasPrefix(string(clashPayload), "proxies:\n  - name: ") || strings.Contains(string(clashPayload), "skip-cert-verify") {
+				t.Fatal("unexpected Clash subscription", string(clashPayload))
+			}
+			formats := defaultSubscriptionSettings()
+			formats.JSONFragment = true
+			formatData, _ := json.Marshal(formats)
+			rt.mu.Lock()
+			_, formatErr := s.SaveDocument(context.Background(), subscriptionSettingsDocument, 0, formatData)
+			rt.mu.Unlock()
+			if formatErr != nil {
+				t.Fatal(formatErr)
+			}
+			jsonPayload := subscriptionGET(t, handler, "/sub/json/"+token, 200)
+			if strings.Contains(string(jsonPayload), `"dialerProxy": "fragment"`) == (preset == "hy2") {
+				t.Fatal("JSON subscription fragment must apply to TCP transports only")
+			}
 			mihomoReality := strings.Contains(preset, "reality") && os.Getenv("PANEL_CLIENT_QA_MIHOMO") != ""
 			setCompatibility := func(enabled bool) {
 				t.Helper()
@@ -205,17 +225,22 @@ func TestOfficialFourExportedConnections(t *testing.T) {
 			}
 			if mihomoReality {
 				t.Run("official-default", func(t *testing.T) {
-					verifyThirdPartyClients(t, rt, preset, exported.Link, payload, cert, origin.URL, false)
+					verifyThirdPartyClients(t, rt, preset, subscriptionLink, payload, cert, origin.URL, false)
 				})
 				setCompatibility(true)
 			}
-			verifyThirdPartyClients(t, rt, preset, exported.Link, payload, cert, origin.URL, true)
+			verifyThirdPartyClients(t, rt, preset, subscriptionLink, payload, cert, origin.URL, true)
 			if mihomoReality {
 				setCompatibility(false)
 				t.Run("compatibility-disabled", func(t *testing.T) {
-					verifyThirdPartyClients(t, rt, preset, exported.Link, payload, cert, origin.URL, false)
+					verifyThirdPartyClients(t, rt, preset, subscriptionLink, payload, cert, origin.URL, false)
 				})
 				setCompatibility(true)
+			}
+			if os.Getenv("PANEL_CLIENT_QA_MIHOMO") != "" {
+				t.Run("clash-subscription", func(t *testing.T) {
+					verifyThirdPartyClients(t, rt, preset, subscriptionLink, clashPayload, cert, origin.URL, true)
+				})
 			}
 			grantRequest.WorkspaceRevision = operation.WorkspaceRevision
 			grantRequest.Revision = grant.Revision
@@ -327,6 +352,30 @@ func TestOfficialFourExportedConnections(t *testing.T) {
 				}) {
 					t.FailNow()
 				}
+			}
+			// JSON订阅是完整客户端配置（TCP传输经fragment出站分片）；只换本地端口并信任测试CA，官方核心须直接连通。
+			var subscribed map[string]any
+			if err := json.Unmarshal(jsonPayload, &subscribed); err != nil {
+				t.Fatal("JSON subscription is not valid JSON")
+			}
+			local := subscribed["inbounds"].([]any)[0].(map[string]any)
+			local["port"] = clientPort
+			subscribed["inbounds"], subscribed["log"] = []any{local}, map[string]string{"loglevel": "none"}
+			subscribedProxy := subscribed["outbounds"].([]any)[0].(map[string]any)
+			if tlsSettings, ok := subscribedProxy["streamSettings"].(map[string]any)["tlsSettings"].(map[string]any); ok {
+				tlsSettings["disableSystemRoot"] = true
+				tlsSettings["certificates"] = []any{map[string]string{"certificateFile": cert, "usage": "verify"}}
+			}
+			subscribedData, _ := json.Marshal(subscribed)
+			subscribedFile := filepath.Join(t.TempDir(), "subscription.json")
+			if err := os.WriteFile(subscribedFile, subscribedData, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := clientEngine.Apply(context.Background(), engine.Candidate{Binary: binary, Version: version, File: subscribedFile, Inbounds: 1}); err != nil {
+				t.Fatal("official core rejected JSON subscription", err)
+			}
+			if err := roundTrip(); err != nil {
+				t.Fatal("JSON subscription client round trip failed", err)
 			}
 			startClient(exported.Outbound)
 			if err := roundTrip(); err != nil {

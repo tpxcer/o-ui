@@ -76,3 +76,21 @@ func TestMihomoCompatibilityDraftValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestReverseTagDraftValidation(t *testing.T) {
+	valid := string(validWorkspace())
+	withTag := strings.Replace(valid, `"subscription":false}`, `"subscription":false,"reverseTag":"r-home"}`, 1)
+	if err := validateWorkspaceDraft(json.RawMessage(withTag), nil); err != nil {
+		t.Fatal("VLESS reverse tag rejected", err)
+	}
+	for name, draft := range map[string]string{
+		"bad-chars": strings.Replace(withTag, `"r-home"`, `"r home"`, 1),
+		"too-long":  strings.Replace(withTag, `"r-home"`, `"`+strings.Repeat("r", 65)+`"`, 1),
+		"hy2":       strings.Replace(withTag, `"preset":"reality"`, `"preset":"hy2"`, 1),
+		"duplicate": strings.Replace(withTag, `]}`, `,{"id":"client-two","inboundId":"in-one","name":"two","enabled":true,"quotaGB":0,"usedGB":0,"expiresAt":null,"ipLimit":0,"subscription":false,"reverseTag":"r-home"}]}`, 1),
+	} {
+		if validateWorkspaceDraft(json.RawMessage(draft), nil) == nil {
+			t.Fatal("invalid reverse tag accepted:", name)
+		}
+	}
+}

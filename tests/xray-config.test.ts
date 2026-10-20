@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { defaultSettings } from '../src/xray-settings-model.ts';
 import {
-  balancerFromForm, dnsServerForm, dnsServerFromForm, outboundForm, outboundFromForm, outboundFromLink, parseParts, ruleForm, ruleFromForm,
+  balancerFromForm, dnsServerForm, dnsServerFromForm, outboundAddress, outboundForm, outboundFromForm, outboundFromLink, outboundReverseTag, parseParts, ruleForm, ruleFromForm,
   ruleValues, setRuleValues, syncObservatory, writeParts,
 } from '../src/xray-config.ts';
 
@@ -64,4 +64,19 @@ test('DNS服务器表单：简单地址保持字符串，带条件时为对象',
   assert.equal(dnsServerFromForm(dnsServerForm('1.1.1.1')), '1.1.1.1');
   assert.deepEqual(dnsServerFromForm({ address: '8.8.8.8', port: '53', domains: 'geosite:google', expectIPs: '', skipFallback: true }), { address: '8.8.8.8', port: 53, domains: ['geosite:google'], skipFallback: true });
   assert.throws(() => dnsServerFromForm({ address: '', port: '', domains: '', expectIPs: '', skipFallback: false }), /DNS/);
+});
+
+test('VLESS反向代理桥接端用简化写法，往返一致；无反向时仍为vnext', () => {
+  const form = { ...outboundForm({ tag: 'home', protocol: 'vless', settings: { vnext: [{ address: 'p.example', port: 443, users: [{ id: 'u', encryption: 'none', flow: 'xtls-rprx-vision' }] }] }, streamSettings: { network: 'tcp', security: 'reality', realitySettings: { serverName: 's.example', fingerprint: 'chrome', password: 'PUB', shortId: '01', spiderX: '/' } } })!, reverseTag: 'r-bridge' };
+  const bridge = outboundFromForm(form);
+  assert.deepEqual(bridge.settings, { address: 'p.example', port: 443, id: 'u', encryption: 'none', flow: 'xtls-rprx-vision', reverse: { tag: 'r-bridge' } });
+  assert.deepEqual(outboundFromForm(outboundForm(bridge)!), bridge);
+  assert.equal(outboundReverseTag(bridge), 'r-bridge');
+  assert.ok('vnext' in (outboundFromForm({ ...form, reverseTag: '' }).settings as object));
+  assert.equal(outboundForm({ ...bridge, settings: { ...(bridge.settings as object), reverse: { tag: 'r', sniffing: {} } } }), null, '表单不支持的reverse字段改用JSON编辑');
+  assert.throws(() => outboundFromForm({ ...form, reverseTag: 'r bridge' }), /反向|Reverse/);
+});
+
+test('WireGuard（WARP）出站在列表中显示对端地址', () => {
+  assert.equal(outboundAddress({ tag: 'warp', protocol: 'wireguard', settings: { address: ['172.16.0.2/32'], peers: [{ endpoint: 'engage.cloudflareclient.com:2408' }] } }), 'engage.cloudflareclient.com:2408');
 });

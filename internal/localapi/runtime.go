@@ -272,7 +272,7 @@ func buildInbounds(draft workspaceDraft, ids identities, used map[string]traffic
 	}
 	for _, c := range draft.Clients {
 		identity := ids.Clients[c.ID]
-		item := config.Client{ID: c.ID, InboundID: c.InboundID, Enabled: c.Enabled, QuotaBytes: quotaBytes(c.QuotaGB), UsedBytes: used[c.ID].Total(), IPLimit: uint32(c.IPLimit), UUID: identity.UUID, Auth: identity.Auth}
+		item := config.Client{ID: c.ID, InboundID: c.InboundID, Enabled: c.Enabled, QuotaBytes: quotaBytes(c.QuotaGB), UsedBytes: used[c.ID].Total(), IPLimit: uint32(c.IPLimit), UUID: identity.UUID, Auth: identity.Auth, ReverseTag: c.ReverseTag}
 		if c.ExpiresAt != nil {
 			date := time.UnixMilli(*c.ExpiresAt)
 			item.ExpiresAt = &date
@@ -405,7 +405,13 @@ func (rt *Runtime) candidate(ctx context.Context, request runtimeRequest) (engin
 	if err != nil {
 		return c, err
 	}
-	full, err := compileSettings(settings.Data)
+	reverseTags := []string{}
+	for _, client := range draft.Clients {
+		if client.ReverseTag != "" {
+			reverseTags = append(reverseTags, client.ReverseTag)
+		}
+	}
+	full, err := compileSettings(settings.Data, reverseTags...)
 	if err != nil {
 		return c, err
 	}

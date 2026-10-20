@@ -173,6 +173,9 @@ func TestSubscriptionBoundary(t *testing.T) {
 		{"trailing", "GET", created.Path + "/", "127.0.0.1:1234", "127.0.0.1:5180", "", "", 404},
 		{"double-slash", "GET", "/sub//" + strings.TrimPrefix(created.Path, "/sub/"), "127.0.0.1:1234", "127.0.0.1:5180", "", "", 404},
 		{"short", "GET", "/sub/short", "127.0.0.1:1234", "127.0.0.1:5180", "", "", 404},
+		{"unknown-format", "GET", "/sub/yaml/" + strings.TrimPrefix(created.Path, "/sub/"), "127.0.0.1:1234", "127.0.0.1:5180", "", "", 404},
+		{"nested-format", "GET", "/sub/clash/json/" + strings.TrimPrefix(created.Path, "/sub/"), "127.0.0.1:1234", "127.0.0.1:5180", "", "", 404},
+		{"format-remote", "GET", "/sub/clash/" + strings.TrimPrefix(created.Path, "/sub/"), "192.0.2.1:1234", "127.0.0.1:5180", "", "", 403},
 		{"root", "GET", "/sub", "127.0.0.1:1234", "127.0.0.1:5180", "", "", 404},
 		{"management-no-origin", "POST", "/api/subscription/rotate", "127.0.0.1:1234", "127.0.0.1:5180", "", "", 403},
 	} {
@@ -283,5 +286,31 @@ func TestSubscriptionConcurrentRotation(t *testing.T) {
 	wg.Wait()
 	if counts[200] != 1 || counts[409] != 1 {
 		t.Fatal("old confirmation rotated twice", counts)
+	}
+}
+
+// Clash/JSON与Base64共用同一密钥；关闭某格式后该地址与无效链接一样返回404，开启时与Base64同样要求核心已应用运行。
+func TestSubscriptionFormatsToggle(t *testing.T) {
+	s, _, handler, cookie := subscriptionFixture(t)
+	created := subscriptionCall(t, handler, "rotate", subscriptionRequest{ClientID: "client-one", WorkspaceRevision: 1, Confirm: true}, cookie, 200)
+	if !created.Clash || !created.JSON {
+		t.Fatal("formats should be enabled by default", created)
+	}
+	token := strings.TrimPrefix(created.Path, "/sub/")
+	for _, path := range []string{created.Path, "/sub/clash/" + token, "/sub/json/" + token} {
+		subscriptionGET(t, handler, path, 503)
+	}
+	settings := defaultSubscriptionSettings()
+	settings.ClashEnabled, settings.JSONEnabled = false, false
+	data, _ := json.Marshal(settings)
+	if _, err := s.SaveDocument(context.Background(), subscriptionSettingsDocument, 0, data); err != nil {
+		t.Fatal(err)
+	}
+	subscriptionGET(t, handler, created.Path, 503)
+	subscriptionGET(t, handler, "/sub/clash/"+token, 404)
+	subscriptionGET(t, handler, "/sub/json/"+token, 404)
+	status := subscriptionCall(t, handler, "status", subscriptionRequest{ClientID: "client-one", WorkspaceRevision: 1}, cookie, 200)
+	if status.Clash || status.JSON || status.Path != "" {
+		t.Fatal("status should report disabled formats without a path", status)
 	}
 }

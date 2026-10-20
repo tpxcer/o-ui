@@ -53,8 +53,10 @@ test('访问地址：对外为来源加路径，仅本机沿用当前浏览器�
 });
 
 test('订阅设置：更新间隔与标题按后端规则校验，开关原样提交', () => {
-  const form = subscriptionForm({ enabled: true, updateHours: 12, title: 'o-ui', showInfo: true, remarkClientName: true });
-  assert.deepEqual(subscriptionRequest({ ...form, enabled: false, title: '  我的节点  ', updateHours: '24', remarkClientName: false }), { enabled: false, updateHours: 24, title: '我的节点', showInfo: true, remarkClientName: false });
+  const form = subscriptionForm({ enabled: true, updateHours: 12, title: 'o-ui', showInfo: true, remarkClientName: true, clashEnabled: true, jsonEnabled: true, jsonFragment: false, fragmentPackets: 'tlshello', fragmentLength: '100-200', fragmentInterval: '10-20', jsonDirectIP: [], jsonDirectDomain: [] });
+  assert.deepEqual(subscriptionRequest({ ...form, enabled: false, title: '  我的节点  ', updateHours: '24', remarkClientName: false }), { enabled: false, updateHours: 24, title: '我的节点', showInfo: true, remarkClientName: false, clashEnabled: true, jsonEnabled: true, jsonFragment: false, fragmentPackets: 'tlshello', fragmentLength: '100-200', fragmentInterval: '10-20', jsonDirectIP: [], jsonDirectDomain: [] });
+  assert.deepEqual(subscriptionRequest({ ...form, clashEnabled: false, jsonFragment: true, fragmentPackets: ' 1-3 ', jsonDirectIP: 'geoip:private\n\n 10.0.0.0/8 ', jsonDirectDomain: 'geosite:cn' }).jsonDirectIP, ['geoip:private', '10.0.0.0/8']);
+  for (const bad of [{ fragmentPackets: 'all' }, { fragmentLength: '1-2-3' }, { jsonDirectDomain: 'bad entry' }]) assert.throws(() => subscriptionRequest({ ...form, ...bad }), /分片|直连|Fragment|Direct/);
   for (const updateHours of ['0', '169', '1.5', '']) assert.throws(() => subscriptionRequest({ ...form, updateHours }), /1至168小时/);
   assert.throws(() => subscriptionRequest({ ...form, title: 'x'.repeat(65) }), /64个字符/);
   assert.throws(() => subscriptionRequest({ ...form, title: 'a\u0007' }), /控制字符/);
