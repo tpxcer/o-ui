@@ -1,61 +1,69 @@
-import { api, APIError, jsonBody } from './api.ts';
-import { escapeHtml as esc } from './workspace.ts';
 import { t } from './i18n.ts';
 
-interface AccessDraft { public: boolean; listen: string; origin: string; basePath?: string }
-interface AccessStatus { active: AccessDraft; activeRevision: number; revision: number; data: AccessDraft | null }
+// “常规”页的访问/证书/会话模型：表单值与后端 /api/panel/general 文档互相转换并校验，不含DOM。
+export interface AccessDraft { public: boolean; listen: string; origin: string; basePath?: string }
+export interface TLSDraft { certificateFile: string; keyFile: string }
+export interface GeneralStatus {
+  access: { revision: number; data: AccessDraft | null; active: AccessDraft; pending: boolean };
+  tls: { revision: number; data: TLSDraft | null; active: boolean; serverNames: string[]; pending: boolean };
+  session: { revision: number; minutes: number };
+}
+export interface GeneralForm { listenIP: string; domain: string; port: string; path: string; sessionMinutes: string; certificateFile: string; keyFile: string }
+export interface GeneralBody {
+  accessRevision: number; tlsRevision: number; sessionRevision: number;
+  access: AccessDraft; tls: TLSDraft; sessionMinutes: number; confirmation: string;
+}
 
-export function initPanelAccess(root: HTMLElement): { render: () => void } {
-  let status: AccessStatus | null = null, loading = false, saving = false, reloadRequired = false, error = '', message = '';
-  const input = (id: string) => root.querySelector<HTMLInputElement>(`#access-${id}`)!;
-  function controls(focus = false): void {
-    root.querySelectorAll<HTMLInputElement>('input').forEach(element => { element.disabled = !status || loading || saving; });
-    const save = root.querySelector<HTMLButtonElement>('#access-save');
-    if (save) { save.disabled = !status || loading || saving || reloadRequired; save.textContent = saving ? t('正在校验并保存…', 'Verifying and saving…') : t('保存访问设置', 'Save access settings'); }
-    const reload = root.querySelector<HTMLButtonElement>('[data-access-reload]');
-    if (reload) reload.disabled = loading || saving;
-    const alert = root.querySelector<HTMLElement>('[role="alert"]');
-    if (alert) { alert.textContent = error; alert.hidden = !error; if (focus && error) alert.focus(); }
-    const feedback = root.querySelector<HTMLElement>('[role="status"]');
-    if (feedback) feedback.textContent = loading ? t('正在读取…', 'Reading…') : saving ? t('正在校验并保存…', 'Verifying and saving…') : message;
+export const remoteConfirmation = '确认启用HTTPS非本机访问';
+
+function splitListen(listen: string): [string, string] {
+  const match = listen.match(/^\[(.+)\]:(\d+)$/) ?? listen.match(/^([^:]+):(\d+)$/);
+  return match ? [match[1], match[2]] : ['', ''];
+}
+
+export function isLoopback(ip: string): boolean { return /^127\./.test(ip) || ip === '::1'; }
+
+export function generalForm(status: GeneralStatus): GeneralForm {
+  const access = status.access.data ?? status.access.active;
+  const [ip, port] = splitListen(access.listen);
+  let domain = '';
+  if (access.public && access.origin) { try { domain = new URL(access.origin).hostname.replace(/^\[|\]$/g, ''); } catch { domain = ''; } }
+  return { listenIP: ip === '0.0.0.0' ? '' : ip, domain, port, path: access.basePath || '/', sessionMinutes: String(status.session.minutes), certificateFile: status.tls.data?.certificateFile ?? '', keyFile: status.tls.data?.keyFile ?? '' };
+}
+
+// 访问地址：对外为“https://域名:端口/路径/”，仅本机为当前浏览器地址（如经SSH隧道）加路径。
+export function accessURL(access: AccessDraft, here = globalThis.location): string {
+  const path = access.basePath || '/';
+  return access.public ? access.origin + path : `${here?.protocol ?? 'http:'}//${here?.host ?? access.listen}${path}`;
+}
+
+// 校验并组装保存请求；监听IP为回环时是仅本机，其余（含留空=0.0.0.0）为固定域名的HTTPS对外访问。
+export function generalRequest(form: GeneralForm, status: GeneralStatus): { body: GeneralBody; enablesRemote: boolean } {
+  const ip = form.listenIP.trim() || '0.0.0.0';
+  if (!/^[0-9a-fA-F.:]+$/.test(ip) || (!ip.includes(':') && !/^\d{1,3}(\.\d{1,3}){3}$/.test(ip))) throw new Error(t('监听IP须为IPv4或IPv6地址；留空监听全部IP', 'Listen IP must be an IPv4 or IPv6 address; leave it empty to listen on all IPs'));
+  const portText = form.port.trim(), port = Number(portText);
+  if (!/^\d{4,5}$/.test(portText) || port < 1024 || port > 65535) throw new Error(t('端口须为1024至65535', 'Port must be 1024–65535'));
+  let path = form.path.trim() || '/';
+  if (!path.startsWith('/')) path = '/' + path;
+  if (!path.endsWith('/')) path += '/';
+  if (path !== '/' && (!/^\/[A-Za-z0-9_-]{1,64}\/$/.test(path) || ['/api/', '/sub/', '/assets/'].includes(path))) throw new Error(t('访问路径须为 / 或 /字母数字下划线短横线/（1–64位），不能是 /api/、/sub/、/assets/', 'The access path must be / or /letters-digits-underscores-hyphens/ (1–64), and cannot be /api/, /sub/ or /assets/'));
+  const minutesText = form.sessionMinutes.trim(), minutes = Number(minutesText);
+  if (!/^\d+$/.test(minutesText) || minutes < 5 || minutes > 43200) throw new Error(t('会话时长须为5至43200分钟', 'Session duration must be 5–43200 minutes'));
+  const certificateFile = form.certificateFile.trim(), keyFile = form.keyFile.trim();
+  if (Boolean(certificateFile) !== Boolean(keyFile)) throw new Error(t('证书公钥和私钥路径需同时填写或同时留空', 'Fill in both certificate and key paths, or leave both empty'));
+  if ((certificateFile && !certificateFile.startsWith('/')) || (keyFile && !keyFile.startsWith('/'))) throw new Error(t('证书路径须为以 / 开头的绝对路径', 'Certificate paths must be absolute paths starting with /'));
+  const local = isLoopback(ip);
+  let origin = '';
+  if (!local) {
+    const domain = form.domain.trim().toLowerCase();
+    if (!domain) throw new Error(t('对外访问须填写监听域名（证书中的域名或IP）；仅本机请把监听IP设为127.0.0.1', 'Remote access needs a listen domain (a domain or IP in the certificate); for local only set the listen IP to 127.0.0.1'));
+    if (!certificateFile) throw new Error(t('对外访问需要HTTPS证书，请填写证书路径', 'Remote access needs an HTTPS certificate; fill in the certificate paths'));
+    origin = `https://${domain.includes(':') ? `[${domain}]` : domain}:${port}`;
   }
-  function paint(): void {
-    const draft = status?.data ?? status?.active;
-    root.innerHTML = `<h2 class="xray-editor-title">${t('访问设置', 'Access')}</h2>
-      <p class="core-warning">${t('开启后可通过 HTTPS 从其他设备访问面板和订阅；订阅链接含代理凭据，请勿公开。保存后点“重启面板”生效。', 'When enabled, the panel and subscriptions are reachable over HTTPS from other devices; subscription links contain proxy credentials, keep them private. Click Restart panel to apply after saving.')}</p>
-      <p class="form-intro">${t('本次启动：', 'This run: ')}${status ? `${status.active.public ? t('固定来源 HTTPS', 'Fixed-origin HTTPS') : t('仅本机', 'Local only')} · ${esc(status.active.listen)}${status.active.origin ? ` · ${esc(status.active.origin)}` : ''}${status.active.basePath ? ` · ${t('路径', 'path')} ${esc(status.active.basePath)}` : ''}${t('。', '. ')}${status.revision !== status.activeRevision ? t('有待重启生效的访问设置。', 'Access settings are waiting for a restart.') : t('已保存设置与本次启动一致。', 'Saved settings match this run.')}` : t('尚未读取。', 'Not read yet.')}</p>
-      <form id="access-form"><label class="check-field"><input id="access-public" type="checkbox" ${draft?.public ? 'checked' : ''}><span>${t('允许固定来源的非本机 HTTPS 管理与订阅', 'Allow remote HTTPS management and subscriptions from a fixed origin')}</span></label>
-      <label class="form-field" for="access-listen">${t('监听 IP 与端口', 'Listen IP and port')}<input id="access-listen" required maxlength="100" autocomplete="off" value="${esc(draft?.listen ?? '')}"></label>
-      <label class="form-field" for="access-path">${t('访问路径', 'Access path')}<input id="access-path" maxlength="66" autocomplete="off" placeholder="/" value="${esc(draft?.basePath || '/')}"><small class="form-hint">${t('如 /abc123/，可隐藏面板入口；/ 表示根路径。订阅链接仍在 /sub/ 下，不暴露此路径。', 'For example /abc123/ to hide the panel entry; / means the root. Subscription links stay under /sub/ and do not reveal this path.')}</small></label>
-      <label class="form-field" for="access-origin">${t('HTTPS 访问来源', 'HTTPS origin')}<input id="access-origin" maxlength="300" autocomplete="off" placeholder="https://panel.example.com:5180" value="${esc(draft?.origin ?? '')}"></label>
-      <p class="form-hint">${t('仅本机模式须回环 IP，访问来源留空。非本机模式须先保存有效且匹配来源的证书；使用直接监听的相同端口（1024–65535），不含路径，暂不支持反向代理或端口映射。保存不代表网络可达或证书已获设备信任。', 'Local-only mode needs a loopback IP and an empty origin. Remote mode first needs a saved valid certificate matching the origin, and the same directly listened port (1024–65535) without a path; reverse proxies and port mapping are not supported. Saving does not mean the network is reachable or devices trust the certificate.')}</p>
-      <label class="check-field"><input id="access-confirm" type="checkbox"><span>${t('我确认启用 HTTPS 非本机访问的风险（每次保存启用设置均需勾选）。', 'I understand the risks of enabling remote HTTPS access (required on every save that enables it).')}</span></label>
-      <p class="form-error" role="alert" tabindex="-1" hidden></p><p class="core-message" role="status"></p>
-      <button id="access-save" class="primary-button">${t('保存访问设置', 'Save access settings')}</button></form>
-      <button type="button" class="secondary-button" data-access-reload>${t('重新读取访问设置', 'Reload access settings')}</button>`;
-    controls();
-    root.querySelector('#access-form')!.addEventListener('submit', event => {
-      event.preventDefault(); if (!status || loading || saving || reloadRequired) return;
-      const path = input('path').value.trim(), data: AccessDraft = { public: input('public').checked, listen: input('listen').value.trim(), origin: input('origin').value.trim(), basePath: path === '/' ? '' : path };
-      if (data.public && !input('confirm').checked) { error = t('请先勾选非本机访问风险确认；当前监听未改变。', 'Tick the remote access risk confirmation first; the listen address is unchanged.'); controls(true); return; }
-      saving = true; error = ''; message = ''; controls();
-      void api<AccessStatus>('panel/access', jsonBody('PUT', { revision: status.revision, data, confirmation: data.public ? '确认启用HTTPS非本机访问' : '' })).then(next => {
-        status = next; message = t('访问设置已保存，点“重启面板”后生效。', 'Access settings saved; click Restart panel to apply.');
-      }).catch(reason => {
-        reloadRequired = !(reason instanceof APIError) || reason.status === 409 || reason.status >= 500;
-        error = `${(reason as Error).message}${t('；输入已保留。', '; your input is kept.')}${reloadRequired ? t('请先复制需要保留的输入，再重新读取访问设置确认结果，不要重复提交旧修订。', ' Copy anything you want to keep, then reload the access settings to confirm the result; do not resubmit the old revision.') : t('请修正后重试。', ' Please correct it and retry.')}`;
-      }).finally(() => { saving = false; if (root.isConnected) { if (error) controls(true); else paint(); } });
-    });
-    root.querySelector('[data-access-reload]')!.addEventListener('click', () => { void load(); });
-  }
-  async function load(): Promise<void> {
-    if (loading || saving) return;
-    if (status && !window.confirm(t('重新读取会丢弃未保存的访问设置，请先复制需要保留的内容。不重启面板，不影响证书或密码表单，是否继续？', 'Reloading discards unsaved access settings; copy anything you want to keep first. o-ui does not restart and the certificate and password forms are not affected. Continue?'))) return;
-    loading = true; error = ''; message = ''; controls();
-    let loaded = false;
-    try { status = await api<AccessStatus>('panel/access'); reloadRequired = false; loaded = true; }
-    catch (reason) { error = `${(reason as Error).message}${t('；原输入仍保留。', '; your previous input is kept.')}`; }
-    finally { loading = false; if (root.isConnected) { if (loaded) paint(); else controls(true); } }
-  }
-  return { render() { if (!root.innerHTML) paint(); if (!status) void load(); } };
+  const access: AccessDraft = { public: !local, listen: ip.includes(':') ? `[${ip}]:${port}` : `${ip}:${port}`, origin, ...(path === '/' ? {} : { basePath: path }) };
+  const saved = status.access.data ?? status.access.active;
+  return {
+    body: { accessRevision: status.access.revision, tlsRevision: status.tls.revision, sessionRevision: status.session.revision, access, tls: { certificateFile, keyFile }, sessionMinutes: minutes, confirmation: local ? '' : remoteConfirmation },
+    enablesRemote: !local && !saved.public,
+  };
 }

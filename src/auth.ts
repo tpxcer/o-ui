@@ -3,7 +3,7 @@ import { escapeHtml as esc } from './workspace.ts';
 import './auth.css';
 import { languageButton, t } from './i18n.ts';
 
-interface AuthStatus { initialized: boolean; authenticated: boolean; username: string }
+interface AuthStatus { initialized: boolean; authenticated: boolean; username: string; twoFactor?: boolean }
 
 export function requireLogin(): Promise<boolean> {
   // 离线文件只保留明确标识的界面演示，不绕过后端认证。
@@ -20,6 +20,7 @@ export function requireLogin(): Promise<boolean> {
       root.innerHTML = `<div class="card auth-card"><div class="auth-heading">${languageButton()}<span>o-ui</span><h1>${status ? setup ? t('设置管理员', 'Set up administrator') : t('管理员登录', 'Administrator sign-in') : t('连接本机面板', 'Connect to the panel')}</h1><p>${setup ? t('首次使用请设置账号密码。没有默认密码，不导入旧 OUI 数据。', 'Set a username and password on first use. There is no default password.') : t('仅限本机测试，不接管旧 OUI，不连接 VPS。', 'Signing in to this panel.')}</p></div>
         ${status ? `<form id="auth-form"><label class="form-field" for="auth-username">${t('管理员名称', 'Administrator name')}<input id="auth-username" name="username" autocomplete="username" required minlength="3" maxlength="64" pattern="[a-zA-Z0-9_.\\-]+" ${busy ? 'disabled' : ''}></label>
         <label class="form-field" for="auth-password">${t('密码', 'Password')}<input id="auth-password" name="password" type="password" autocomplete="${setup ? 'new-password' : 'current-password'}" required maxlength="72" ${busy ? 'disabled' : ''}></label>
+        ${!setup && status.twoFactor ? `<label class="form-field" for="auth-code">${t('验证码', 'Code')}<input id="auth-code" name="code" inputmode="numeric" autocomplete="one-time-code" required minlength="6" maxlength="6" pattern="[0-9]{6}" ${busy ? 'disabled' : ''}></label>` : ''}
         ${setup ? t('<p class="form-hint">密码需6至72字节；管理员名称需3至64位字母、数字、点、下划线或短横线。</p><label class="form-field" for="auth-confirm">确认密码<input id="auth-confirm" name="confirm" type="password" autocomplete="new-password" required maxlength="72"></label>', '<p class="form-hint">The password must be 6–72 bytes. The administrator name must be 3–64 letters, digits, dots, underscores or hyphens.</p><label class="form-field" for="auth-confirm">Confirm password<input id="auth-confirm" name="confirm" type="password" autocomplete="new-password" required maxlength="72"></label>') : ''}
         <label class="check-field"><input id="auth-visible" type="checkbox"><span>${t('显示密码', 'Show password')}</span></label><p class="form-error" id="auth-error" role="alert" tabindex="-1" ${error ? '' : 'hidden'}>${esc(error)}</p>
         <button class="primary-button" type="submit" ${busy ? 'disabled' : ''}>${busy ? t('正在验证…', 'Verifying…') : setup ? t('设置并登录', 'Set up and sign in') : t('登录', 'Sign in')}</button></form>` : `<p class="form-error" role="alert">${esc(error || t('正在读取登录状态…', 'Reading sign-in status…'))}</p>${error ? t('<button class="secondary-button" id="auth-retry">重新连接</button>', '<button class="secondary-button" id="auth-retry">Reconnect</button>') : ''}`}
@@ -40,7 +41,8 @@ export function requireLogin(): Promise<boolean> {
         form.querySelector<HTMLButtonElement>('[type="submit"]')!.disabled = true;
         form.querySelector<HTMLButtonElement>('[type="submit"]')!.textContent = t('正在验证…', 'Verifying…');
         form.querySelectorAll<HTMLInputElement>('input').forEach(input => { input.disabled = true; });
-        void api('auth/' + (setup ? 'setup' : 'login'), jsonBody('POST', { username: data.get('username'), password })).then(() => {
+        const code = String(data.get('code') ?? '').trim();
+        void api('auth/' + (setup ? 'setup' : 'login'), jsonBody('POST', { username: data.get('username'), password, ...(code ? { code } : {}) })).then(() => {
           disposed = true; root.remove(); resolve(true);
         }).catch(reason => { error = (reason as Error).message; if (setup && reason instanceof APIError && reason.status === 409 && status) status.initialized = true; busy = false; paint(); root.querySelector<HTMLElement>('#auth-error')?.focus(); });
       });

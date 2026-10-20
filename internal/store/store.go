@@ -32,8 +32,6 @@ var (
 	ErrSamePassword    = i18n.New("新密码不能与当前密码相同", "The new password must differ from the current one")
 )
 
-const SessionLifetime = 12 * time.Hour
-
 var usernamePattern = regexp.MustCompile(`^[a-zA-Z0-9_.-]{3,64}$`)
 
 type Store struct {
@@ -158,14 +156,14 @@ func ValidatePassword(password string) error {
 	return nil
 }
 
-func newSession(username string, now time.Time) (Session, []byte, error) {
+func newSession(username string, now time.Time, lifetime time.Duration) (Session, []byte, error) {
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		return Session{}, nil, err
 	}
 	token := base64.RawURLEncoding.EncodeToString(raw)
 	digest := sha256.Sum256([]byte(token))
-	return Session{token, username, now.Add(SessionLifetime)}, digest[:], nil
+	return Session{token, username, now.Add(lifetime)}, digest[:], nil
 }
 
 func insertSession(ctx context.Context, tx *sql.Tx, session Session, digest []byte, now time.Time) error {
@@ -198,7 +196,7 @@ func (s *Store) Initialize(ctx context.Context, username, password string) (Sess
 		return Session{}, err
 	}
 	now := s.now()
-	session, digest, err := newSession(username, now)
+	session, digest, err := newSession(username, now, sessionLifetime(ctx, s.db))
 	if err != nil {
 		return Session{}, err
 	}
@@ -224,6 +222,11 @@ func (s *Store) Initialize(ctx context.Context, username, password string) (Sess
 }
 
 func (s *Store) Login(ctx context.Context, username, password string) (Session, error) {
+	return s.LoginWithCode(ctx, username, password, "")
+}
+
+// LoginWithCode校验用户名密码；已启用两步验证时还须当前验证码，任何一项错误都返回同一错误并计入限速。
+func (s *Store) LoginWithCode(ctx context.Context, username, password, code string) (Session, error) {
 	s.authMu.Lock()
 	defer s.authMu.Unlock()
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -254,15 +257,18 @@ func (s *Store) Login(ctx context.Context, username, password string) (Session, 
 		validPassword = bcrypt.CompareHashAndPassword(hash, []byte(password)) == nil
 	}
 	if !validPassword || subtle.ConstantTimeCompare([]byte(actual), []byte(username)) != 1 {
-		if _, err = tx.ExecContext(ctx, "UPDATE auth_throttle SET failures=?,reset_at=? WHERE id=1", failures+1, reset); err != nil {
-			return Session{}, err
+		cause := ErrCredentials
+		if enabled, _ := s.TwoFactorEnabledTx(ctx, tx); enabled {
+			cause = ErrTwoFactorCredentials
 		}
-		if err = tx.Commit(); err != nil {
-			return Session{}, err
-		}
-		return Session{}, ErrCredentials
+		return Session{}, failAttempt(ctx, tx, failures, reset, cause)
 	}
-	session, digest, err := newSession(actual, now)
+	if enabled, ok, err := checkTwoFactorTx(ctx, tx, code, now); err != nil {
+		return Session{}, err
+	} else if enabled && !ok {
+		return Session{}, failAttempt(ctx, tx, failures, reset, ErrTwoFactorCredentials)
+	}
+	session, digest, err := newSession(actual, now, sessionLifetime(ctx, tx))
 	if err != nil {
 		return Session{}, err
 	}

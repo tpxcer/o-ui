@@ -186,7 +186,7 @@ func TestOfficialFourExportedConnections(t *testing.T) {
 			// 订阅读取不携带管理员Cookie，且只能得到本客户端的原分享链接。
 			payload := subscriptionGET(t, handler, grant.Path, 200)
 			decoded, err := base64.StdEncoding.DecodeString(string(payload))
-			if err != nil || string(decoded) != exported.Link+"\n" {
+			if err != nil || !sameShareLink(string(decoded), exported.Link) {
 				t.Fatal("subscription differs from applied single-client export")
 			}
 			mihomoReality := strings.Contains(preset, "reality") && os.Getenv("PANEL_CLIENT_QA_MIHOMO") != ""

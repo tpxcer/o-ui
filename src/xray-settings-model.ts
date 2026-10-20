@@ -1,10 +1,4 @@
 import { t } from './i18n.ts';
-export const settingsTabs = [
-  ['basic', t('基础配置', 'Basics'), 'settings'], ['routing', t('路由规则', 'Routing rules'), 'sliders-horizontal'],
-  ['outbounds', t('出站规则', 'Outbounds'), 'log-in'], ['balancers', t('负载均衡', 'Balancers'), 'chart-no-axes-combined'],
-  ['dns', 'DNS', 'list'], ['advanced', t('高级配置', 'Advanced'), 'wrench'],
-] as const;
-export type SettingsTab = typeof settingsTabs[number][0];
 export type SettingsDraft = {
   freedomStrategy: string; routingStrategy: string; probeURL: string;
   statistics: boolean; logLevel: string; accessLog: boolean; dnsLog: boolean;
@@ -104,6 +98,6 @@ export function buildSettings(draft: SettingsDraft): ObjectValue {
     log: { loglevel: draft.logLevel, access: draft.accessLog ? '' : 'none', dnsLog: draft.dnsLog },
     outbounds, routing: { domainStrategy: draft.routingStrategy, rules, balancers }, dns,
     // 统计常开：流量额度与首页业务网速都依赖它。
-    stats: {}, policy: { levels: { '0': { statsUserUplink: true, statsUserDownlink: true } }, system: { statsInboundUplink: true, statsInboundDownlink: true } },
+    stats: {}, policy: { levels: { '0': { statsUserUplink: true, statsUserDownlink: true } }, system: { statsInboundUplink: true, statsInboundDownlink: true, statsOutboundUplink: true, statsOutboundDownlink: true } },
   };
 }

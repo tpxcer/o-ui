@@ -1,0 +1,12 @@
+.settings-feedback { margin: 0 0 12px; }
+.settings-feedback:empty { display: none; }
+.setting-value { align-self: center; color: var(--text); overflow-wrap: anywhere; }
+.setting-control > .primary-button { width: auto; }
+.twofactor-dialog { width: min(440px, calc(100% - 28px)); }
+.twofactor-dialog .dialog-heading h2 { margin: 0; font-size: 18px; }
+.twofactor-dialog .dialog-body p { margin: 0 0 10px; }
+.twofactor-dialog input[name="code"] { width: 100%; font-size: 18px; letter-spacing: 4px; text-align: center; }
+.twofactor-qr { margin: 12px 0 16px; text-align: center; }
+.twofactor-qr img { display: block; width: 180px; height: 180px; margin: 0 auto 8px; image-rendering: pixelated; }
+.twofactor-qr code { font-size: 13px; overflow-wrap: anywhere; user-select: all; }
+.twofactor-dialog footer { gap: 10px; }

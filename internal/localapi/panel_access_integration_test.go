@@ -141,7 +141,7 @@ func TestOfficialPublicHTTPSSubscription(t *testing.T) {
 		t.Fatal("grant failed")
 	}
 	decoded, err := base64.StdEncoding.DecodeString(string(call(anonymous, "GET", grant.Path, nil, "", "", 200)))
-	if err != nil || string(decoded) != exported.Link+"\n" {
+	if err != nil || !sameShareLink(string(decoded), exported.Link) {
 		t.Fatal("HTTPS subscription did not return the applied URI")
 	}
 	call(anonymous, "GET", grant.Path, nil, address, "", 403)

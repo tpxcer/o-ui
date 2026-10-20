@@ -1,343 +1,384 @@
-import { escapeHtml as esc } from './workspace.ts';
-import { buildSettings, defaultSettings, freedomStrategies, routingStrategies, settingsTabs } from './xray-settings-model.ts';
-import type { SettingsDraft, SettingsTab } from './xray-settings-model.ts';
+import { escapeHtml as esc, type Workspace } from './workspace.ts';
+import { buildSettings, defaultSettings, freedomStrategies, routingStrategies } from './xray-settings-model.ts';
+import type { SettingsDraft } from './xray-settings-model.ts';
 import { api, APIError, jsonBody } from './api.ts';
-import { emptyRoute, moveRoute, putRoute, removeRoute, routeFields, routeSummary, routingRules, routingTargets } from './routing-model.ts';
-import type { RouteFields } from './routing-model.ts';
-import { buildDNS, dnsFields, dnsStrategies } from './dns-model.ts';
-import type { DNSFields } from './dns-model.ts';
-import { balancerFields, balancerTexts, emptyBalancer, matchedOutbounds, putBalancer, removeBalancer } from './balancer-model.ts';
-import type { BalancerFields } from './balancer-model.ts';
-import { emptyOutbound, moveOutbound, outboundFields, outboundProtocols, outboundTexts, putOutbound, removeOutbound } from './outbound-model.ts';
-import type { OutboundFields } from './outbound-model.ts';
 import type { RuntimeStatus } from './runtime.ts';
 import { settingsStatusText } from './settings-status.ts';
+import { settingRow, settingSection, settingsToolbar, selectControl, textControl, toggle } from './settings-ui.ts';
+import {
+  balancerForm, balancerFromForm, balancerStrategies, blockDomainOptions, blockIPOptions, directDomainOptions, directIPOptions, dnsPresets, dnsServerForm,
+  dnsServerFromForm, emptyBalancer, emptyDNSServer, emptyOutbound, emptyRule, ensureOutbound, outboundAddress, outboundForm, outboundFromForm, outboundFromLink,
+  outboundProtocolOptions, parseParts, proxyProtocols, ruleForm, ruleFromForm, ruleSummary, ruleValues, setRuleValues, ssMethods, streamProtocols, syncObservatory, writeParts,
+  type BalancerForm, type DNSServerForm, type Json, type OutboundForm, type Parts, type RuleForm,
+} from './xray-config.ts';
 import './xray-settings.css';
 import { t } from './i18n.ts';
 
-const select = (id: string, label: string, hint: string, value: string, choices: string[]) => `<label class="xray-setting-row"><span><strong id="xray-label-${id}">${label}</strong><small id="xray-hint-${id}">${hint}</small></span><select name="${id}" aria-labelledby="xray-label-${id}" aria-describedby="xray-hint-${id}">${choices.map(choice => `<option ${choice === value ? 'selected' : ''}>${choice}</option>`).join('')}</select></label>`;
-const check = (name: string, label: string, value: boolean) => `<label class="check-field"><input name="${name}" type="checkbox" ${value ? 'checked' : ''}><span>${label}</span></label>`;
+type Tab = 'basic' | 'routing' | 'outbounds' | 'balancers' | 'dns' | 'advanced';
+type AdvancedPart = 'rules' | 'outbounds' | 'balancers' | 'dns' | 'advanced' | 'preview';
+type Traffic = Record<string, { uplink: string; downlink: string }>;
+
+const tabs: [Tab, string][] = [['basic', t('基础配置', 'Basics')], ['routing', t('路由规则', 'Routing rules')], ['outbounds', t('出站', 'Outbounds')], ['balancers', t('负载均衡', 'Balancers')], ['dns', 'DNS'], ['advanced', t('高级', 'Advanced')]];
+const advancedParts: [AdvancedPart, string][] = [['rules', t('路由规则', 'Routing rules')], ['outbounds', t('出站', 'Outbounds')], ['balancers', t('负载均衡', 'Balancers')], ['dns', 'DNS'], ['advanced', t('其他', 'Other')], ['preview', t('完整配置预览', 'Full config preview')]];
+const button = (label: string, attrs: string, kind = 'secondary-button') => `<button type="button" class="${kind}" ${attrs}>${label}</button>`;
+const bytes = (value: string | number | undefined) => { let n = Number(value ?? 0), unit = 0; while (n >= 1024 && unit < 4) { n /= 1024; unit++; } return `${n.toFixed(unit ? 2 : 0)} ${['B', 'KiB', 'MiB', 'GiB', 'TiB'][unit]}`; };
 
 export function initXraySettings(root: HTMLElement, icons: () => void, persistent = false, onApply: () => void = () => {}, onSaved: () => void = () => {}): { render: () => void; setRuntime: (status: RuntimeStatus | null, at: number) => void } {
-  let draft = defaultSettings();
-  let saved = structuredClone(draft);
-  let tab: SettingsTab = 'basic';
-  let feedback = '', error = '', preview = '';
-  let revision = 0, loaded = !persistent, loading = false, saving = false, reloadRequired = false;
-  let visible = false;
-  let runtime: RuntimeStatus | null = null, runtimeAt = 0;
-  let routingJSON = false, routeEditing: number | null = null, routeDeleting: number | null = null;
-  let routeForm = emptyRoute();
-  let dnsJSON = false, dnsEditing = false;
-  let dnsForm = dnsFields(draft.dns)!;
-  let balancerJSON = false, balancerEditing: number | null = null, balancerDeleting: number | null = null;
-  let balancerForm = emptyBalancer();
-  let outboundJSON = false, outboundEditing: number | null = null, outboundDeleting: number | null = null;
-  let outboundForm = emptyOutbound();
-  const editorInfo = {
-    routing: ['rules', t('路由规则', 'Routing rules'), t('JSON对象数组，顺序就是匹配顺序。每项type=field并指定出站或均衡tag；不自动添加规则。', 'JSON array of objects; order is match order. Each entry has type=field and an outbound or balancer tag; no rules are added automatically.')],
-    outbounds: ['outbounds', t('出站规则', 'Outbounds'), t('JSON对象数组，第一项通常是默认出站。每项tag唯一；Freedom策略以基础配置为准。', 'JSON array of objects; the first is usually the default outbound. Tags must be unique; the Freedom strategy comes from Basics.')],
-    balancers: ['balancers', t('负载均衡', 'Balancers'), t('JSON对象数组。selector按前缀匹配出站；leastPing/leastLoad还需高级观测配置。', 'JSON array of objects. selector matches outbounds by prefix; leastPing/leastLoad also need an observatory in Advanced.')],
-    dns: ['dns', 'DNS', t('JSON对象，设置servers、queryStrategy等。草稿不会修改系统DNS或发起查询。', 'JSON object with servers, queryStrategy and so on. Drafts never change system DNS or send queries.')],
-    advanced: ['advanced', t('高级配置', 'Advanced'), t('JSON对象，当前允许observatory、burstObservatory、fakedns、transport；不覆盖其他分类或入站/控制接口。', 'JSON object; observatory, burstObservatory, fakedns and transport are allowed, without overriding other categories or inbound/control APIs.')],
-  } as const;
-  function capture(): void {
-    const form = root.querySelector<HTMLFormElement>('#xray-settings-form');
-    if (!form) return;
-    form.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>('[name]').forEach(field => {
-      const key = field.name as keyof SettingsDraft;
-      if (field instanceof HTMLInputElement && field.type === 'checkbox') Object.assign(draft, { [key]: field.checked });
-      else Object.assign(draft, { [key]: field.value });
-    });
-    root.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>('[data-route-field]').forEach(field => {
-      routeForm[field.dataset.routeField as keyof RouteFields] = field.value;
-    });
-    const dnsInputs = root.querySelectorAll<HTMLSelectElement | HTMLTextAreaElement>('[data-dns-field]');
-    dnsInputs.forEach(field => { dnsForm[field.dataset.dnsField as keyof DNSFields] = field.value; });
-    if (dnsInputs.length) dnsEditing = JSON.stringify(dnsForm) !== JSON.stringify(dnsFields(draft.dns));
-    root.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>('[data-balancer-field]').forEach(field => {
-      balancerForm[field.dataset.balancerField as keyof BalancerFields] = field.value;
-    });
-    root.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-outbound-field]').forEach(field => {
-      outboundForm[field.dataset.outboundField as keyof OutboundFields] = field.value;
-    });
-  }
-  function outboundContent(): string {
-    let items: string[] = [];
-    try { items = outboundTexts(draft.outbounds); } catch { outboundJSON = true; }
-    const pending = outboundEditing !== null || outboundDeleting !== null;
-    const mode = `<div class="routing-toolbar"><h2 class="xray-editor-title">${t('出站规则', 'Outbounds')}</h2><button type="button" class="secondary-button" data-outbound-action="${outboundJSON ? 'list' : 'json'}" ${pending ? 'disabled' : ''}>${outboundJSON ? t('返回出站列表', 'Back to outbound list') : t('编辑JSON', 'Edit JSON')}</button></div>`;
-    const hint = t('<p class="form-intro">第一项是无路由命中时的默认出站；上下移动会改变默认，新增放在末尾。先更新列表再保存，最后明确应用才改变流量。HTTP/SOCKS5本身不加密，凭据仅供可信网络使用；TLS、链式代理与其他协议请用高级JSON。</p>', '<p class="form-intro">The first entry is the default outbound when no rule matches; moving entries changes the default, and new ones go last. Update the list, save, then apply explicitly to change traffic. HTTP/SOCKS5 are not encrypted, so use credentials only on trusted networks; use advanced JSON for TLS, chained proxies and other protocols.</p>');
-    if (outboundJSON) return `<div class="xray-setting-content">${mode}${hint}<label class="form-field"><span id="xray-json-label">${t('出站规则 JSON', 'Outbounds JSON')}</span><textarea id="xray-json-editor" name="outbounds" rows="16" spellcheck="false" autocomplete="off" aria-labelledby="xray-json-label" aria-describedby="xray-json-hint">${esc(draft.outbounds)}</textarea><small id="xray-json-hint" class="form-hint">${t('JSON和配置预览可能含代理密码，请勿截图外传。Freedom策略以基础配置为准；高级条目原文保留，不自动转换。', 'JSON and the preview may contain proxy passwords; do not share screenshots. The Freedom strategy comes from Basics; advanced entries are kept verbatim and never converted.')}</small></label></div>`;
-    const list = items.map((text, index) => {
-      const item = JSON.parse(text), fields = outboundFields(text);
-      const title = fields ? outboundProtocols.find(([value]) => value === fields.protocol)![1] : t('高级JSON', 'Advanced JSON');
-      const summary = fields && ['http', 'socks'].includes(fields.protocol) ? `${t('代理：', 'Proxy: ')}${fields.address.includes(':') ? `[${fields.address}]` : fields.address}:${fields.port} · ${fields.user ? t('已配置认证（不展示凭据）', 'Authentication configured (credentials hidden)') : t('无需认证', 'No authentication')}` : fields?.protocol === 'freedom' ? `${t('Freedom策略：', 'Freedom strategy: ')}${draft.freedomStrategy}${t('（基础配置统一设置）', ' (set in Basics)')}` : fields?.protocol === 'blackhole' ? t('丢弃连接', 'Drops connections') : t('使用JSON查看，列表不展开高级参数或凭据', 'View as JSON; the list hides advanced parameters and credentials');
-      return `<li class="routing-rule"><strong>${esc(String(item.tag ?? t('缺少标识', 'Missing tag')))} · ${title}${index === 0 ? t(' · 默认出站', ' · default outbound') : ''}</strong><p>${esc(summary)}</p><div class="routing-row-actions"><button type="button" class="secondary-button" data-outbound-action="edit" data-outbound-index="${index}" ${pending || !fields ? 'disabled' : ''} aria-label="${t('编辑第', 'Edit outbound #')}${index + 1}${t('个出站', '')}">${t('编辑', 'Edit')}</button><button type="button" class="secondary-button" data-outbound-action="up" data-outbound-index="${index}" ${pending || index === 0 ? 'disabled' : ''} aria-label="${t('上移第', 'Move up outbound #')}${index + 1}${t('个出站', '')}">${t('上移', 'Move up')}</button><button type="button" class="secondary-button" data-outbound-action="down" data-outbound-index="${index}" ${pending || index === items.length - 1 ? 'disabled' : ''} aria-label="${t('下移第', 'Move down outbound #')}${index + 1}${t('个出站', '')}">${t('下移', 'Move down')}</button><button type="button" class="secondary-button" data-outbound-action="delete" data-outbound-index="${index}" ${pending || !fields || index === 0 ? 'disabled' : ''} aria-label="${t('删除第', 'Delete outbound #')}${index + 1}${t('个出站', '')}">${t('删除', 'Delete')}</button>${!fields ? t('<span class="form-hint">高级内容请用JSON编辑</span>', '<span class="form-hint">Edit advanced content as JSON</span>') : ''}</div></li>`;
-    }).join('');
-    const field = (key: keyof OutboundFields, label: string, hint: string, attributes = '') => `<label class="form-field"><span id="outbound-label-${key}">${label}</span><input data-outbound-field="${key}" value="${esc(outboundForm[key])}" autocomplete="off" spellcheck="false" aria-labelledby="outbound-label-${key}" aria-describedby="outbound-hint-${key}" ${attributes}><small id="outbound-hint-${key}" class="form-hint">${hint}</small></label>`;
-    const form = outboundEditing === null ? '' : `<div class="routing-rule-form" role="group" aria-labelledby="outbound-form-title"><h3 id="outbound-form-title" tabindex="-1">${outboundEditing === -1 ? t('添加出站', 'Add outbound') : t('编辑出站', 'Edit outbound')}</h3><p class="form-hint">${t('切换分类保留输入；取消不改原配置。列表不显示用户名或密码，JSON/预览仍包含凭据。', 'Switching categories keeps your input; canceling leaves the original unchanged. The list hides usernames and passwords, but JSON and the preview still contain them.')}</p><div class="routing-form-grid">${field('tag', t('出站标识（tag）', 'Outbound tag'), t('供路由或均衡引用，已被引用时不能直接改名。', 'Referenced by routing or balancers; it cannot be renamed while referenced.'), 'maxlength="128"')}<label class="form-field"><span id="outbound-label-protocol">${t('出站类型', 'Outbound type')}</span><select data-outbound-field="protocol" aria-labelledby="outbound-label-protocol" aria-describedby="outbound-hint-protocol">${outboundProtocols.map(([value, label]) => `<option value="${value}" ${outboundForm.protocol === value ? 'selected' : ''}>${label}</option>`).join('')}</select><small id="outbound-hint-protocol" class="form-hint">${t('HTTP使用CONNECT，SOCKS仅此处配置SOCKS5。', 'HTTP uses CONNECT; SOCKS here means SOCKS5.')}</small></label></div><div class="routing-form-grid" data-outbound-proxy ${['http', 'socks'].includes(outboundForm.protocol) ? '' : 'hidden'}>${field('address', t('代理地址', 'Proxy address'), t('填写域名、IPv4或不带方括号的IPv6，不含端口。', 'Domain, IPv4 or IPv6 without brackets, no port.'), 'maxlength="253"')}${field('port', t('代理端口', 'Proxy port'), t('1–65535，不自动探测。', '1–65535; not probed automatically.'), 'inputmode="numeric" maxlength="5"')}${field('user', t('代理用户名（可选）', 'Proxy username (optional)'), t('无需认证时用户名与密码都留空。', 'Leave username and password empty for no authentication.'), 'maxlength="1024"')}${field('pass', t('代理密码（可选）', 'Proxy password (optional)'), t('已有密码会保留；更换请直接修改，清空需同时清空用户名。', 'An existing password is kept; edit it to change it, and clear the username too to remove it.'), 'type="password" maxlength="1024"')}</div><div class="routing-row-actions"><button type="button" class="primary-button" data-outbound-action="commit">${outboundEditing === -1 ? t('加入出站列表', 'Add to outbound list') : t('更新这个出站', 'Update this outbound')}</button><button type="button" class="secondary-button" data-outbound-action="cancel">${t('取消出站编辑', 'Cancel outbound edit')}</button></div></div>`;
-    const confirmation = outboundDeleting === null ? '' : t('<div class="routing-delete" role="group" aria-labelledby="outbound-delete-title"><h3 id="outbound-delete-title">删除所选出站？</h3><p>只移除这一项草稿；路由、均衡或高级配置仍在引用时拒绝删除，不自动改成直连。</p><div class="routing-row-actions"><button type="button" id="outbound-confirm-delete" class="primary-button" data-outbound-action="confirm-delete">确认删除这个出站</button><button type="button" class="secondary-button" data-outbound-action="cancel-delete">取消删除出站</button></div></div>', '<div class="routing-delete" role="group" aria-labelledby="outbound-delete-title"><h3 id="outbound-delete-title">Delete the selected outbound?</h3><p>Only this draft entry is removed; deletion is refused while routing, balancers or advanced config reference it, and nothing is switched to Direct.</p><div class="routing-row-actions"><button type="button" id="outbound-confirm-delete" class="primary-button" data-outbound-action="confirm-delete">Delete this outbound</button><button type="button" class="secondary-button" data-outbound-action="cancel-delete">Cancel deleting outbound</button></div></div>');
-    return `<div class="xray-setting-content">${mode}${hint}<ol class="routing-rules">${list || t('<li class="routing-empty">尚无出站，请添加；不会自动补充直连。</li>', '<li class="routing-empty">No outbounds yet; add one. Direct is not added automatically.</li>')}</ol><button type="button" class="secondary-button" id="outbound-add" data-outbound-action="add" ${pending ? 'disabled' : ''}>${t('添加出站', 'Add outbound')}</button>${form}${confirmation}</div>`;
-  }
-  function outboundAction(action: string, index: number): void {
-    capture(); error = ''; feedback = ''; preview = '';
-    let focus = '#outbound-add';
-    try {
-      if (action === 'json') { if (outboundEditing !== null || outboundDeleting !== null) throw new Error(t('请先完成或取消出站编辑/删除确认。', 'Finish or cancel the outbound edit or delete first.')); outboundJSON = true; focus = '#xray-json-editor'; }
-      if (action === 'list') { outboundTexts(draft.outbounds); outboundJSON = false; }
-      if (action === 'add') { outboundEditing = -1; outboundForm = emptyOutbound(); focus = '#outbound-form-title'; }
-      if (action === 'edit') {
-        const fields = outboundFields(outboundTexts(draft.outbounds)[index]);
-        if (!fields) throw new Error(t('此出站需要JSON编辑，原文未修改。', 'This outbound needs JSON editing; the original was not changed.'));
-        outboundEditing = index; outboundForm = fields; focus = '#outbound-form-title';
-      }
-      if (action === 'commit' && outboundEditing !== null) { draft.outbounds = putOutbound(draft, outboundEditing, outboundForm); outboundEditing = null; outboundForm = emptyOutbound(); feedback = t('出站列表已更新，点“保存”后生效。', 'Outbound list updated; click Save to apply.'); }
-      if (action === 'cancel') { outboundEditing = null; outboundForm = emptyOutbound(); }
-      if (action === 'up' || action === 'down') { draft.outbounds = moveOutbound(draft.outbounds, index, action === 'up' ? -1 : 1); feedback = t('出站顺序已更新，首项为默认出站；点“保存”后生效。', 'Outbound order updated; the first is the default. Click Save to apply.'); }
-      if (action === 'delete') { outboundDeleting = index; focus = '#outbound-confirm-delete'; }
-      if (action === 'confirm-delete' && outboundDeleting !== null) { draft.outbounds = removeOutbound(draft, outboundDeleting); outboundDeleting = null; feedback = t('已移除所选出站，点“保存”后生效。', 'Outbound removed; click Save to apply.'); }
-      if (action === 'cancel-delete') outboundDeleting = null;
-    } catch (reason) { error = (reason as Error).message; focus = '#xray-settings-error'; }
-    paint(); root.querySelector<HTMLElement>(focus)?.focus();
-  }
-  function balancerMatches(): string {
-    try { return matchedOutbounds(draft, balancerForm.selector).join(t('、', ', ')) || t('没有匹配的出站，不能提交。', 'No matching outbound; cannot submit.'); }
-    catch (reason) { return (reason as Error).message; }
-  }
-  function balancerContent(): string {
-    let items: string[] = [];
-    try { items = balancerTexts(draft.balancers); } catch { balancerJSON = true; }
-    const pending = balancerEditing !== null || balancerDeleting !== null;
-    const mode = `<div class="routing-toolbar"><h2 class="xray-editor-title">${t('负载均衡', 'Balancers')}</h2><button type="button" class="secondary-button" data-balancer-action="${balancerJSON ? 'list' : 'json'}" ${pending ? 'disabled' : ''}>${balancerJSON ? t('返回均衡列表', 'Back to balancer list') : t('编辑JSON', 'Edit JSON')}</button></div>`;
-    const hint = t('<p class="form-intro">仅创建均衡不会改变流量，需要在路由规则中选择该均衡，再保存并应用。selector按出站标识前缀匹配，不是精确名称或正则；随机/轮询不检测可达性，不保证坏节点自动切换。</p>', '<p class="form-intro">Creating a balancer alone does not change traffic; select it in a routing rule, then save and apply. selector matches outbound tag prefixes, not exact names or regex; random and round robin do not check reachability or guarantee failover.</p>');
-    if (balancerJSON) return `<div class="xray-setting-content">${mode}${hint}<label class="form-field"><span id="xray-json-label">${t('负载均衡 JSON', 'Balancers JSON')}</span><textarea id="xray-json-editor" name="balancers" rows="16" spellcheck="false" autocomplete="off" aria-labelledby="xray-json-label" aria-describedby="xray-json-hint">${esc(draft.balancers)}</textarea><small class="form-hint" id="xray-json-hint">${t('leastPing/leastLoad、fallbackTag及其它高级字段保留JSON；回退依赖高级观测配置，保存表单不会自动添加观测或联网测速。', 'leastPing/leastLoad, fallbackTag and other advanced fields stay in JSON; fallback depends on an observatory in Advanced, and saving the form never adds one or runs speed tests.')}</small></label></div>`;
-    const list = items.map((text, index) => {
-      const item = JSON.parse(text), fields = balancerFields(text);
-      const strategy = fields ? fields.strategy === 'roundRobin' ? t('轮询', 'Round robin') : fields.strategy ? t('随机', 'Random') : t('核心默认（随机）', 'Core default (random)') : t('高级JSON', 'Advanced JSON');
-      let matches = t('请在JSON中检查', 'Check in JSON');
-      if (fields) { try { matches = matchedOutbounds(draft, fields.selector).join(t('、', ', ')) || t('未匹配出站', 'No matching outbound'); } catch (reason) { matches = (reason as Error).message; } }
-      return `<li class="routing-rule"><strong>${esc(String(item.tag ?? t('缺少标识', 'Missing tag')))} · ${strategy}</strong><p>${t('匹配出站：', 'Matched outbounds: ')}${esc(matches)}</p><div class="routing-row-actions"><button type="button" class="secondary-button" data-balancer-action="edit" data-balancer-index="${index}" ${pending || !fields ? 'disabled' : ''} aria-label="${t('编辑第', 'Edit balancer #')}${index + 1}${t('个均衡', '')}">${t('编辑', 'Edit')}</button><button type="button" class="secondary-button" data-balancer-action="delete" data-balancer-index="${index}" ${pending || !fields ? 'disabled' : ''} aria-label="${t('删除第', 'Delete balancer #')}${index + 1}${t('个均衡', '')}">${t('删除', 'Delete')}</button>${!fields ? t('<span class="form-hint">高级内容请用JSON编辑</span>', '<span class="form-hint">Edit advanced content as JSON</span>') : ''}</div></li>`;
-    }).join('');
-    let targets: string[] = [], targetError = '';
-    try { targets = routingTargets(draft).filter(item => item.value.startsWith('outboundTag:')).map(item => item.value.slice('outboundTag:'.length)); }
-    catch (reason) { targetError = (reason as Error).message; }
-    const form = balancerEditing === null ? '' : `<div class="routing-rule-form" role="group" aria-labelledby="balancer-form-title"><h3 id="balancer-form-title" tabindex="-1">${balancerEditing === -1 ? t('添加负载均衡', 'Add balancer') : t('编辑负载均衡', 'Edit balancer')}</h3><p class="form-hint">${t('先加入均衡列表，再保存草稿。切换分类保留输入，取消不改原配置。', 'Add to the balancer list, then save the draft. Switching categories keeps your input; canceling leaves the original unchanged.')}</p><div class="routing-form-grid"><label class="form-field"><span>${t('均衡标识（tag）', 'Balancer tag')}</span><input data-balancer-field="tag" value="${esc(balancerForm.tag)}" maxlength="128" autocomplete="off"><small class="form-hint">${t('路由使用此标识；被引用时不能直接改名或删除。', 'Routing uses this tag; it cannot be renamed or deleted while referenced.')}</small></label><label class="form-field"><span>${t('分配策略', 'Strategy')}</span><select data-balancer-field="strategy">${[['', t('核心默认（随机）', 'Core default (random)')], ['random', t('随机', 'Random')], ['roundRobin', t('轮询', 'Round robin')]].map(([value, label]) => `<option value="${value}" ${balancerForm.strategy === value ? 'selected' : ''}>${label}</option>`).join('')}</select><small class="form-hint">${t('按新连接分配，不拆分单个连接，不自动测速。', 'Assigned per new connection; single connections are not split and no speed test runs.')}</small></label><label class="form-field"><span>${t('出站前缀（每行一项）', 'Outbound prefixes (one per line)')}</span><textarea data-balancer-field="selector" rows="4" spellcheck="false" placeholder="proxy-">${esc(balancerForm.selector)}</textarea><small class="form-hint" data-balancer-matches>${t('当前匹配：', 'Currently matches: ')}${esc(balancerMatches())}</small></label></div><p class="form-hint">${t('fallbackTag、leastPing/leastLoad和观测依赖请用高级JSON；常用表单不自动建立测速请求。', 'Use advanced JSON for fallbackTag, leastPing/leastLoad and the observatory; the form never creates speed-test requests.')}</p><div class="routing-row-actions"><button type="button" class="primary-button" data-balancer-action="commit">${balancerEditing === -1 ? t('加入均衡列表', 'Add to balancer list') : t('更新这个均衡', 'Update this balancer')}</button><button type="button" class="secondary-button" data-balancer-action="cancel">${t('取消均衡编辑', 'Cancel balancer edit')}</button></div></div>`;
-    const confirmation = balancerDeleting === null ? '' : t('<div class="routing-delete" role="group" aria-labelledby="balancer-delete-title"><h3 id="balancer-delete-title">删除所选负载均衡？</h3><p>只移除这一项草稿；被路由引用时拒绝删除，不自动更改路由或切换直连。</p><div class="routing-row-actions"><button type="button" class="primary-button" id="balancer-confirm-delete" data-balancer-action="confirm-delete">确认删除这个均衡</button><button type="button" class="secondary-button" data-balancer-action="cancel-delete">取消删除均衡</button></div></div>', '<div class="routing-delete" role="group" aria-labelledby="balancer-delete-title"><h3 id="balancer-delete-title">Delete the selected balancer?</h3><p>Only this draft entry is removed; deletion is refused while routing references it, and routing is never changed or switched to Direct.</p><div class="routing-row-actions"><button type="button" class="primary-button" id="balancer-confirm-delete" data-balancer-action="confirm-delete">Delete this balancer</button><button type="button" class="secondary-button" data-balancer-action="cancel-delete">Cancel deleting balancer</button></div></div>');
-    return `<div class="xray-setting-content">${mode}${hint}${targetError ? `<p class="form-error" role="alert">${esc(targetError)}</p>` : ''}<ol class="routing-rules">${list || t('<li class="routing-empty">尚无负载均衡，不会自动添加或启用。</li>', '<li class="routing-empty">No balancers yet; none are added or enabled automatically.</li>')}</ol><button type="button" class="secondary-button" id="balancer-add" data-balancer-action="add" ${pending || !!targetError || !targets.length ? 'disabled' : ''}>${t('添加负载均衡', 'Add balancer')}</button>${form}${confirmation}</div>`;
-  }
-  function balancerAction(action: string, index: number): void {
-    capture(); error = ''; feedback = ''; preview = '';
-    let focus = '#balancer-add';
-    try {
-      if (action === 'json') { if (balancerEditing !== null || balancerDeleting !== null) throw new Error(t('请先完成或取消均衡编辑/删除确认。', 'Finish or cancel the balancer edit or delete first.')); balancerJSON = true; focus = '#xray-json-editor'; }
-      if (action === 'list') { balancerTexts(draft.balancers); balancerJSON = false; }
-      if (action === 'add') { balancerEditing = -1; balancerForm = emptyBalancer(); focus = '#balancer-form-title'; }
-      if (action === 'edit') {
-        const fields = balancerFields(balancerTexts(draft.balancers)[index]);
-        if (!fields) throw new Error(t('此均衡需要JSON编辑，原文未修改。', 'This balancer needs JSON editing; the original was not changed.'));
-        balancerEditing = index; balancerForm = fields; focus = '#balancer-form-title';
-      }
-      if (action === 'commit' && balancerEditing !== null) { draft.balancers = putBalancer(draft, balancerEditing, balancerForm); balancerEditing = null; feedback = t('均衡列表已更新，点“保存”后生效。', 'Balancer list updated; click Save to apply.'); }
-      if (action === 'cancel') { balancerEditing = null; balancerForm = emptyBalancer(); }
-      if (action === 'delete') { balancerDeleting = index; focus = '#balancer-confirm-delete'; }
-      if (action === 'confirm-delete' && balancerDeleting !== null) { draft.balancers = removeBalancer(draft, balancerDeleting); balancerDeleting = null; feedback = t('已移除所选均衡，点“保存”后生效。', 'Balancer removed; click Save to apply.'); }
-      if (action === 'cancel-delete') balancerDeleting = null;
-    } catch (reason) { error = (reason as Error).message; focus = '#xray-settings-error'; }
-    paint(); root.querySelector<HTMLElement>(focus)?.focus();
-  }
-  function dnsContent(): string {
-    const fields = dnsFields(draft.dns);
-    if (!fields) dnsJSON = true;
-    if (!dnsEditing && fields) dnsForm = fields;
-    const mode = `<div class="dns-toolbar"><h2 class="xray-editor-title">DNS</h2><button type="button" class="secondary-button" data-dns-action="${dnsJSON ? 'form' : 'json'}" ${dnsEditing ? 'disabled' : ''}>${dnsJSON ? t('使用常用表单', 'Use the form') : t('编辑JSON', 'Edit JSON')}</button></div>`;
-    const hint = t('<p class="form-intro">只编辑Xray内置DNS，不修改系统DNS。保存不会查询或应用；实际解析方式还取决于Freedom/路由策略。多个服务器不代表严格按列表先后依次查询。</p>', '<p class="form-intro">Edits only the built-in Xray DNS, never the system DNS. Saving does not query or apply; actual resolution also depends on the Freedom and routing strategies. Multiple servers are not necessarily queried strictly in list order.</p>');
-    if (dnsJSON) return `<div class="xray-setting-content">${mode}${hint}<label class="form-field"><span id="xray-json-label">DNS JSON</span><textarea id="xray-json-editor" name="dns" rows="16" spellcheck="false" autocomplete="off" aria-labelledby="xray-json-label" aria-describedby="xray-json-hint">${esc(draft.dns)}</textarea><small class="form-hint" id="xray-json-hint">${t('对象服务器、hosts、域名分流或其它高级字段请保留JSON；无法完整表达时不会转成简单表单，也不会替换原文。', 'Keep object servers, hosts, domain splitting and other advanced fields in JSON; content the form cannot fully express is never converted or replaced.')}</small></label></div>`;
-    const choice = (key: keyof DNSFields, label: string, hint: string, choices: [string, string][]) => `<label class="form-field"><span>${label}</span><select data-dns-field="${key}">${choices.map(([value, title]) => `<option value="${value}" ${dnsForm[key] === value ? 'selected' : ''}>${title}</option>`).join('')}</select><small class="form-hint">${hint}</small></label>`;
-    return `<div class="xray-setting-content">${mode}${hint}<p class="form-hint">${t('改动后先点“更新DNS草稿”，再保存；切换分类保留未完成输入，取消不改原配置。', 'After changes, click “Update DNS draft”, then save. Switching categories keeps unfinished input; canceling leaves the original unchanged.')}</p><label class="form-field"><span>${t('DNS服务器（每行一项）', 'DNS servers (one per line)')}</span><textarea class="dns-servers" data-dns-field="servers" rows="5" spellcheck="false" placeholder="localhost&#10;1.1.1.1&#10;tcp://127.0.0.1:5353&#10;https://dns.example.test/dns-query">${esc(dnsForm.servers)}</textarea><small class="form-hint">${t('localhost使用系统解析器；裸IP使用UDP默认53端口。TCP写IP及端口，HTTPS为DoH；+local模式绕过Xray路由。DoH域名需要能先解析，避免依赖自身形成循环；不自动填公共服务商，不接受账号或查询参数。', 'localhost uses the system resolver; a bare IP uses UDP port 53. For TCP enter IP and port; HTTPS means DoH; +local modes bypass Xray routing. A DoH domain must be resolvable first to avoid a loop. No public providers are filled in, and credentials or query parameters are not accepted.')}</small></label>
-      <div class="dns-form-grid">${choice('queryStrategy', t('DNS查询策略', 'DNS query strategy'), t('UseIP查询IPv4/IPv6；实际选择还受出站策略约束。', 'UseIP queries IPv4/IPv6; the actual choice also depends on the outbound strategy.'), dnsStrategies.map(value => [value, value || t('核心默认（UseIP）', 'Core default (UseIP)')]))}${choice('disableCache', t('DNS缓存', 'DNS cache'), t('禁用后每次解析可能产生新的上游请求。', 'When disabled, every lookup may send a new upstream request.'), [['', t('核心默认', 'Core default')], ['false', t('允许缓存', 'Allow cache')], ['true', t('禁用缓存', 'Disable cache')]])}${choice('disableFallback', t('DNS回退', 'DNS fallback'), t('禁止回退可能导致解析失败；按域名匹配/跳过回退需使用高级JSON。', 'Disabling fallback can cause resolution failures; per-domain fallback rules need advanced JSON.'), [['', t('核心默认', 'Core default')], ['false', t('允许回退', 'Allow fallback')], ['true', t('禁止回退', 'Disable fallback')]])}</div><div class="dns-actions"><button type="button" class="primary-button" data-dns-action="commit">${t('更新DNS草稿', 'Update DNS draft')}</button><button type="button" class="secondary-button" data-dns-action="cancel">${t('取消DNS编辑', 'Cancel DNS edit')}</button></div></div>`;
-  }
-  function dnsAction(action: string): void {
-    capture(); error = ''; feedback = ''; preview = '';
-    let focus = '[data-dns-field="servers"]';
-    try {
-      if (action === 'json') { if (dnsEditing) throw new Error(t('请先更新或取消DNS表单，再切换JSON。', 'Update or cancel the DNS form before switching to JSON.')); dnsJSON = true; focus = '#xray-json-editor'; }
-      if (action === 'form') {
-        const fields = dnsFields(draft.dns);
-        if (!fields) throw new Error(t('此DNS配置含高级字段、重复键或表单无法完整表达的内容，请继续使用JSON；原文未改动。', 'This DNS configuration has advanced fields, duplicate keys or content the form cannot express; keep using JSON. The original was not changed.'));
-        dnsForm = fields; dnsJSON = false;
-      }
-      if (action === 'commit') { draft.dns = buildDNS(dnsForm); dnsEditing = false; feedback = t('DNS 已更新，点“保存”后生效。', 'DNS updated; click Save to apply.'); }
-      if (action === 'cancel') { dnsEditing = false; feedback = t('已取消本次DNS表单编辑，原草稿保持。', 'DNS form edit canceled; the draft is unchanged.'); }
-    } catch (reason) { error = (reason as Error).message; focus = '#xray-settings-error'; }
-    paint(); root.querySelector<HTMLElement>(focus)?.focus();
-  }
-  function routeContent(): string {
-    const hint = t('<p class="form-intro">从上往下匹配，先命中的规则生效。同一条的不同条件为“并且”，同组多项为“或者”；不自动添加规则，未匹配走首个出站。保存草稿后仍需单独应用。</p>', '<p class="form-intro">Rules match top to bottom and the first match wins. Conditions in one rule are AND; entries in one group are OR. No rules are added automatically, and unmatched traffic uses the first outbound. Saved drafts still need to be applied separately.</p>');
-    let rules;
-    try { rules = routingRules(draft.rules); } catch { routingJSON = true; }
-    const mode = `<div class="routing-toolbar"><h2 class="xray-editor-title">${t('路由规则', 'Routing rules')}</h2><button type="button" class="secondary-button" data-route-action="${routingJSON ? 'list' : 'json'}" ${routeEditing !== null || routeDeleting !== null ? 'disabled' : ''}>${routingJSON ? t('返回规则列表', 'Back to rule list') : t('编辑JSON', 'Edit JSON')}</button></div>`;
-    if (routingJSON) return `<div class="xray-setting-content">${mode}${hint}<label class="form-field"><span id="xray-json-label">${t('路由规则 JSON', 'Routing rules JSON')}</span><textarea id="xray-json-editor" name="rules" rows="16" spellcheck="false" autocomplete="off" aria-labelledby="xray-json-label" aria-describedby="xray-json-hint">${esc(draft.rules)}</textarea><small class="form-hint" id="xray-json-hint">${t('保留完整高级字段。无效JSON不会被规则列表覆盖，修正后可返回列表。', 'All advanced fields are kept. Invalid JSON is never overwritten by the rule list; fix it to return to the list.')}</small></label></div>`;
-    let targets: ReturnType<typeof routingTargets> = [], targetError = '';
-    try { targets = routingTargets(draft); } catch (reason) { targetError = (reason as Error).message; }
-    const pending = routeEditing !== null || routeDeleting !== null;
-    const list = (rules ?? []).map((rule, index) => {
-      const editable = !!routeFields(rule);
-      const target = typeof rule.outboundTag === 'string' ? `${t('出站 ·', 'Outbound ·')} ${rule.outboundTag}` : typeof rule.balancerTag === 'string' ? `${t('均衡 ·', 'Balancer ·')} ${rule.balancerTag}` : t('目标需在JSON中检查', 'Check the target in JSON');
-      const button = (action: string, label: string, disabled = false) => `<button type="button" class="secondary-button" data-route-action="${action}" data-route-index="${index}" aria-label="${label}${t('第', ' rule #')}${index + 1}${t('条规则', '')}" ${pending || disabled ? 'disabled' : ''}>${label}</button>`;
-      return `<li class="routing-rule"><div><strong>${t('第', 'Rule ')}${index + 1}${t('条', '')} · ${esc(target)}</strong><p>${esc(routeSummary(rule))}</p>${!editable ? t('<small class="form-hint">高级规则：仅用JSON编辑，列表移动/删除不会改写其它字段。</small>', '<small class="form-hint">Advanced rule: edit as JSON only; moving or deleting in the list keeps other fields.</small>') : ''}</div><div class="routing-row-actions">${button('edit', t('编辑', 'Edit'), !editable)}${button('up', t('上移', 'Move up'), index === 0)}${button('down', t('下移', 'Move down'), index === (rules?.length ?? 0) - 1)}${button('delete', t('删除', 'Delete'))}</div></li>`;
-    }).join('');
-    const field = (key: 'domain' | 'ip' | 'protocol', label: string, placeholder: string) => `<label class="form-field"><span>${label}</span><textarea data-route-field="${key}" rows="3" placeholder="${placeholder}" spellcheck="false">${esc(routeForm[key])}</textarea></label>`;
-    const form = routeEditing === null ? '' : `<div class="routing-rule-form" role="group" aria-labelledby="route-form-title"><h3 id="route-form-title" tabindex="-1">${routeEditing === -1 ? t('添加规则（追加到末尾）', 'Add rule (appended)') : `${t('编辑第', 'Edit rule #')}${routeEditing + 1}${t('条规则', '')}`}</h3><p class="form-hint">${t('以下条件至少填一项。表单内容需先加入规则列表，再保存草稿；取消不会改动原规则。', 'Fill in at least one condition. Add the form to the rule list, then save the draft; canceling leaves the original rule unchanged.')}</p><div class="routing-form-grid">${field('domain', t('目标域名（每行一项）', 'Target domains (one per line)'), 'domain:example.test&#10;full:example.org')}${field('ip', t('目标IP / CIDR（每行一项）', 'Target IP / CIDR (one per line)'), '192.0.2.0/24&#10;2001:db8::/32')}<label class="form-field"><span>${t('目标端口', 'Target ports')}</span><input data-route-field="port" value="${esc(routeForm.port)}" placeholder="443,1000-2000" inputmode="text"></label><label class="form-field"><span>${t('传输', 'Network')}</span><select data-route-field="network">${[['', t('不限', 'Unlimited')], ['tcp', 'TCP'], ['udp', 'UDP'], ['tcp,udp', 'TCP + UDP']].map(([value, label]) => `<option value="${value}" ${routeForm.network === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label>${field('protocol', t('嗅探协议（每行一项）', 'Sniffed protocols (one per line)'), 'http&#10;tls&#10;quic&#10;bittorrent')}<label class="form-field"><span>${t('转发目标', 'Forward to')}</span><select data-route-field="target"><option value="">${t('请选择出站或负载均衡', 'Choose an outbound or balancer')}</option>${!targets.some(item => item.value === routeForm.target) && routeForm.target ? `<option value="${esc(routeForm.target)}" selected>${t('已不存在 ·', 'Missing ·')} ${esc(routeForm.target)}</option>` : ''}${targets.map(item => `<option value="${esc(item.value)}" ${routeForm.target === item.value ? 'selected' : ''}>${esc(item.label)}</option>`).join('')}</select><small class="form-hint">${t('域名/协议匹配可能需要对应嗅探或DNS设置；填写规则不保证该协议能被识别。', 'Domain or protocol matching may need sniffing or DNS settings; a rule does not guarantee the protocol is detected.')}</small></label></div><div class="routing-row-actions"><button type="button" class="primary-button" data-route-action="commit">${routeEditing === -1 ? t('加入规则列表', 'Add to rule list') : t('更新这条规则', 'Update this rule')}</button><button type="button" class="secondary-button" data-route-action="cancel">${t('取消编辑', 'Cancel edit')}</button></div></div>`;
-    const confirmation = routeDeleting === null ? '' : `<div class="routing-delete" role="group" aria-labelledby="route-delete-title"><h3 id="route-delete-title">${t('删除第', 'Delete rule #')}${routeDeleting + 1}${t('条规则？', '?')}</h3><p>${t('仅从当前草稿移除这一条，其它规则及顺序保持；未保存/应用前不改变核心。', 'Removes only this rule from the draft; other rules and their order are kept. The core is unchanged until you save and apply.')}</p><div class="routing-row-actions"><button type="button" class="primary-button" id="route-confirm-delete" data-route-action="confirm-delete">${t('确认删除这一条', 'Delete this rule')}</button><button type="button" class="secondary-button" data-route-action="cancel-delete">${t('取消删除', 'Cancel')}</button></div></div>`;
-    return `<div class="xray-setting-content">${mode}${hint}${targetError ? `<p class="form-error" role="alert">${esc(targetError)}</p>` : ''}<ol class="routing-rules">${list || t('<li class="routing-empty">尚无规则，当前使用默认出站。</li>', '<li class="routing-empty">No rules yet; the default outbound is used.</li>')}</ol><button type="button" class="secondary-button" id="route-add" data-route-action="add" ${pending || !!targetError || !targets.length ? 'disabled' : ''}>${t('添加规则', 'Add rule')}</button>${form}${confirmation}</div>`;
-  }
-  function routeAction(action: string, index: number): void {
-    capture(); error = ''; preview = ''; feedback = '';
-    let focus = '#route-add';
-    try {
-      if (action === 'json') { routingJSON = true; focus = '#xray-json-editor'; }
-      if (action === 'list') { routingRules(draft.rules); routingJSON = false; }
-      if (action === 'add') { routeEditing = -1; routeForm = emptyRoute(); focus = '#route-form-title'; }
-      if (action === 'edit') {
-        const rule = routingRules(draft.rules)[index];
-        const fields = rule && routeFields(rule);
-        if (!fields) throw new Error(t('该规则需用JSON编辑，以保留全部字段。', 'This rule needs JSON editing to keep all fields.'));
-        routeEditing = index; routeForm = fields; focus = '#route-form-title';
-      }
-      if (action === 'commit' && routeEditing !== null) { draft.rules = putRoute(draft, routeEditing, routeForm); routeEditing = null; feedback = t('规则列表已更新，点“保存”后生效。', 'Rule list updated; click Save to apply.'); }
-      if (action === 'cancel') { routeEditing = null; routeForm = emptyRoute(); }
-      if (action === 'up' || action === 'down') { draft.rules = moveRoute(draft.rules, index, action === 'up' ? -1 : 1); feedback = t('规则顺序已更改，点“保存”后生效。', 'Rule order changed; click Save to apply.'); focus = `[data-route-action="${action}"][data-route-index="${index + (action === 'up' ? -1 : 1)}"]`; }
-      if (action === 'delete') { routeDeleting = index; focus = '#route-confirm-delete'; }
-      if (action === 'confirm-delete' && routeDeleting !== null) { draft.rules = removeRoute(draft.rules, routeDeleting); routeDeleting = null; feedback = t('已移除所选规则，点“保存”后生效。', 'Rule removed; click Save to apply.'); }
-      if (action === 'cancel-delete') routeDeleting = null;
-    } catch (reason) { error = (reason as Error).message; focus = '#xray-settings-error'; }
+  let draft = defaultSettings(), saved = structuredClone(draft), revision = 0, tab: Tab = 'basic', part: AdvancedPart = 'rules';
+  let loaded = !persistent, loading = false, saving = false, reloadRequired = false, visible = false, error = '', feedback = '', jsonError = '';
+  let runtime: RuntimeStatus | null = null, runtimeAt = 0, traffic: Traffic = {};
+  let workspace: Workspace = { inbounds: [], clients: [] };
+  const dialog = document.createElement('dialog');
+  dialog.className = 'edit-dialog xray-dialog';
+  document.body.append(dialog);
+  const dirty = () => JSON.stringify(draft) !== JSON.stringify(saved);
+  const parts = (): Parts | null => { try { return parseParts(draft); } catch { return null; } };
+  function change(mutate: (current: Parts) => Parts): void {
+    const current = parts();
+    if (!current) return;
+    draft = writeParts(draft, mutate(current));
+    feedback = ''; error = '';
     paint();
-    const target = root.querySelector<HTMLElement>(focus);
-    (target && !(target instanceof HTMLButtonElement && target.disabled) ? target : root.querySelector<HTMLElement>('#route-add'))?.focus();
   }
   function statusText(): string {
     if (loading) return t('正在读取…', 'Loading…');
-    if (!loaded) return t('草稿尚未读取，无法核对应用状态。', 'The draft is not loaded; cannot check the apply status.');
+    if (!loaded) return t('设置尚未读取。', 'Settings are not loaded yet.');
     if (saving) return t('正在保存并应用…', 'Saving and applying…');
-    const pending = outboundEditing !== null || outboundDeleting !== null ? t('出站有未完成的编辑或删除确认，请完成或取消。', 'Outbounds have an unfinished edit or delete; finish or cancel it.') : balancerEditing !== null || balancerDeleting !== null ? t('负载均衡有未完成的编辑或删除确认，请完成或取消。', 'Balancers have an unfinished edit or delete; finish or cancel it.') : routeEditing !== null ? t('路由表单尚未加入规则列表，请完成或取消编辑。', 'The routing form is not in the rule list yet; finish or cancel the edit.') : routeDeleting !== null ? t('路由删除尚未确认，原规则仍保留。', 'The routing deletion is not confirmed; the rule is kept.') : dnsEditing ? t('DNS表单尚未更新草稿，请完成或取消编辑。', 'The DNS form has not updated the draft; finish or cancel the edit.') : '';
-    const dirty = JSON.stringify(draft) !== JSON.stringify(saved) ? t('有未保存修改，点“保存”后生效。', 'There are unsaved changes; click Save to apply.') : '';
-    return [pending || dirty, feedback, settingsStatusText(persistent, revision, runtime, runtimeAt)].filter(Boolean).join(' ');
+    return [dirty() ? t('有未保存修改，点“保存”后生效。', 'There are unsaved changes; click Save to apply.') : '', feedback, settingsStatusText(persistent, revision, runtime, runtimeAt)].filter(Boolean).join(' ');
   }
   function updateStatus(): void {
-    const message = root.querySelector<HTMLElement>('#xray-settings-status');
-    const text = statusText();
-    if (message && message.textContent !== text) message.textContent = text;
+    const label = root.querySelector<HTMLElement>('#xray-settings-status');
+    if (label && label.textContent !== statusText()) label.textContent = statusText();
+    const save = root.querySelector<HTMLButtonElement>('#xray-save');
+    if (save) save.disabled = !loaded || saving || loading || reloadRequired || !dirty();
   }
+
+  // ---- 基础配置 ----
+  function multi(key: string, options: [string, string][], values: string[]): string {
+    const known = new Set(options.map(([value]) => value)), custom = values.filter(value => !known.has(value));
+    const chosen = options.filter(([value]) => values.includes(value)).map(([, label]) => label).concat(custom);
+    return `<details class="multi-select"><summary>${chosen.length ? esc(chosen.join(t('、', ', '))) : t('未选择', 'None')}</summary><div class="multi-options">${options.map(([value, label]) => `<label class="check-field"><input type="checkbox" data-multi="${esc(key)}" value="${esc(value)}" ${values.includes(value) ? 'checked' : ''}><span>${esc(label)}</span></label>`).join('')}<label class="form-field">${t('自定义（每行一项）', 'Custom (one per line)')}<textarea data-multi-custom="${esc(key)}" rows="2">${esc(custom.join('\n'))}</textarea></label></div></details>`;
+  }
+  function basicTab(p: Parts): string {
+    const values = (tag: string, property: string) => ruleValues(p.rules, tag, property);
+    return settingSection(t('常规配置', 'General'), [
+      settingRow(t('Freedom 策略', 'Freedom strategy'), t('直连出站的域名解析策略', 'Domain resolution strategy of direct outbounds'), selectControl('freedomStrategy', draft.freedomStrategy, freedomStrategies.map(value => [value, value]), 'Freedom')),
+      settingRow(t('路由域名策略', 'Routing domain strategy'), t('路由匹配时的域名解析方式', 'How domains are resolved when matching routes'), selectControl('routingStrategy', draft.routingStrategy, routingStrategies.map(value => [value, value]), t('路由域名策略', 'Routing domain strategy'))),
+      settingRow(t('出站测试 URL', 'Outbound test URL'), t('负载均衡测速使用的地址', 'URL used by balancer health checks'), textControl('probeURL', draft.probeURL, t('出站测试 URL', 'Outbound test URL'), 'type="url"')),
+    ].join('')) + settingSection(t('日志', 'Logs'), [
+      settingRow(t('日志级别', 'Log level'), t('调试级别可能包含连接信息', 'Debug may include connection details'), selectControl('logLevel', draft.logLevel, ['none', 'error', 'warning', 'info', 'debug'].map(value => [value, value]), t('日志级别', 'Log level'))),
+      settingRow(t('访问日志', 'Access log'), t('记录每个连接，输出到核心日志', 'Record each connection in the core log'), toggle('accessLog', draft.accessLog, t('访问日志', 'Access log'))),
+      settingRow(t('DNS 日志', 'DNS log'), t('记录 DNS 查询', 'Record DNS queries'), toggle('dnsLog', draft.dnsLog, t('DNS 日志', 'DNS log'))),
+    ].join('')) + settingSection(t('基础路由', 'Basic routing'), [
+      settingRow(t('屏蔽 BitTorrent', 'Block BitTorrent'), t('阻止 BT 下载流量', 'Block BitTorrent traffic'), toggle('torrent', values('block', 'protocol').includes('bittorrent'), 'BitTorrent', 'data-basic-torrent')),
+      settingRow(t('屏蔽 IP', 'Blocked IPs'), t('匹配的目标 IP 直接阻断', 'Matching destination IPs are blocked'), multi('block:ip', blockIPOptions, values('block', 'ip'))),
+      settingRow(t('屏蔽域名', 'Blocked domains'), t('匹配的域名直接阻断（如广告）', 'Matching domains are blocked (e.g. ads)'), multi('block:domain', blockDomainOptions, values('block', 'domain'))),
+      settingRow(t('直连 IP', 'Direct IPs'), t('匹配的目标 IP 走直连', 'Matching destination IPs go direct'), multi('direct:ip', directIPOptions, values('direct', 'ip'))),
+      settingRow(t('直连域名', 'Direct domains'), t('匹配的域名走直连', 'Matching domains go direct'), multi('direct:domain', directDomainOptions, values('direct', 'domain'))),
+    ].join(''));
+  }
+
+  // ---- 表格页 ----
+  const targets = (p: Parts): [string, string][] => [...p.outbounds.map(item => [`outbound:${item.tag}`, `${t('出站', 'Outbound')} · ${item.tag}`] as [string, string]), ...p.balancers.map(item => [`balancer:${item.tag}`, `${t('均衡', 'Balancer')} · ${item.tag}`] as [string, string])];
+  const actions = (kind: string, index: number, count: number) => `<div class="row-actions">${button('↑', `data-op="${kind}:up" data-index="${index}" aria-label="${t('上移', 'Move up')}" ${index === 0 ? 'disabled' : ''}`, 'icon-button')}${button('↓', `data-op="${kind}:down" data-index="${index}" aria-label="${t('下移', 'Move down')}" ${index === count - 1 ? 'disabled' : ''}`, 'icon-button')}${button(t('编辑', 'Edit'), `data-op="${kind}:edit" data-index="${index}"`, 'text-button')}${button(t('删除', 'Delete'), `data-op="${kind}:delete" data-index="${index}"`, 'text-button danger-text')}</div>`;
+  const table = (heads: string[], rows: string[], empty: string) => rows.length ? `<div class="table-scroll"><table class="xray-table"><thead><tr>${heads.map(head => `<th scope="col">${head}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table></div>` : `<p class="form-intro">${empty}</p>`;
+  function routingTab(p: Parts): string {
+    return `<div class="settings-table-actions">${button(t('添加规则', 'Add rule'), 'data-op="rule:add"', 'primary-button')}</div><p class="form-hint">${t('从上到下匹配，先命中的规则生效；都不匹配时走第一个出站。', 'Rules match top to bottom; the first match wins. Unmatched traffic uses the first outbound.')}</p>` +
+      table(['#', t('匹配条件', 'Conditions'), t('目标', 'Target'), t('操作', 'Actions')], p.rules.map((rule, index) => `<tr><td>${index + 1}</td><td>${esc(ruleSummary(rule))}</td><td><span class="tag-chip">${esc(String(rule.balancerTag ? `${t('均衡', 'Balancer')} · ${rule.balancerTag}` : rule.outboundTag ?? ''))}</span></td><td>${actions('rule', index, p.rules.length)}</td></tr>`), t('还没有路由规则，所有流量走第一个出站。', 'No routing rules yet; all traffic uses the first outbound.'));
+  }
+  function outboundsTab(p: Parts): string {
+    return `<div class="settings-table-actions">${button(t('添加出站', 'Add outbound'), 'data-op="outbound:add"', 'primary-button')}</div><p class="form-hint">${t('第一个出站是默认出站。', 'The first outbound is the default.')}</p>` +
+      table(['#', t('标识', 'Tag'), t('协议', 'Protocol'), t('地址', 'Address'), t('流量', 'Traffic'), t('操作', 'Actions')], p.outbounds.map((item, index) => {
+        const used = traffic[String(item.tag)];
+        return `<tr><td>${index + 1}${index === 0 ? ` <small class="table-secondary">${t('默认', 'default')}</small>` : ''}</td><td>${esc(String(item.tag ?? ''))}</td><td><span class="tag-chip">${esc(String(item.protocol ?? ''))}</span></td><td>${esc(outboundAddress(item))}</td><td>${used ? `↑ ${bytes(used.uplink)} / ↓ ${bytes(used.downlink)}` : '—'}</td><td>${actions('outbound', index, p.outbounds.length)}</td></tr>`;
+      }), t('至少需要一个出站。', 'At least one outbound is required.'));
+  }
+  function balancersTab(p: Parts): string {
+    const strategy = (item: Json) => balancerStrategies.find(([key]) => key === balancerForm(item).strategy)?.[1] ?? balancerForm(item).strategy;
+    return `<div class="settings-table-actions">${button(t('添加负载均衡', 'Add balancer'), `data-op="balancer:add" ${p.outbounds.length ? '' : 'disabled'}`, 'primary-button')}</div><p class="form-hint">${t('在路由规则里选择负载均衡作为目标才会生效。', 'A balancer takes effect once a routing rule targets it.')}</p>` +
+      table([t('标识', 'Tag'), t('策略', 'Strategy'), t('出站', 'Outbounds'), t('回退', 'Fallback'), t('操作', 'Actions')], p.balancers.map((item, index) => `<tr><td>${esc(String(item.tag ?? ''))}</td><td>${esc(strategy(item))}</td><td>${esc(balancerForm(item).selector.join(', '))}</td><td>${esc(balancerForm(item).fallbackTag || '—')}</td><td>${actions('balancer', index, p.balancers.length)}</td></tr>`), t('还没有负载均衡。', 'No balancers yet.'));
+  }
+  function dnsTab(p: Parts): string {
+    const servers = Array.isArray(p.dns.servers) ? p.dns.servers : [];
+    return settingSection(t('常规', 'General'), [
+      settingRow(t('查询策略', 'Query strategy'), t('UseIP 同时查询 IPv4 与 IPv6', 'UseIP queries both IPv4 and IPv6'), selectControl('dns-queryStrategy', String(p.dns.queryStrategy ?? 'UseIP'), [['UseIP', 'UseIP'], ['UseIPv4', 'UseIPv4'], ['UseIPv6', 'UseIPv6']], t('查询策略', 'Query strategy'))),
+      settingRow(t('禁用缓存', 'Disable cache'), t('每次都向上游查询', 'Always query upstream'), toggle('dns-disableCache', p.dns.disableCache === true, t('禁用缓存', 'Disable cache'))),
+      settingRow(t('禁用回退', 'Disable fallback'), t('不回退到其他服务器查询', 'Do not fall back to other servers'), toggle('dns-disableFallback', p.dns.disableFallback === true, t('禁用回退', 'Disable fallback'))),
+    ].join('')) + `<div class="settings-table-actions">${button(t('添加 DNS 服务器', 'Add DNS server'), 'data-op="dns:add"', 'primary-button')}<label class="filter-control"><span class="sr-only">${t('添加预设', 'Add preset')}</span><select data-dns-preset><option value="">${t('添加常用 DNS…', 'Add a common DNS…')}</option>${dnsPresets.map(([label, value]) => `<option value="${esc(value)}">${esc(label)}</option>`).join('')}</select></label></div>` +
+      table([t('地址', 'Address'), t('端口', 'Port'), t('域名', 'Domains'), t('期望 IP', 'Expected IPs'), t('操作', 'Actions')], servers.map((server, index) => { const form = dnsServerForm(server); return `<tr><td>${esc(form.address)}</td><td>${esc(form.port || '—')}</td><td>${esc(form.domains.split('\n').filter(Boolean).join(', ') || '—')}</td><td>${esc(form.expectIPs.split('\n').filter(Boolean).join(', ') || '—')}</td><td>${actions('dns', index, servers.length)}</td></tr>`; }), t('至少需要一个 DNS 服务器。', 'At least one DNS server is required.'));
+  }
+  function advancedTab(): string {
+    const key = part === 'preview' ? '' : part;
+    let text = key ? draft[key] : '';
+    if (!key) { try { text = JSON.stringify(buildSettings(draft), null, 2); } catch (reason) { text = (reason as Error).message; } }
+    return `<div class="segmented" role="radiogroup" aria-label="${t('配置部分', 'Config part')}">${advancedParts.map(([id, label]) => `<label><input type="radio" name="advanced-part" value="${id}" ${id === part ? 'checked' : ''}><span>${label}</span></label>`).join('')}</div>
+      <p class="form-hint">${part === 'preview' ? t('根据当前设置生成的配置片段（不含入站），只读。', 'Generated config fragment (inbounds excluded), read-only.') : t('直接编辑这一部分的 JSON；其他标签页会同步显示。', 'Edit this part as JSON; the other tabs show the same data.')}</p>
+      <textarea id="xray-json-editor" class="json-editor" rows="22" spellcheck="false" ${part === 'preview' ? 'readonly' : ''} aria-label="JSON">${esc(text)}</textarea>${jsonError ? `<p class="form-error" role="alert">${esc(jsonError)}</p>` : ''}`;
+  }
+
   function paint(): void {
-    const content = tab === 'basic' ? `<details class="xray-setting-section" open><summary>${t('常规配置', 'General')}</summary><div class="xray-setting-content"><p class="core-warning">${t('保存后立即生效（自动预检并重启 Xray）。', 'Changes apply as soon as you save (preflight, then Xray restarts).')}</p>
-      ${select('freedomStrategy', t('Freedom协议策略', 'Freedom domain strategy'), t('设置Freedom出站的域名解析策略', 'Domain resolution strategy for Freedom outbounds'), draft.freedomStrategy, freedomStrategies)}
-      ${select('routingStrategy', t('配置路由域策略', 'Routing domain strategy'), t('设置路由匹配时的域名解析策略', 'Domain resolution strategy used for routing'), draft.routingStrategy, routingStrategies)}
-      <label class="xray-setting-row"><span><strong id="xray-label-probeURL">${t('出站测试URL', 'Outbound test URL')}</strong><small id="xray-hint-probeURL">${t('出站连通性测试使用的地址', 'URL used for outbound connectivity tests')}</small></span><input name="probeURL" type="url" value="${esc(draft.probeURL)}" required aria-labelledby="xray-label-probeURL" aria-describedby="xray-hint-probeURL"></label></div></details>
-      <details class="xray-setting-section"><summary>${t('日志', 'Logs')}</summary><div class="xray-setting-content">${select('logLevel', t('日志级别', 'Log level'), t('调试日志可能包含连接信息，使用时注意隐私', 'Debug logs may contain connection details; mind privacy'), draft.logLevel, ['none', 'error', 'warning', 'info', 'debug'])}${check('accessLog', t('开启访问日志（输出到核心控制台）', 'Enable access log (to the core console)'), draft.accessLog)}${check('dnsLog', t('开启DNS日志', 'Enable DNS log'), draft.dnsLog)}</div></details>
-      <details class="xray-setting-section"><summary>${t('基本路由', 'Basic routing')}</summary><div class="xray-setting-content"><p class="form-intro">${t('默认仅保留direct与block两个出站，不自动添加屏蔽或绕过规则。在“路由规则”分类可通过表单添加域名/IP/端口/嗅探协议规则，或用JSON编辑高级规则。', 'By default only the direct and block outbounds exist, and no blocking or bypass rules are added. In Routing rules you can add domain, IP, port and sniffed-protocol rules with the form, or edit advanced rules as JSON.')}</p><button type="button" class="secondary-button" id="xray-open-routing">${t('管理路由规则', 'Manage routing rules')}</button></div></details>` : tab === 'routing' ? routeContent() : tab === 'dns' ? dnsContent() : tab === 'balancers' ? balancerContent() : tab === 'outbounds' ? outboundContent() : (() => {
-        const [key, title, hint] = editorInfo[tab];
-        return `<div class="xray-setting-content"><h2 class="xray-editor-title">${title}</h2><p class="form-intro" id="xray-json-hint">${hint}</p><label class="form-field"><span id="xray-json-label">${title} JSON</span><textarea id="xray-json-editor" name="${key}" rows="16" spellcheck="false" autocomplete="off" aria-labelledby="xray-json-label" aria-describedby="xray-json-hint">${esc(draft[key])}</textarea></label></div>`;
-      })();
-    root.innerHTML = `<div class="page-heading"><div><h1 class="page-title" tabindex="-1">${t('Xray 设置', 'Xray settings')}</h1><p>${t('六类配置独立编辑；版本切换在首页Xray弹窗。', 'Six categories are edited separately; switch versions from the Xray dialog on the dashboard.')}</p></div></div>
-      <div class="card xray-settings-actions"><button class="primary-button" id="xray-save" ${!loaded || saving || loading || reloadRequired ? 'disabled' : ''}>${saving ? t('正在保存…', 'Saving…') : persistent ? t('保存', 'Save') : t('保存会话草稿', 'Save session draft')}</button><button class="secondary-button" id="xray-preview" ${!loaded || saving || loading ? 'disabled' : ''}>${t('校验并预览', 'Verify and preview')}</button>${persistent ? `<button class="secondary-button" id="xray-reload" ${loading || saving ? 'disabled' : ''}>${t('刷新', 'Refresh')}</button>` : ''}<button class="secondary-button" id="xray-apply" ${!persistent || !loaded || saving || loading || reloadRequired ? 'disabled' : ''}>${t('重新应用', 'Re-apply')}</button></div>
-      ${reloadRequired ? t('<p class="form-error" role="alert">上次保存失败或结果未确认，已保留本页输入。请先复制需要保留的修改，再重新读取已保存草稿；不会自动合并或覆盖其它页面的数据。</p>', '<p class="form-error" role="alert">The last save failed or was not confirmed; your input on this page is kept. Copy any changes you need, then reload the saved draft. Data from other pages is never merged or overwritten automatically.</p>') : ''}
-      <p class="form-intro">${persistent ? t('保存后立即生效：先用官方核心预检，通过后重启 Xray；预检失败时保留原配置。', 'Changes apply as soon as you save: the official core runs a preflight first, then Xray restarts; if the preflight fails, the previous configuration keeps running.') : t('离线演示草稿只保留到页面刷新，不写数据库、不应用核心。', 'Offline demo drafts last until the page refreshes; nothing is written to the database or applied.')}${t('路由、DNS、出站和负载均衡支持常用表单与JSON；其他高级配置使用JSON。', ' Routing, DNS, outbounds and balancers support forms and JSON; other advanced settings use JSON.')}</p>
-      <section class="card xray-settings-card"><div class="xray-settings-tabs" role="tablist" aria-label="${t('Xray配置分类', 'Xray setting categories')}">${settingsTabs.map(([id, label, icon]) => `<button role="tab" id="xray-tab-${id}" aria-selected="${id === tab}" aria-controls="xray-settings-panel" tabindex="${id === tab ? 0 : -1}" data-settings-tab="${id}"><i data-lucide="${icon}" aria-hidden="true"></i>${label}</button>`).join('')}</div>
-      <div id="xray-settings-panel" role="tabpanel" aria-labelledby="xray-tab-${tab}"><form id="xray-settings-form"><fieldset class="xray-edit-fields" ${!loaded || saving || loading ? 'disabled' : ''}>${content}</fieldset></form></div></section>
+    if (!visible) return;
+    const p = parts();
+    const body = tab === 'advanced' ? advancedTab() : !p ? `<p class="form-error" role="alert">${t('当前 JSON 无效，请在“高级”中修正。', 'The JSON is invalid; fix it under Advanced.')}</p>` : { basic: basicTab, routing: routingTab, outbounds: outboundsTab, balancers: balancersTab, dns: dnsTab }[tab](p);
+    root.innerHTML = `<header class="page-heading"><div><h1 class="page-title" tabindex="-1">${t('Xray 设置', 'Xray settings')}</h1><p>${t('路由、出站、负载均衡与 DNS', 'Routing, outbounds, balancers and DNS')}</p></div></header>
+      ${settingsToolbar(`${button(saving ? t('正在保存…', 'Saving…') : t('保存', 'Save'), `id="xray-save" ${!loaded || saving || loading || reloadRequired || !dirty() ? 'disabled' : ''}`, 'primary-button')}${persistent ? button(t('重启 Xray', 'Restart Xray'), `id="xray-restart" ${saving || loading ? 'disabled' : ''}`, 'danger-button') + button(t('刷新', 'Refresh'), `id="xray-reload" ${loading || saving ? 'disabled' : ''}`) : ''}`, persistent ? t('修改需点“保存”，保存后立即生效（自动预检并重启 Xray）。', 'Click Save to apply; saving runs a preflight and restarts Xray.') : t('离线演示：修改只保留到页面刷新。', 'Offline demo: changes last until the page refreshes.'))}
       <p class="core-message" id="xray-settings-status" role="status">${esc(statusText())}</p>
-      ${error ? `<p class="form-error" id="xray-settings-error" tabindex="-1" role="alert">${esc(error)}</p>` : ''}
-      ${preview ? `<section class="card xray-settings-preview"><h2>${t('配置片段预览（非完整可运行配置）', 'Configuration preview (not a complete runnable config)')}</h2><p class="form-hint">${t('只完成JSON结构和部分引用校验，未经过所选官方核心预检；未包含任何入站。', 'Only JSON structure and some references are checked; the selected official core has not run a preflight. No inbounds are included.')}</p><pre>${esc(preview)}</pre></section>` : ''}`;
-    root.querySelectorAll<HTMLElement>('[data-balancer-field]').forEach(field => {
-      const label = field.closest('label')?.querySelector('span'), hint = field.closest('label')?.querySelector('small');
-      if (label) { label.id = `balancer-label-${field.dataset.balancerField}`; field.setAttribute('aria-labelledby', label.id); }
-      if (hint) { hint.id = `balancer-hint-${field.dataset.balancerField}`; field.setAttribute('aria-describedby', hint.id); }
-    });
-    root.querySelectorAll<HTMLButtonElement>('[data-settings-tab]').forEach(button => {
-      button.addEventListener('click', () => { if (loading || saving) return; capture(); tab = button.dataset.settingsTab as SettingsTab; error = ''; feedback = ''; preview = ''; paint(); root.querySelector<HTMLElement>(`#xray-tab-${tab}`)?.focus(); });
-      button.addEventListener('keydown', event => {
-        if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
-        event.preventDefault(); const index = settingsTabs.findIndex(item => item[0] === tab);
-        const next = event.key === 'Home' ? 0 : event.key === 'End' ? settingsTabs.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + settingsTabs.length) % settingsTabs.length;
-        root.querySelector<HTMLButtonElement>(`#xray-tab-${settingsTabs[next][0]}`)?.click();
-      });
-    });
-    root.querySelector('#xray-settings-form')!.addEventListener('submit', event => event.preventDefault());
-    root.querySelectorAll<HTMLButtonElement>('[data-route-action]').forEach(button => button.addEventListener('click', () => routeAction(button.dataset.routeAction!, Number(button.dataset.routeIndex))));
-    root.querySelectorAll<HTMLButtonElement>('[data-dns-action]').forEach(button => button.addEventListener('click', () => dnsAction(button.dataset.dnsAction!)));
-    root.querySelectorAll<HTMLButtonElement>('[data-balancer-action]').forEach(button => button.addEventListener('click', () => balancerAction(button.dataset.balancerAction!, Number(button.dataset.balancerIndex))));
-    root.querySelectorAll<HTMLButtonElement>('[data-outbound-action]').forEach(button => button.addEventListener('click', () => outboundAction(button.dataset.outboundAction!, Number(button.dataset.outboundIndex))));
-    root.querySelector<HTMLSelectElement>('[data-outbound-field="protocol"]')?.addEventListener('change', () => {
-      capture(); const proxy = root.querySelector<HTMLElement>('[data-outbound-proxy]');
-      if (proxy) proxy.hidden = !['http', 'socks'].includes(outboundForm.protocol);
-    });
-    root.querySelector('#xray-open-routing')?.addEventListener('click', () => root.querySelector<HTMLButtonElement>('#xray-tab-routing')?.click());
-    root.querySelector('#xray-settings-form')!.addEventListener('input', () => {
-      capture(); feedback = ''; preview = ''; error = '';
-      updateStatus();
-      const matches = root.querySelector<HTMLElement>('[data-balancer-matches]'); if (matches) matches.textContent = `${t('当前匹配：', 'Currently matches: ')}${balancerMatches()}`;
-      const dnsMode = root.querySelector<HTMLButtonElement>('[data-dns-action="json"]'); if (dnsMode) dnsMode.disabled = dnsEditing;
-      root.querySelector('.xray-settings-preview')?.remove();
-      root.querySelector('#xray-settings-error')?.remove();
-    });
-    async function validate(save: boolean): Promise<void> {
-      if (!loaded || saving || loading || (save && reloadRequired)) return;
-      capture(); error = ''; feedback = ''; preview = '';
-      try {
-        if (outboundEditing !== null || outboundDeleting !== null) throw new Error(t('出站有尚未完成的编辑或删除确认，请到“出站规则”加入列表或取消后再保存/预览。', 'Outbounds have an unfinished edit or delete; add it to the list or cancel it in “Outbounds” before saving or previewing.'));
-        if (balancerEditing !== null || balancerDeleting !== null) throw new Error(t('负载均衡有尚未完成的编辑或删除确认，请到“负载均衡”加入列表或取消后再保存/预览。', 'Balancers have an unfinished edit or delete; add it to the list or cancel it in “Balancers” before saving or previewing.'));
-        if (routeEditing !== null || routeDeleting !== null) throw new Error(t('路由有尚未完成的编辑或删除确认，请到“路由规则”加入列表或取消后再保存/预览。', 'Routing has an unfinished edit or delete; add it to the list or cancel it in “Routing rules” before saving or previewing.'));
-        if (dnsEditing) throw new Error(t('DNS有尚未完成的表单编辑，请到“DNS”更新草稿或取消后再保存/预览。', 'DNS has an unfinished form edit; update the draft or cancel it in “DNS” before saving or previewing.'));
-        const config = buildSettings(draft);
-        if (save) {
-          if (persistent) {
-            saving = true; paint();
-            const document = await api<{ revision: number; data: SettingsDraft; applied?: boolean; applyError?: string }>('settings', jsonBody('PUT', { revision, data: draft })).catch(reason => { if (!(reason instanceof APIError) || reason.status === 409 || reason.status >= 500) reloadRequired = true; throw reason; });
-            revision = document.revision;
-            feedback = document.applied ? t('已保存并生效。', 'Saved and applied.') : `${t('已保存，但未生效：', 'Saved, but not applied: ')}${document.applyError ?? ''}`;
-            onSaved();
-          } else feedback = t('已保存当前会话草稿；刷新会恢复默认，不应用核心。', 'Session draft saved; refreshing restores defaults and nothing is applied.');
-          saved = structuredClone(draft);
-        }
-        else { preview = JSON.stringify(config, null, 2); feedback = t('基础结构及引用校验通过；本次未执行官方核心预检或更改运行核心。', 'Structure and reference checks passed; no official core preflight was run and the running core is unchanged.'); }
-      } catch (reason) { error = (reason as Error).message; }
-      saving = false; paint();
-      root.querySelector<HTMLElement>(error ? '#xray-settings-error' : save ? '#xray-save' : '#xray-preview')?.focus({ preventScroll: !error });
-    }
-    root.querySelector('#xray-save')!.addEventListener('click', () => { void validate(true); });
-    root.querySelector('#xray-preview')!.addEventListener('click', () => { void validate(false); });
-    root.querySelector('#xray-reload')?.addEventListener('click', () => { void load(true); });
-    root.querySelector('#xray-apply')!.addEventListener('click', () => {
-      if (!loaded || loading || saving || reloadRequired) return;
-      capture();
-      if (outboundEditing !== null || outboundDeleting !== null) { error = t('请先完成或取消“出站规则”的编辑/删除确认，再保存并应用。', 'Finish or cancel the edit or delete in “Outbounds” before saving and applying.'); paint(); root.querySelector<HTMLElement>('#xray-settings-error')?.focus(); return; }
-      if (balancerEditing !== null || balancerDeleting !== null) { error = t('请先完成或取消“负载均衡”的编辑/删除确认，再保存并应用。', 'Finish or cancel the edit or delete in “Balancers” before saving and applying.'); paint(); root.querySelector<HTMLElement>('#xray-settings-error')?.focus(); return; }
-      if (routeEditing !== null || routeDeleting !== null) { error = t('请先完成或取消“路由规则”中的编辑/删除确认，再保存并应用。', 'Finish or cancel the edit or delete in “Routing rules” before saving and applying.'); paint(); root.querySelector<HTMLElement>('#xray-settings-error')?.focus(); return; }
-      if (dnsEditing) { error = t('请先更新或取消“DNS”中的表单编辑，再保存并应用。', 'Update or cancel the form edit in “DNS” before saving and applying.'); paint(); root.querySelector<HTMLElement>('#xray-settings-error')?.focus(); return; }
-      if (JSON.stringify(draft) !== JSON.stringify(saved)) { error = t('有未保存修改，请先保存。', 'There are unsaved changes; save first.'); paint(); root.querySelector<HTMLElement>('#xray-settings-error')?.focus(); return; }
-      onApply();
-    });
+      ${error ? `<p class="form-error" id="xray-settings-error" role="alert" tabindex="-1">${esc(error)}</p>` : ''}
+      ${reloadRequired ? `<p class="form-error" role="alert">${t('上次保存失败或结果未确认，请先刷新再修改。', 'The last save failed or was not confirmed; refresh before editing.')}</p>` : ''}
+      <section class="card xray-settings-card"><div class="xray-settings-tabs" role="tablist" aria-label="${t('Xray 设置分类', 'Xray setting categories')}">${tabs.map(([id, label]) => `<button type="button" role="tab" id="xray-tab-${id}" aria-selected="${id === tab}" data-settings-tab="${id}">${label}</button>`).join('')}</div>
+      <form id="xray-settings-form" novalidate><fieldset class="xray-edit-fields" ${!loaded || saving || loading ? 'disabled' : ''}>${body}</fieldset></form></section>`;
     icons();
+  }
+
+  // ---- 弹窗 ----
+  function openDialog(title: string, fields: string, submit: (form: HTMLFormElement) => void, onInput?: (form: HTMLFormElement) => void): void {
+    dialog.innerHTML = `<form novalidate><header class="dialog-heading"><h2>${esc(title)}</h2><button type="button" class="icon-button" data-close aria-label="${t('关闭弹窗', 'Close dialog')}">×</button></header><div class="edit-body">${fields}<p class="form-error" role="alert" hidden></p></div><footer>${button(t('取消', 'Cancel'), 'data-close')}<button class="primary-button">${t('确定', 'OK')}</button></footer></form>`;
+    const form = dialog.querySelector('form')!;
+    dialog.querySelectorAll('[data-close]').forEach(item => item.addEventListener('click', () => dialog.close()));
+    if (onInput) form.addEventListener('change', () => onInput(form));
+    form.addEventListener('submit', event => {
+      event.preventDefault();
+      const message = form.querySelector<HTMLElement>('.form-error')!;
+      try { submit(form); dialog.close(); paint(); }
+      catch (reason) { message.textContent = (reason as Error).message; message.hidden = false; }
+    });
+    dialog.showModal();
+  }
+  const value = (form: HTMLFormElement, name: string) => String(new FormData(form).get(name) ?? '').trim();
+  const checked = (form: HTMLFormElement, name: string) => new FormData(form).getAll(name).map(String);
+  const field = (label: string, control: string, hint = '') => `<label class="form-field">${label}${control}${hint ? `<small class="form-hint">${hint}</small>` : ''}</label>`;
+  const input = (name: string, current: string, attrs = '') => `<input name="${name}" value="${esc(current)}" autocomplete="off" ${attrs}>`;
+  const area = (name: string, current: string, rows = 3) => `<textarea name="${name}" rows="${rows}">${esc(current)}</textarea>`;
+  const select = (name: string, current: string, options: [string, string][]) => `<select name="${name}">${options.map(([key, label]) => `<option value="${esc(key)}" ${key === current ? 'selected' : ''}>${esc(label)}</option>`).join('')}</select>`;
+  const checks = (name: string, current: string[], options: [string, string][]) => `<div class="check-grid">${options.map(([key, label]) => `<label class="check-field"><input type="checkbox" name="${name}" value="${esc(key)}" ${current.includes(key) ? 'checked' : ''}><span>${esc(label)}</span></label>`).join('')}</div>`;
+  function jsonDialog(title: string, item: unknown, save: (value: Json) => void): void {
+    openDialog(title, field(t('该条目含表单不支持的字段，请直接编辑 JSON', 'This entry has fields the form does not support; edit the JSON'), `<textarea name="json" rows="14" class="json-editor" spellcheck="false">${esc(JSON.stringify(item, null, 2))}</textarea>`), form => {
+      let parsed: unknown;
+      try { parsed = JSON.parse(value(form, 'json')); } catch { throw new Error(t('JSON 格式无效。', 'Invalid JSON.')); }
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error(t('必须是 JSON 对象。', 'Must be a JSON object.'));
+      save(parsed as Json);
+    });
+  }
+
+  async function ruleDialog(index: number | null): Promise<void> {
+    // 每次打开都重新读取入站与客户端，保证可选项是最新的。
+    if (persistent) { try { workspace = (await api<{ data: Workspace | null }>('workspace')).data ?? workspace; } catch { /* 读取失败时沿用已有列表。 */ } }
+    const p = parts(); if (!p) return;
+    const existing = index === null ? emptyRule() : ruleForm(p.rules[index]);
+    if (!existing) { jsonDialog(t('编辑路由规则', 'Edit routing rule'), p.rules[index!], next => change(current => ({ ...current, rules: current.rules.map((rule, i) => i === index ? next : rule) }))); return; }
+    const inbounds: [string, string][] = workspace.inbounds.map(item => [`in-${item.id}`, item.name]);
+    const users: [string, string][] = workspace.clients.map(item => [`client-${item.id}`, item.name]);
+    openDialog(index === null ? t('添加路由规则', 'Add routing rule') : t('编辑路由规则', 'Edit routing rule'), [
+      field(t('目标', 'Target'), select('target', existing.target, [['', t('请选择出站或负载均衡', 'Choose an outbound or balancer')], ...targets(p)])),
+      field(t('目标域名（每行一项）', 'Domains (one per line)'), area('domain', existing.domain), t('支持 example.com、domain:、full:、geosite:cn、regexp:', 'Supports example.com, domain:, full:, geosite:cn, regexp:')),
+      field(t('目标 IP（每行一项）', 'IPs (one per line)'), area('ip', existing.ip), t('支持 IP、CIDR、geoip:cn、geoip:private', 'Supports IP, CIDR, geoip:cn, geoip:private')),
+      field(t('目标端口', 'Ports'), input('port', existing.port, 'placeholder="443,1000-2000"')),
+      field(t('网络', 'Network'), select('network', existing.network, [['', t('不限', 'Any')], ['tcp', 'TCP'], ['udp', 'UDP'], ['tcp,udp', 'TCP + UDP']])),
+      field(t('协议（嗅探）', 'Protocols (sniffed)'), checks('protocol', existing.protocol, [['http', 'HTTP'], ['tls', 'TLS'], ['quic', 'QUIC'], ['bittorrent', 'BitTorrent']])),
+      inbounds.length ? field(t('入站', 'Inbounds'), checks('inboundTag', existing.inboundTag, inbounds)) : '',
+      users.length ? field(t('用户', 'Users'), checks('userTag', existing.user.split('\n').filter(Boolean), users)) : '',
+      field(t('来源 IP（每行一项）', 'Source IPs (one per line)'), area('sourceIP', existing.sourceIP, 2)),
+      field(t('来源端口', 'Source ports'), input('sourcePort', existing.sourcePort)),
+    ].join(''), form => {
+      const rule = ruleFromForm({ domain: value(form, 'domain'), ip: value(form, 'ip'), port: value(form, 'port'), sourceIP: value(form, 'sourceIP'), sourcePort: value(form, 'sourcePort'), network: value(form, 'network'), protocol: checked(form, 'protocol'), inboundTag: checked(form, 'inboundTag'), user: checked(form, 'userTag').join('\n'), target: value(form, 'target') } as RuleForm);
+      change(current => ({ ...current, rules: index === null ? [...current.rules, rule] : current.rules.map((item, i) => i === index ? rule : item) }));
+    });
+  }
+
+  function outboundFields(form: OutboundForm): string {
+    const proxy = proxyProtocols.includes(form.protocol), stream = streamProtocols.includes(form.protocol), hy2 = form.protocol === 'hysteria';
+    return [
+      `<div class="import-row">${field(t('从分享链接导入', 'Import from share link'), input('link', '', 'placeholder="vless:// vmess:// trojan:// ss:// hysteria2://"'))}${button(t('导入', 'Import'), 'data-import')}</div>`,
+      field(t('协议', 'Protocol'), select('protocol', form.protocol, outboundProtocolOptions)),
+      field(t('标识（tag）', 'Tag'), input('tag', form.tag, 'required maxlength="128"')),
+      form.protocol === 'freedom' ? field(t('域名策略', 'Domain strategy'), select('domainStrategy', form.domainStrategy, [['', t('跟随基础配置', 'Follow Basics')], ...freedomStrategies.map(item => [item, item] as [string, string])])) : '',
+      proxy ? `<div class="field-row">${field(t('地址', 'Address'), input('address', form.address, 'required'))}${field(t('端口', 'Port'), input('port', form.port, 'type="number" min="1" max="65535" required'))}</div>` : '',
+      form.protocol === 'vless' || form.protocol === 'vmess' ? field('UUID', input('id', form.id, 'required')) : '',
+      form.protocol === 'vless' ? field('Flow', select('flow', form.flow, [['', t('无', 'None')], ['xtls-rprx-vision', 'xtls-rprx-vision']])) : '',
+      ['trojan', 'shadowsocks', 'hysteria'].includes(form.protocol) ? field(hy2 ? t('认证密码', 'Auth password') : t('密码', 'Password'), input('password', form.password, 'required')) : '',
+      form.protocol === 'shadowsocks' ? field(t('加密方式', 'Method'), select('method', form.method, ssMethods.map(item => [item, item]))) : '',
+      form.protocol === 'socks' || form.protocol === 'http' ? `<div class="field-row">${field(t('用户名（可选）', 'Username (optional)'), input('user', form.user))}${field(t('密码（可选）', 'Password (optional)'), input('pass', form.pass, 'type="password"'))}</div>` : '',
+      stream ? `<div class="field-row">${field(t('传输', 'Transport'), select('network', form.network, [['tcp', 'TCP'], ['ws', 'WebSocket'], ['grpc', 'gRPC'], ['xhttp', 'XHTTP'], ['httpupgrade', 'HTTPUpgrade']]))}${field(t('安全', 'Security'), select('security', form.security, [['none', t('无', 'None')], ['tls', 'TLS'], ['reality', 'REALITY']]))}</div>` : '',
+      stream && ['ws', 'xhttp', 'httpupgrade'].includes(form.network) ? `<div class="field-row">${field(t('路径', 'Path'), input('path', form.path))}${field('Host', input('host', form.host))}</div>` : '',
+      stream && form.network === 'xhttp' ? field(t('XHTTP 模式', 'XHTTP mode'), select('mode', form.mode, ['auto', 'packet-up', 'stream-up', 'stream-one'].map(item => [item, item]))) : '',
+      stream && form.network === 'grpc' ? field('Service name', input('serviceName', form.serviceName)) : '',
+      (stream && form.security !== 'none') || hy2 ? `<div class="field-row">${field('SNI', input('serverName', form.serverName))}${field(t('指纹', 'Fingerprint'), select('fingerprint', form.fingerprint, ['chrome', 'firefox', 'safari', 'ios', 'edge', 'random'].map(item => [item, item])))}</div>` : '',
+      (stream && form.security === 'tls') || hy2 ? `${field('ALPN', input('alpn', form.alpn, 'placeholder="h2,http/1.1"'))}<label class="check-field"><input type="checkbox" name="allowInsecure" ${form.allowInsecure ? 'checked' : ''}><span>${t('允许不安全证书（自签证书时使用）', 'Allow insecure certificates (for self-signed)')}</span></label>` : '',
+      stream && form.security === 'reality' ? `${field(t('公钥', 'Public key'), input('publicKey', form.publicKey, 'required'))}<div class="field-row">${field('Short ID', input('shortId', form.shortId))}${field('SpiderX', input('spiderX', form.spiderX))}</div>` : '',
+    ].join('');
+  }
+  function readOutbound(form: HTMLFormElement, base: OutboundForm): OutboundForm {
+    const next = { ...base };
+    for (const key of Object.keys(base) as (keyof OutboundForm)[]) {
+      if (key === 'allowInsecure') next.allowInsecure = new FormData(form).has('allowInsecure');
+      else if (form.elements.namedItem(key)) (next[key] as string) = value(form, key);
+    }
+    return next;
+  }
+  function outboundDialog(index: number | null): void {
+    const p = parts(); if (!p) return;
+    const initial = index === null ? { ...emptyOutbound(), tag: `proxy-${p.outbounds.length + 1}` } : outboundForm(p.outbounds[index]);
+    if (!initial) { jsonDialog(t('编辑出站', 'Edit outbound'), p.outbounds[index!], next => change(current => ({ ...current, outbounds: current.outbounds.map((item, i) => i === index ? next : item) }))); return; }
+    let form = initial;
+    const oldTag = index === null ? '' : String(p.outbounds[index].tag);
+    const refresh = (element: HTMLFormElement) => { form = readOutbound(element, form); element.querySelector('.edit-body')!.innerHTML = `${outboundFields(form)}<p class="form-error" role="alert" hidden></p>`; wireImport(element); };
+    const wireImport = (element: HTMLFormElement) => element.querySelector('[data-import]')?.addEventListener('click', () => {
+      const message = element.querySelector<HTMLElement>('.form-error')!;
+      try { form = { ...outboundFromLink(value(element, 'link')) }; element.querySelector('.edit-body')!.innerHTML = `${outboundFields(form)}<p class="form-error" role="alert" hidden></p>`; wireImport(element); }
+      catch (reason) { message.textContent = (reason as Error).message; message.hidden = false; }
+    });
+    openDialog(index === null ? t('添加出站', 'Add outbound') : t('编辑出站', 'Edit outbound'), outboundFields(form), element => {
+      const outbound = outboundFromForm(readOutbound(element, form));
+      const current = parts()!;
+      if (current.outbounds.some((item, i) => i !== index && item.tag === outbound.tag)) throw new Error(t('出站标识重复。', 'Duplicate outbound tag.'));
+      if (index !== null && oldTag !== outbound.tag && referenced(current, oldTag)) throw new Error(t('该出站正被路由或负载均衡使用，不能改名。', 'This outbound is used by routing or balancers and cannot be renamed.'));
+      change(now => ({ ...now, outbounds: index === null ? [...now.outbounds, outbound] : now.outbounds.map((item, i) => i === index ? outbound : item) }));
+    }, element => { const before = `${form.protocol}|${form.network}|${form.security}`; form = readOutbound(element, form); if (`${form.protocol}|${form.network}|${form.security}` !== before) refresh(element); });
+    wireImport(dialog.querySelector('form')!);
+  }
+  const referenced = (p: Parts, tag: string) => p.rules.some(rule => rule.outboundTag === tag) || p.balancers.some(item => balancerForm(item).fallbackTag === tag || balancerForm(item).selector.some(prefix => tag.startsWith(prefix)));
+
+  function balancerDialog(index: number | null): void {
+    const p = parts(); if (!p) return;
+    const form: BalancerForm = index === null ? emptyBalancer() : balancerForm(p.balancers[index]);
+    const tags: [string, string][] = p.outbounds.map(item => [String(item.tag), String(item.tag)]);
+    const oldTag = form.tag;
+    openDialog(index === null ? t('添加负载均衡', 'Add balancer') : t('编辑负载均衡', 'Edit balancer'), [
+      field(t('标识（tag）', 'Tag'), input('tag', form.tag, 'required')),
+      field(t('策略', 'Strategy'), select('strategy', form.strategy, balancerStrategies), t('最低延迟/最低负载会按出站测试 URL 自动测速', 'Least ping/load probe outbounds with the outbound test URL')),
+      field(t('出站', 'Outbounds'), checks('selector', form.selector, tags)),
+      field(t('回退出站', 'Fallback outbound'), select('fallbackTag', form.fallbackTag, [['', t('无', 'None')], ...tags])),
+    ].join(''), element => {
+      const balancer = balancerFromForm({ tag: value(element, 'tag'), strategy: value(element, 'strategy'), selector: checked(element, 'selector'), fallbackTag: value(element, 'fallbackTag') });
+      const current = parts()!;
+      if (current.balancers.some((item, i) => i !== index && item.tag === balancer.tag)) throw new Error(t('负载均衡标识重复。', 'Duplicate balancer tag.'));
+      if (index !== null && oldTag !== balancer.tag && current.rules.some(rule => rule.balancerTag === oldTag)) throw new Error(t('该负载均衡正被路由使用，不能改名。', 'This balancer is used by routing and cannot be renamed.'));
+      change(now => syncObservatory({ ...now, balancers: index === null ? [...now.balancers, balancer] : now.balancers.map((item, i) => i === index ? balancer : item) }, draft.probeURL));
+    });
+  }
+
+  function dnsDialog(index: number | null): void {
+    const p = parts(); if (!p) return;
+    const servers = Array.isArray(p.dns.servers) ? p.dns.servers : [];
+    const form: DNSServerForm = index === null ? emptyDNSServer() : dnsServerForm(servers[index]);
+    openDialog(index === null ? t('添加 DNS 服务器', 'Add DNS server') : t('编辑 DNS 服务器', 'Edit DNS server'), [
+      field(t('地址', 'Address'), input('address', form.address, 'required placeholder="https://1.1.1.1/dns-query"'), t('支持 IP、localhost、https:// (DoH)、tcp://', 'Supports IP, localhost, https:// (DoH), tcp://')),
+      field(t('端口（可选）', 'Port (optional)'), input('port', form.port, 'type="number" min="1" max="65535"')),
+      field(t('仅用于这些域名（每行一项）', 'Only for these domains (one per line)'), area('domains', form.domains)),
+      field(t('期望 IP（每行一项）', 'Expected IPs (one per line)'), area('expectIPs', form.expectIPs)),
+      `<label class="check-field"><input type="checkbox" name="skipFallback" ${form.skipFallback ? 'checked' : ''}><span>${t('不参与回退查询', 'Skip fallback')}</span></label>`,
+    ].join(''), element => {
+      const server = dnsServerFromForm({ address: value(element, 'address'), port: value(element, 'port'), domains: value(element, 'domains'), expectIPs: value(element, 'expectIPs'), skipFallback: new FormData(element).has('skipFallback') });
+      change(now => { const list = Array.isArray(now.dns.servers) ? [...now.dns.servers] : []; if (index === null) list.push(server); else list[index] = server; return { ...now, dns: { ...now.dns, servers: list } }; });
+    });
+  }
+
+  function move<T>(list: T[], index: number, offset: number): T[] { const next = [...list]; const [item] = next.splice(index, 1); next.splice(index + offset, 0, item); return next; }
+  function operate(op: string, index: number): void {
+    const [kind, action] = op.split(':');
+    const p = parts(); if (!p) return;
+    if (action === 'add') void ({ rule: ruleDialog, outbound: outboundDialog, balancer: balancerDialog, dns: dnsDialog } as Record<string, (i: number | null) => unknown>)[kind](null);
+    if (action === 'edit') void ({ rule: ruleDialog, outbound: outboundDialog, balancer: balancerDialog, dns: dnsDialog } as Record<string, (i: number | null) => unknown>)[kind](index);
+    if (action === 'up' || action === 'down') {
+      const offset = action === 'up' ? -1 : 1;
+      change(now => kind === 'rule' ? { ...now, rules: move(now.rules, index, offset) } : kind === 'outbound' ? { ...now, outbounds: move(now.outbounds, index, offset) } : kind === 'balancer' ? { ...now, balancers: move(now.balancers, index, offset) } : { ...now, dns: { ...now.dns, servers: move(Array.isArray(now.dns.servers) ? now.dns.servers : [], index, offset) } });
+    }
+    if (action === 'delete') {
+      if (kind === 'outbound') {
+        if (p.outbounds.length === 1) { error = t('至少保留一个出站。', 'Keep at least one outbound.'); paint(); return; }
+        if (referenced(p, String(p.outbounds[index].tag))) { error = t('该出站正被路由或负载均衡使用，请先修改它们。', 'This outbound is used by routing or balancers; change them first.'); paint(); return; }
+      }
+      if (kind === 'balancer' && p.rules.some(rule => rule.balancerTag === p.balancers[index].tag)) { error = t('该负载均衡正被路由使用，请先修改路由。', 'This balancer is used by routing; change the rules first.'); paint(); return; }
+      if (kind === 'dns' && (Array.isArray(p.dns.servers) ? p.dns.servers.length : 0) <= 1) { error = t('至少保留一个 DNS 服务器。', 'Keep at least one DNS server.'); paint(); return; }
+      if (!window.confirm(t('确认删除这一项？保存后生效。', 'Delete this item? It takes effect after saving.'))) return;
+      change(now => kind === 'rule' ? { ...now, rules: now.rules.filter((_, i) => i !== index) } : kind === 'outbound' ? { ...now, outbounds: now.outbounds.filter((_, i) => i !== index) } : kind === 'balancer' ? syncObservatory({ ...now, balancers: now.balancers.filter((_, i) => i !== index) }, draft.probeURL) : { ...now, dns: { ...now.dns, servers: (Array.isArray(now.dns.servers) ? now.dns.servers : []).filter((_, i) => i !== index) } });
+    }
+  }
+
+  // ---- 事件 ----
+  root.addEventListener('click', event => {
+    const target = (event.target as Element).closest<HTMLElement>('button');
+    if (!target || target.closest('dialog')) return;
+    if (target.dataset.settingsTab) { tab = target.dataset.settingsTab as Tab; error = ''; jsonError = ''; paint(); if (tab === 'outbounds') void refreshTraffic(); return; }
+    if (target.id === 'xray-save') { void save(); return; }
+    if (target.id === 'xray-restart') { onApply(); return; }
+    if (target.id === 'xray-reload') { void load(true); return; }
+    if (target.dataset.op && loaded && !saving && !loading) operate(target.dataset.op, Number(target.dataset.index));
+  });
+  root.addEventListener('change', event => {
+    const element = event.target as HTMLInputElement;
+    if (!loaded || saving || loading) return;
+    if (['freedomStrategy', 'routingStrategy', 'probeURL', 'logLevel'].includes(element.name)) { draft = { ...draft, [element.name]: element.value }; if (element.name === 'probeURL') { const p = parts(); if (p) draft = writeParts(draft, syncObservatory(p, draft.probeURL)); } paint(); return; }
+    if (element.name === 'accessLog' || element.name === 'dnsLog') { draft = { ...draft, [element.name]: element.checked }; paint(); return; }
+    if (element.hasAttribute('data-basic-torrent')) { change(p => ({ ...p, outbounds: ensureOutbound(p.outbounds, 'block', { tag: 'block', protocol: 'blackhole', settings: {} }), rules: setRuleValues(p.rules, 'block', 'protocol', element.checked ? ['bittorrent'] : []) })); return; }
+    const key = element.dataset.multi ?? (element as HTMLElement).dataset.multiCustom;
+    if (key) {
+      const [tag, property] = key.split(':');
+      const scope = element.closest('.multi-select')!;
+      const values = [...scope.querySelectorAll<HTMLInputElement>('[data-multi]:checked')].map(item => item.value).concat(String((scope.querySelector('[data-multi-custom]') as HTMLTextAreaElement).value).split('\n').map(item => item.trim()).filter(Boolean));
+      change(p => ({ ...p, outbounds: ensureOutbound(p.outbounds, tag, tag === 'block' ? { tag: 'block', protocol: 'blackhole', settings: {} } : { tag: 'direct', protocol: 'freedom', settings: {} }), rules: setRuleValues(p.rules, tag, property, [...new Set(values)]) }));
+      root.querySelector<HTMLDetailsElement>(`[data-multi="${CSS.escape(key)}"]`)?.closest('details')?.setAttribute('open', '');
+      return;
+    }
+    if (element.name?.startsWith('dns-')) { const name = element.name.slice(4); change(p => ({ ...p, dns: { ...p.dns, ...(element.type === 'checkbox' ? { [name]: element.checked || undefined } : { [name]: element.value }) } })); return; }
+    if (element.name === 'advanced-part') { part = element.value as AdvancedPart; jsonError = ''; paint(); return; }
+    if ((element as HTMLElement).hasAttribute('data-dns-preset') && element.value) { const server = element.value; change(p => ({ ...p, dns: { ...p.dns, servers: [...(Array.isArray(p.dns.servers) ? p.dns.servers : []), server] } })); }
+  });
+  root.addEventListener('input', event => {
+    const element = event.target as HTMLTextAreaElement;
+    if (element.id !== 'xray-json-editor' || part === 'preview') return;
+    try { JSON.parse(element.value); jsonError = ''; } catch { jsonError = t('JSON 格式无效，修正前无法保存。', 'Invalid JSON; fix it before saving.'); }
+    draft = { ...draft, [part]: element.value };
+    updateStatus();
+    const message = root.querySelector('#xray-settings-form .form-error');
+    if (jsonError && !message) element.insertAdjacentHTML('afterend', `<p class="form-error" role="alert">${esc(jsonError)}</p>`);
+    if (!jsonError) message?.remove();
+  });
+
+  async function save(): Promise<void> {
+    if (!loaded || saving || loading || reloadRequired || !dirty()) return;
+    error = ''; feedback = '';
+    try {
+      buildSettings(draft);
+      if (persistent) {
+        saving = true; paint();
+        const document = await api<{ revision: number; data: SettingsDraft; applied?: boolean; applyError?: string }>('settings', jsonBody('PUT', { revision, data: draft })).catch(reason => { if (!(reason instanceof APIError) || reason.status === 409 || reason.status >= 500) reloadRequired = true; throw reason; });
+        revision = document.revision;
+        feedback = document.applied ? t('已保存并生效。', 'Saved and applied.') : `${t('已保存，但未生效：', 'Saved, but not applied: ')}${document.applyError ?? ''}`;
+        onSaved();
+      } else feedback = t('已保存当前会话草稿；刷新会恢复默认，不应用核心。', 'Session draft saved; refreshing restores defaults and nothing is applied.');
+      saved = structuredClone(draft);
+    } catch (reason) { error = (reason as Error).message; }
+    saving = false; paint();
+    root.querySelector<HTMLElement>(error ? '#xray-settings-error' : '#xray-save')?.focus();
   }
   async function load(force = false): Promise<void> {
     if ((!force && loaded) || loading || saving) return;
-    if (force && loaded) {
-      capture();
-      if (!window.confirm(t('重新读取将丢弃本页六类设置的全部未保存修改，包括未加入列表的表单和删除确认。请先复制需要保留的内容。只读取最新草稿，不保存、不应用核心。确认继续？', 'Reloading discards all unsaved changes in the six categories on this page, including forms not added to lists and pending deletions. Copy anything you need first. It only reads the latest draft; nothing is saved or applied. Continue?'))) return;
-    }
+    if (force && loaded && dirty() && !window.confirm(t('刷新会丢弃未保存的修改，确认继续？', 'Refreshing discards unsaved changes. Continue?'))) return;
     loading = true; error = ''; feedback = ''; paint();
     try {
       const document = await api<{ revision: number; data: SettingsDraft | null }>('settings');
       const next = document.data ?? defaultSettings();
-      buildSettings(next); draft = next; saved = structuredClone(draft);
-      revision = document.revision; loaded = true; reloadRequired = false; preview = '';
-      routeEditing = routeDeleting = balancerEditing = balancerDeleting = outboundEditing = outboundDeleting = null;
-      routingJSON = dnsJSON = balancerJSON = outboundJSON = dnsEditing = false;
-      routeForm = emptyRoute(); dnsForm = dnsFields(draft.dns) ?? dnsForm; balancerForm = emptyBalancer(); outboundForm = emptyOutbound();
+      buildSettings(next); draft = next; saved = structuredClone(next);
+      revision = document.revision; loaded = true; reloadRequired = false; jsonError = '';
       if (force) feedback = `${t('已刷新（修订', 'Refreshed (revision ')}${revision}${t('）。', ').')}`;
     } catch (reason) { error = (reason as Error).message; if (force) reloadRequired = true; }
-    finally { loading = false; if (visible) { paint(); if (force) root.querySelector<HTMLElement>(error ? '#xray-settings-error' : '#xray-reload')?.focus(); } }
+    finally { loading = false; paint(); }
   }
-  if (persistent) window.setInterval(() => { if (visible && !root.hidden && !document.hidden) updateStatus(); }, 1000);
-  return { render: () => { visible = true; capture(); paint(); if (!loaded) void load(); }, setRuntime: (status, at) => { runtime = status; runtimeAt = at; updateStatus(); } };
+  async function refreshTraffic(): Promise<void> {
+    if (!persistent || !visible || root.hidden || tab !== 'outbounds' || document.hidden) return;
+    try {
+      const result = await api<{ outbounds: Traffic }>('runtime/outbound-traffic');
+      traffic = result.outbounds;
+      if (tab === 'outbounds' && !dialog.open && !root.contains(document.activeElement)) paint();
+    } catch { /* 流量列显示“—”即可。 */ }
+  }
+  if (persistent) {
+    window.setInterval(() => { if (visible && !root.hidden && !document.hidden) updateStatus(); }, 1000);
+    window.setInterval(() => { void refreshTraffic(); }, 5000);
+  }
+  return {
+    render: () => { visible = true; paint(); if (!loaded) void load(); else void refreshTraffic(); },
+    setRuntime: (status, at) => { runtime = status; runtimeAt = at; updateStatus(); },
+  };
 }

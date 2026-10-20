@@ -3,6 +3,7 @@ package localapi
 import (
 	"encoding/json"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -28,4 +29,12 @@ func TestSubscriptionSettingsValidationAndHeaders(t *testing.T) {
 	if w.Header().Get("Subscription-Userinfo") != "" {
 		t.Fatal("usage shown while disabled")
 	}
+}
+
+// sameShareLink比较订阅返回的单条链接与连接导出：节点名称（#后）按订阅设置可不同，其余参数必须一致。
+func sameShareLink(subscription, exported string) bool {
+	line, ok := strings.CutSuffix(subscription, "\n")
+	a, _, _ := strings.Cut(line, "#")
+	b, _, _ := strings.Cut(exported, "#")
+	return ok && a == b && a != ""
 }

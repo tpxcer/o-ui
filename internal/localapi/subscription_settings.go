@@ -11,27 +11,31 @@ import (
 	"independent-panel/internal/store"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
+	"strings"
 	"unicode"
 	"unicode/utf8"
 )
 
 const subscriptionSettingsDocument = "subscription-settings"
 
-// 订阅服务的全局设置（参照OUI订阅页）：总开关、客户端更新间隔、订阅名称与流量/到期信息。
+// 订阅服务的全局设置（参照OUI订阅页）：总开关、客户端更新间隔、订阅名称、流量/到期信息与节点名称格式。
 type subscriptionSettings struct {
-	Enabled     bool   `json:"enabled"`
-	UpdateHours int    `json:"updateHours"`
-	Title       string `json:"title"`
-	ShowInfo    bool   `json:"showInfo"`
+	Enabled          bool   `json:"enabled"`
+	UpdateHours      int    `json:"updateHours"`
+	Title            string `json:"title"`
+	ShowInfo         bool   `json:"showInfo"`
+	RemarkClientName bool   `json:"remarkClientName"`
 }
 
 func defaultSubscriptionSettings() subscriptionSettings {
-	return subscriptionSettings{Enabled: true, UpdateHours: 12, Title: "o-ui", ShowInfo: true}
+	return subscriptionSettings{Enabled: true, UpdateHours: 12, Title: "o-ui", ShowInfo: true, RemarkClientName: true}
 }
 
+// 未出现的字段取默认值，旧版保存的设置不会因新增字段改变行为。
 func validateSubscriptionSettings(data json.RawMessage) (subscriptionSettings, error) {
-	var s subscriptionSettings
+	s := defaultSubscriptionSettings()
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&s) != nil || decoder.Decode(&struct{}{}) != io.EOF {
@@ -61,6 +65,27 @@ func readSubscriptionSettings(ctx context.Context, state *store.Store) (subscrip
 	}
 	s, err := validateSubscriptionSettings(doc.Data)
 	return s, doc.Revision, err
+}
+
+// subscriptionLinkName按设置把分享链接的节点名称改为“入站名-客户端名”或仅入站名；找不到入站时保留客户端名。
+func subscriptionLinkName(link string, withClient bool, workspace store.Document, client clientDraft) string {
+	var draft workspaceDraft
+	inbound := ""
+	if json.Unmarshal(workspace.Data, &draft) == nil {
+		for _, in := range draft.Inbounds {
+			if in.ID == client.InboundID {
+				inbound = in.Name
+			}
+		}
+	}
+	name := client.Name
+	if inbound != "" && withClient {
+		name = inbound + "-" + client.Name
+	} else if inbound != "" {
+		name = inbound
+	}
+	base, _, _ := strings.Cut(link, "#")
+	return base + (&url.URL{Fragment: name}).String()
 }
 
 // subscriptionHeaders写入常见客户端识别的更新间隔、名称与流量/到期信息。

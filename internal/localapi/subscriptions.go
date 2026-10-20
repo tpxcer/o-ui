@@ -271,6 +271,6 @@ func registerSubscriptions(mux *http.ServeMux, rt *Runtime) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		used := ledger.Totals[id]
 		subscriptionHeaders(w, settings, limit, used.Uplink, used.Downlink)
-		_, _ = w.Write([]byte(base64.StdEncoding.EncodeToString([]byte(result.Link + "\n"))))
+		_, _ = w.Write([]byte(base64.StdEncoding.EncodeToString([]byte(subscriptionLinkName(result.Link, settings.RemarkClientName, workspace, client) + "\n"))))
 	})
 }

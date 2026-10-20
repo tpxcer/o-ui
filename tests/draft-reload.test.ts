@@ -1,13 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
-import { defaultSettings } from '../src/xray-settings-model.ts';
 import { seedWorkspace } from '../src/workspace.ts';
 
 const hooks = registerHooks({ load(url, context, next) {
   return url.endsWith('.css') ? { format: 'module', source: '', shortCircuit: true } : next(url, context);
 } });
-const { initXraySettings } = await import('../src/xray-settings.ts');
 const { initManagement } = await import('../src/management.ts');
 hooks.deregister();
 
@@ -70,48 +68,6 @@ async function withPage(fetcher: typeof fetch, run: (root: Control, dialogs: Con
   finally { for (const [key, descriptor] of Object.entries(previous)) { if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key); } }
 }
 
-test('设置显式重读：取消不读不丢输入，确认后才换最新草稿和修订', async () => {
-  let reads = 0;
-  const writes: any[] = [];
-  await withPage(async (_, options) => {
-    if (options?.method === 'PUT') { writes.push(JSON.parse(String(options.body))); return Response.json({ revision: 10 }); }
-    reads++; return Response.json({ revision: reads === 1 ? 1 : 9, data: { ...defaultSettings(), probeURL: reads === 1 ? 'https://first.test/' : 'https://latest.test/' } });
-  }, async (root, _, confirmation) => {
-    initXraySettings(root as unknown as HTMLElement, () => {}, true).render(); await settle();
-    assert.match(root.innerHTML, /id="xray-reload"/);
-    root.querySelector('[name="probeURL"]').value = 'https://unsaved.test/';
-    confirmation.answer = false;
-    root.querySelector('#xray-reload').fire(); await settle();
-    assert.equal(reads, 1); assert.equal(root.querySelector('[name="probeURL"]').value, 'https://unsaved.test/');
-    confirmation.answer = true;
-    root.querySelector('#xray-reload').fire(); await settle();
-    assert.equal(reads, 2); assert.equal(root.querySelector('[name="probeURL"]').value, 'https://latest.test/');
-    root.querySelector('#xray-save').fire(); await settle();
-    assert.equal(writes[0].revision, 9); assert.equal(writes[0].data.probeURL, 'https://latest.test/');
-    assert.equal(confirmation.count, 2);
-  });
-});
-
-test('设置冲突或响应不确定后保留输入，重读失败也不清空，不能重复写旧修订', async t => {
-  for (const network of [false, true]) await t.test(network ? '网络响应丢失' : '修订冲突', async () => {
-    let reads = 0, writes = 0;
-    await withPage(async (_, options) => {
-      if (options?.method === 'PUT') { writes++; if (network) throw new Error('lost'); return Response.json({ error: '修订冲突' }, { status: 409 }); }
-      if (++reads > 1) throw new Error('offline');
-      return Response.json({ revision: 1, data: defaultSettings() });
-    }, async root => {
-      initXraySettings(root as unknown as HTMLElement, () => {}, true).render(); await settle();
-      root.querySelector('[name="probeURL"]').value = 'https://keep.test/';
-      root.querySelector('#xray-save').fire(); await settle();
-      assert.equal(root.querySelector('[name="probeURL"]').value, 'https://keep.test/');
-      root.querySelector('#xray-save').fire(); await settle(); assert.equal(writes, 1);
-      root.querySelector('#xray-reload').fire(); await settle();
-      assert.equal(reads, 2); assert.equal(root.querySelector('[name="probeURL"]').value, 'https://keep.test/');
-      assert.match(root.innerHTML, /重新读取/);
-    });
-  });
-});
-
 function clickWorkspace(root: Control, attribute: string, operation?: string, id?: string) {
   const button = new Control(); button.dataset[attribute] = ''; if (operation) button.dataset.op = operation; if (id) button.dataset.id = id;
   root.fire('click', { target: button });
@@ -165,64 +121,6 @@ test('客户端保存冲突后不重复写，确认重读失败时保留弹窗�
     assert.equal(dialog.open, false); assert.match(root.querySelector('#list-content').innerHTML, /newer-client/);
     clickWorkspace(root, 'data-op', 'toggle-client', initial.clients[0].id);
     dialog.querySelector('form').fire('submit'); await settle(); assert.equal(writes, 2);
-  });
-});
-
-test('设置重读在途不保存或应用、不并发重读，空库成功时使用默认草稿', async () => {
-  let complete!: (value: Response) => void;
-  const pending = new Promise<Response>(resolve => { complete = resolve; });
-  let reads = 0, writes = 0, applied = 0;
-  await withPage(async (_, options) => {
-    if (options?.method === 'PUT') { writes++; return Response.json({ revision: 5 }); }
-    return ++reads === 1 ? Response.json({ revision: 1, data: { ...defaultSettings(), probeURL: 'https://old.test/' } }) : pending;
-  }, async root => {
-    initXraySettings(root as unknown as HTMLElement, () => {}, true, () => { applied++; }).render(); await settle();
-    root.querySelector('#xray-reload').fire(); await settle();
-    root.querySelector('#xray-save').fire(); root.querySelector('#xray-apply').fire(); root.querySelector('#xray-reload').fire(); await settle();
-    assert.equal(reads, 2); assert.equal(writes, 0); assert.equal(applied, 0);
-    complete(Response.json({ revision: 4, data: null })); await settle();
-    assert.equal(root.querySelector('[name="probeURL"]').value, defaultSettings().probeURL);
-    root.querySelector('#xray-save').fire(); await settle(); assert.equal(writes, 1);
-  });
-});
-
-test('明确输入校验失败仍允许修正重试，不误锁成冲突或丢失修订', async () => {
-  let writes = 0;
-  await withPage(async (_, options) => {
-    if (options?.method === 'PUT') {
-      assert.equal(JSON.parse(String(options.body)).revision, 1);
-      return ++writes === 1 ? Response.json({ error: '输入无效' }, { status: 422 }) : Response.json({ revision: 2 });
-    }
-    return Response.json({ revision: 1, data: defaultSettings() });
-  }, async root => {
-    initXraySettings(root as unknown as HTMLElement, () => {}, true).render(); await settle();
-    root.querySelector('[name="probeURL"]').value = 'https://corrected.test/';
-    root.querySelector('#xray-save').fire(); await settle();
-    assert.doesNotMatch(root.innerHTML, /上次保存失败或结果未确认/);
-    root.querySelector('#xray-save').fire(); await settle(); assert.equal(writes, 2);
-  });
-});
-
-test('未完成DNS表单重读失败保持内容，成功后清除旧编辑状态再保存', async () => {
-  let reads = 0, writes = 0;
-  await withPage(async (_, options) => {
-    if (options?.method === 'PUT') { writes++; assert.equal(JSON.parse(String(options.body)).revision, 9); return Response.json({ revision: 10 }); }
-    if (++reads === 2) return Response.json({ revision: 8, data: { ...defaultSettings(), dns: '{invalid' } });
-    return Response.json({ revision: reads === 1 ? 1 : 9, data: defaultSettings() });
-  }, async root => {
-    const dnsTab = new Control(); dnsTab.dataset.settingsTab = 'dns';
-    root.groups.set('[data-settings-tab]', [dnsTab]);
-    initXraySettings(root as unknown as HTMLElement, () => {}, true).render(); await settle();
-    dnsTab.fire();
-    const server = new Control(); server.dataset.dnsField = 'servers'; server.value = 'tcp://192.0.2.9:5353';
-    root.groups.set('[data-dns-field]', [server]);
-    root.querySelector('#xray-reload').fire(); await settle();
-    assert.match(root.innerHTML, /tcp:\/\/192\.0\.2\.9:5353/); assert.equal(reads, 2);
-    root.querySelector('#xray-save').fire(); await settle(); assert.equal(writes, 0);
-    root.querySelector('#xray-reload').fire(); await settle();
-    root.groups.delete('[data-dns-field]');
-    assert.doesNotMatch(root.innerHTML, /192\.0\.2\.9/);
-    root.querySelector('#xray-save').fire(); await settle(); assert.equal(writes, 1);
   });
 });
 

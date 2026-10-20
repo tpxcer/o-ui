@@ -1,111 +1,280 @@
 import { api, apiURL, APIError, jsonBody } from './api.ts';
 import { escapeHtml as esc } from './workspace.ts';
-import { initPasswordChange } from './password.ts';
-import { initPanelAccess } from './panel-access.ts';
-import { initServerPlanSettings } from './server-plan.ts';
-import { initSubscriptionSettings } from './subscription-settings.ts';
 import { lang, languageNames, setLang, t, type Lang } from './i18n.ts';
+import { settingsToolbar, settingSection, settingRow, toggle, selectControl, textControl } from './settings-ui.ts';
+import { accessURL, generalForm, generalRequest, type GeneralForm, type GeneralStatus } from './panel-access.ts';
+import { subscriptionForm, subscriptionRequest, type SubscriptionForm, type SubscriptionStatus } from './subscription-settings.ts';
+import { planForm, planRows } from './server-plan.ts';
+import { parsePlanForm, type PlanStatus } from './server-plan-model.ts';
+import { passwordChangeError } from './password.ts';
+import { connectionQR } from './connection-qr.ts';
+import './panel-settings.css';
 
 export interface PanelTLSStatus {
   active: boolean; serverNames: string[]; revision: number; activeRevision: number;
   data: { certificateFile: string; keyFile: string } | null;
 }
+type Tab = 'general' | 'security' | 'subscription';
+interface Values { general: GeneralForm; plan: Record<string, string>; language: string; subscription: SubscriptionForm }
+type Section = keyof Values;
+// 表单字段所属分区；账号表单与两步验证不在其中，它们是即时操作。
+const sections: Record<string, Section> = {
+  listenIP: 'general', domain: 'general', port: 'general', path: 'general', sessionMinutes: 'general', certificateFile: 'general', keyFile: 'general',
+  node: 'plan', name: 'plan', resources: 'plan', quotaGB: 'plan', resetDay: 'plan', billing: 'plan', interfaces: 'plan', usedGB: 'plan',
+  language: 'language', enabled: 'subscription', title: 'subscription', updateHours: 'subscription', showInfo: 'subscription', remarkClientName: 'subscription',
+};
+const copy = (values: Values): Values => JSON.parse(JSON.stringify(values));
+
+// 参照OUI的面板设置：顶部“保存/重启面板”，常规、安全、订阅三个标签，每项为“标题+一行说明 | 控件”。
+// 整页共用一个“保存”；表单值保存在draft中，重绘不丢未保存的修改。
 export function initPanelSettings(root: HTMLElement, persistent: boolean): { render: () => void; clearPassword: () => void } {
-  let status: PanelTLSStatus | null = null, loading = false, saving = false, reloadRequired = false, error = '', message = '';
-  // 参照OUI：顶部“重启面板”，下方按常规/账号安全/订阅分标签。
-  const tabs: [string, string][] = [['general', t('常规', 'General')], ['account', t('账号安全', 'Account security')], ['subscription', t('订阅', 'Subscription')]];
-  const top = document.createElement('div'); root.append(top);
-  top.innerHTML = `<header class="page-heading"><div><h1 class="page-title" tabindex="-1">${t('面板设置', 'Panel settings')}</h1><p>${t('常规、账号安全与订阅设置', 'General, account security and subscription settings')}</p></div></header>
-    ${persistent ? `<div class="card xray-settings-actions panel-restart-bar"><button type="button" class="primary-button" id="panel-restart">${t('重启面板', 'Restart panel')}</button><p class="core-warning">${t('证书和访问设置保存后，需重启面板才生效；重启后 Xray 会自动恢复运行。', 'Certificate and access settings apply after the panel restarts; Xray resumes automatically.')}</p><p class="core-message" id="panel-restart-status" role="status"></p></div>` : ''}`;
-  const card = document.createElement('section'); card.className = 'card xray-settings-card'; root.append(card);
-  const tablist = document.createElement('div'); card.append(tablist);
-  tablist.innerHTML = `<div class="xray-settings-tabs" role="tablist" aria-label="${t('面板设置分类', 'Panel setting categories')}">${tabs.map(([id, label], index) => `<button type="button" role="tab" id="panel-tab-${id}" aria-selected="${index === 0}" data-panel-tab="${id}">${label}</button>`).join('')}</div>`;
-  const panels = new Map(tabs.map(([id], index) => {
-    const panel = document.createElement('div'); panel.id = `panel-panel-${id}`; panel.role = 'tabpanel'; panel.hidden = index > 0; card.append(panel);
-    return [id, panel];
-  }));
-  const block = (tab: string) => { const element = document.createElement('div'); element.className = 'settings-block'; panels.get(tab)!.append(element); return element; };
-  const tlsRoot = block('general');
-  let access: ReturnType<typeof initPanelAccess> | null = null;
-  if (persistent) access = initPanelAccess(block('general'));
-  let plan: ReturnType<typeof initServerPlanSettings> | null = null;
-  if (persistent) plan = initServerPlanSettings(block('general'));
-  const language = block('general');
-  language.innerHTML = `<h2 class="xray-editor-title">${t('界面语言', 'Language')}</h2><label class="form-field">${t('界面语言', 'Language')}<select id="panel-language">${(Object.keys(languageNames) as Lang[]).map(code => `<option value="${code}" ${code === lang ? 'selected' : ''}>${languageNames[code]}</option>`).join('')}</select></label>`;
-  language.querySelector<HTMLSelectElement>('#panel-language')?.addEventListener('change', event => setLang((event.target as HTMLSelectElement).value as Lang));
-  let password: ReturnType<typeof initPasswordChange> | null = null;
-  if (persistent) password = initPasswordChange(block('account'));
-  let subscription: ReturnType<typeof initSubscriptionSettings> | null = null;
-  if (persistent) subscription = initSubscriptionSettings(block('subscription'));
-  tablist.querySelectorAll<HTMLButtonElement>('[data-panel-tab]').forEach(button => button.addEventListener('click', () => {
-    tablist.querySelectorAll<HTMLButtonElement>('[data-panel-tab]').forEach(other => other.setAttribute('aria-selected', String(other === button)));
-    panels.forEach((panel, id) => { panel.hidden = id !== button.dataset.panelTab; });
-    if (button.dataset.panelTab === 'subscription') subscription?.render();
-  }));
-  top.querySelector<HTMLButtonElement>('#panel-restart')?.addEventListener('click', event => { void restart(event.target as HTMLButtonElement); });
+  let general: GeneralStatus | null = null, plan: PlanStatus | null = null, subscription: SubscriptionStatus | null = null;
+  let interfaces: string[] = [], username = '', twoFactor = false;
+  let loading = false, saving = false, reloadRequired = false, error = '', note = '', tab: Tab = 'general';
+  let baseline: Values | null = null, draft: Values | null = null;
+  const dialog = document.createElement('dialog');
+  dialog.className = 'twofactor-dialog';
+  document.body.append(dialog);
+  window.addEventListener('panel-session-expired', () => { if (dialog.open) dialog.close(); });
+
+  const saved = (): Values => ({ general: generalForm(general!), plan: planForm(plan), language: lang, subscription: subscriptionForm(subscription!.data) });
+  const changed = (key: Section) => Boolean(draft && baseline) && JSON.stringify(draft![key]) !== JSON.stringify(baseline![key]);
+  const dirty = () => (['general', 'plan', 'language', 'subscription'] as Section[]).some(changed);
+
+  function status(): void {
+    const save = root.querySelector<HTMLButtonElement>('#settings-save');
+    if (save) { save.disabled = !draft || saving || loading || reloadRequired || !dirty(); save.textContent = saving ? t('正在保存…', 'Saving…') : t('保存', 'Save'); }
+    const reload = root.querySelector<HTMLButtonElement>('#settings-reload'), restart = root.querySelector<HTMLButtonElement>('#panel-restart');
+    if (reload) reload.disabled = !persistent || saving || loading;
+    if (restart) restart.disabled = !persistent || saving;
+    const alert = root.querySelector<HTMLElement>('#settings-error'), message = root.querySelector<HTMLElement>('#settings-note');
+    if (alert) { alert.textContent = error; alert.hidden = !error; }
+    if (message) message.textContent = loading ? t('正在读取…', 'Reading…') : note;
+  }
+
+  function generalTab(v: GeneralForm, language: string): string {
+    const names = general?.tls.active ? general.tls.serverNames.join(', ') : '';
+    const pending = general && (general.access.pending || general.tls.pending) ? t('（有已保存但未生效的设置，重启面板后生效）', ' (saved settings are waiting for a panel restart)') : '';
+    return `<form id="settings-general" novalidate>${settingSection(t('常规', 'General') + pending, [
+      settingRow(t('面板监听 IP', 'Listen IP'), t('留空监听全部 IP；填 127.0.0.1 为仅本机访问', 'Leave empty to listen on all IPs; 127.0.0.1 means local access only'), textControl('listenIP', v.listenIP, t('面板监听 IP', 'Listen IP'), 'maxlength="45" placeholder="0.0.0.0"')),
+      settingRow(t('面板监听域名', 'Listen domain'), t('浏览器访问用的域名或 IP，须与证书一致；仅本机时不用填', 'The domain or IP used in the browser; it must match the certificate. Not needed for local only'), textControl('domain', v.domain, t('面板监听域名', 'Listen domain'), 'maxlength="253" placeholder="panel.example.com"')),
+      settingRow(t('面板监听端口', 'Listen port'), t('1024–65535，须未被占用', '1024–65535; must be unused'), textControl('port', v.port, t('面板监听端口', 'Listen port'), 'type="number" min="1024" max="65535" inputmode="numeric"')),
+      settingRow(t('面板访问路径', 'URI path'), t("以 '/' 开头和结尾，如 /abc123/；/ 为根路径", "Begins and ends with '/', e.g. /abc123/; / is the root"), textControl('path', v.path, t('面板访问路径', 'URI path'), 'maxlength="66"')),
+      settingRow(t('会话时长', 'Session duration'), t('保持登录的时长（分钟），对之后的登录生效', 'How long you stay signed in (minutes); applies to new sign-ins'), textControl('sessionMinutes', v.sessionMinutes, t('会话时长', 'Session duration'), 'type="number" min="5" max="43200" inputmode="numeric"')),
+      settingRow(t('语言', 'Language'), '', selectControl('language', language, (Object.keys(languageNames) as Lang[]).map(code => [code, languageNames[code]]), t('语言', 'Language'))),
+    ].join(''))}${settingSection(t('证书', 'Certificates'), [
+      settingRow(t('面板证书公钥文件路径', 'Public key path'), names ? `${t('当前已加载：', 'Loaded now: ')}${names}` : t("填写一个 '/' 开头的绝对路径", "An absolute path beginning with '/'"), textControl('certificateFile', v.certificateFile, t('面板证书公钥文件路径', 'Public key path'), 'maxlength="4096"')),
+      settingRow(t('面板证书密钥文件路径', 'Private key path'), t("填写一个 '/' 开头的绝对路径", "An absolute path beginning with '/'"), textControl('keyFile', v.keyFile, t('面板证书密钥文件路径', 'Private key path'), 'maxlength="4096"')),
+    ].join(''))}${settingSection(t('服务器套餐', 'Server plan'), planRows(draft?.plan ?? planForm(null), plan, interfaces), false)}</form>`;
+  }
+
+  function securityTab(): string {
+    return `<form id="settings-account" novalidate>${settingSection(t('管理员凭据', 'Admin credentials'), [
+      settingRow(t('原用户名', 'Current username'), '', `<span class="setting-value">${esc(username || '—')}</span>`),
+      settingRow(t('原密码', 'Current password'), '', textControl('current', '', t('原密码', 'Current password'), 'type="password" autocomplete="current-password" maxlength="72"')),
+      settingRow(t('新用户名', 'New username'), t('不改可留空', 'Leave empty to keep'), textControl('username', '', t('新用户名', 'New username'), 'autocomplete="username" maxlength="64"')),
+      settingRow(t('新密码', 'New password'), t('6–72 字节；不改可留空', '6–72 bytes; leave empty to keep'), textControl('next', '', t('新密码', 'New password'), 'type="password" autocomplete="new-password" maxlength="72"')),
+      settingRow(t('确认新密码', 'Confirm new password'), '', textControl('confirm', '', t('确认新密码', 'Confirm new password'), 'type="password" autocomplete="new-password" maxlength="72"')),
+      twoFactor ? settingRow(t('验证码', 'Code'), t('两步验证已启用，请输入验证器中的验证码', 'Two-factor is on; enter the code from your authenticator'), textControl('code', '', t('验证码', 'Code'), 'inputmode="numeric" autocomplete="one-time-code" maxlength="6"')) : '',
+      settingRow('', t('修改后所有登录失效，需用新账号重新登录', 'All sessions end and you sign in again with the new credentials'), `<button type="submit" class="primary-button" id="account-save">${t('确认', 'Confirm')}</button>`),
+    ].join(''))}</form>
+    <form id="settings-twofactor">${settingSection(t('双重验证', 'Two-factor authentication'), settingRow(t('启用2FA', 'Enable 2FA'), t('增加额外的验证层以提高安全性；登录时需输入验证器中的验证码', 'Adds another verification step; signing in then needs a code from your authenticator'), toggle('twoFactor', twoFactor, t('启用2FA', 'Enable 2FA'))))}</form>`;
+  }
+
+  function subscriptionTab(v: SubscriptionForm): string {
+    return `<form id="settings-subscription" novalidate>${settingSection(t('订阅', 'Subscription'), [
+      settingRow(t('启用订阅服务', 'Subscription service'), t('关闭后所有订阅链接暂停返回内容', 'When off, every subscription link stops returning content'), toggle('enabled', v.enabled, t('启用订阅服务', 'Subscription service'))),
+      settingRow(t('订阅标题', 'Subscription title'), t('在客户端中显示的标题', 'Title shown in clients'), textControl('title', v.title, t('订阅标题', 'Subscription title'), 'maxlength="64"')),
+      settingRow(t('更新间隔', 'Update interval'), t('客户端自动更新订阅的间隔（小时）', 'How often clients refresh the subscription (hours)'), textControl('updateHours', v.updateHours, t('更新间隔', 'Update interval'), 'type="number" min="1" max="168" inputmode="numeric"')),
+    ].join(''))}${settingSection(t('信息', 'Information'), [
+      settingRow(t('显示使用信息', 'Show usage info'), t('客户端中显示已用流量、总额度和到期时间', 'Clients show used traffic, quota and expiry'), toggle('showInfo', v.showInfo, t('显示使用信息', 'Show usage info'))),
+      settingRow(t('节点名称包含客户端名', 'Client name in node name'), t('节点名称为“入站名-客户端名”，关闭则只用入站名', 'Node names become "inbound-client"; when off only the inbound name is used'), toggle('remarkClientName', v.remarkClientName, t('节点名称包含客户端名', 'Client name in node name'))),
+    ].join(''))}</form>`;
+  }
+
+  const tabs: [Tab, string][] = [['general', t('常规', 'General')], ['security', t('安全', 'Security')], ['subscription', t('订阅', 'Subscription')]];
+  function paint(): void {
+    const v = draft ?? { general: { listenIP: '', domain: '', port: '', path: '/', sessionMinutes: '720', certificateFile: '', keyFile: '' }, plan: planForm(null), language: lang, subscription: { enabled: true, title: 'o-ui', updateHours: '12', showInfo: true, remarkClientName: true } };
+    root.innerHTML = `<header class="page-heading"><div><h1 class="page-title" tabindex="-1">${t('面板设置', 'Panel settings')}</h1></div></header>
+      ${settingsToolbar(`<button type="button" class="primary-button" id="settings-save" disabled>${t('保存', 'Save')}</button><button type="button" class="secondary-button" id="settings-reload">${t('重新读取', 'Reload')}</button><button type="button" class="danger-button" id="panel-restart">${t('重启面板', 'Restart panel')}</button>`, t('此处的修改需要保存，重启面板后生效', 'Every change made here needs to be saved. Restart the panel to apply changes.'))}
+      <p class="form-error settings-feedback" id="settings-error" role="alert" tabindex="-1" ${error ? '' : 'hidden'}>${esc(error)}</p><p class="core-message settings-feedback" id="settings-note" role="status">${esc(note)}</p>
+      <section class="card xray-settings-card"><div class="xray-settings-tabs" role="tablist" aria-label="${t('面板设置分类', 'Panel setting categories')}">${tabs.map(([id, label]) => `<button type="button" role="tab" aria-selected="${id === tab}" data-settings-tab="${id}">${label}</button>`).join('')}</div>
+      ${!persistent ? `<p class="form-hint">${t('离线演示不读取或保存设置，请使用面板服务。', 'The offline demo does not read or save settings; use the running panel.')}</p>` : ''}
+      <div role="tabpanel" data-settings-panel="general" ${tab === 'general' ? '' : 'hidden'}>${generalTab(v.general, v.language)}</div>
+      <div role="tabpanel" data-settings-panel="security" ${tab === 'security' ? '' : 'hidden'}>${securityTab()}</div>
+      <div role="tabpanel" data-settings-panel="subscription" ${tab === 'subscription' ? '' : 'hidden'}>${subscriptionTab(v.subscription)}</div></section>`;
+    root.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>('#settings-general input, #settings-general select, #settings-subscription input, #settings-account input, #settings-account button, #settings-twofactor input').forEach(element => { element.disabled = !draft; });
+    status();
+  }
+
+  function edit(target: HTMLInputElement): void {
+    const section = sections[target.name];
+    if (!draft || !section || !target.closest?.('#settings-general, #settings-subscription')) return;
+    const value = target.type === 'checkbox' ? target.checked : target.value;
+    if (section === 'language') draft.language = String(value);
+    else (draft[section] as unknown as Record<string, string | boolean>)[target.name] = value;
+    note = '';
+    status();
+  }
+  root.addEventListener('input', event => edit(event.target as HTMLInputElement));
+  root.addEventListener('change', event => {
+    const target = event.target as HTMLInputElement;
+    if (target.name === 'twoFactor' && target.closest?.('#settings-twofactor')) { target.checked = twoFactor; void openTwoFactor(!twoFactor); return; }
+    edit(target);
+  });
+  root.addEventListener('click', event => {
+    const target = event.target as HTMLElement;
+    const tabButton = target.closest<HTMLButtonElement>('[data-settings-tab]');
+    if (tabButton) {
+      tab = tabButton.dataset.settingsTab as Tab;
+      root.querySelectorAll<HTMLButtonElement>('[data-settings-tab]').forEach(button => button.setAttribute('aria-selected', String(button === tabButton)));
+      root.querySelectorAll<HTMLElement>('[data-settings-panel]').forEach(panel => { panel.hidden = panel.dataset.settingsPanel !== tab; });
+      return;
+    }
+    if (target.closest('#settings-save')) void save();
+    else if (target.closest('#settings-reload')) void reload();
+    else if (target.closest('#panel-restart')) void restart(target.closest<HTMLButtonElement>('#panel-restart')!);
+  });
+  root.addEventListener('submit', event => {
+    event.preventDefault();
+    if ((event.target as HTMLElement).id === 'settings-account') void changeAccount(event.target as HTMLFormElement);
+  });
+
+  // 冲突、网络中断或服务器错误时结果不确定：保留输入但禁止再写旧修订，须先重新读取。
+  function fail(reason: unknown): void {
+    error = (reason as Error).message;
+    if (!(reason instanceof APIError) || reason.status === 409 || reason.status >= 500) {
+      reloadRequired = true;
+      error += t('；结果无法确认或设置已在别处修改，已保留你的输入。请先复制需要保留的内容，再点“重新读取”。', '; the result is uncertain or the settings changed elsewhere. Your input is kept; copy what you need, then click Reload.');
+    }
+    paint();
+    root.querySelector<HTMLElement>('#settings-error')?.focus();
+  }
+
+  async function save(): Promise<void> {
+    if (saving || loading || reloadRequired || !draft || !baseline || !general || !plan || !subscription) return;
+    const now = copy(draft);
+    let generalBody: ReturnType<typeof generalRequest> | null = null, planBody: ReturnType<typeof parsePlanForm> | null = null, subscriptionBody: ReturnType<typeof subscriptionRequest> | null = null;
+    try {
+      if (changed('general')) generalBody = generalRequest(now.general, general);
+      if (changed('plan')) planBody = parsePlanForm(now.plan);
+      if (changed('subscription')) subscriptionBody = subscriptionRequest(now.subscription);
+    } catch (reason) { note = ''; error = (reason as Error).message; status(); root.querySelector<HTMLElement>('#settings-error')?.focus(); return; }
+    if (generalBody?.enablesRemote && !window.confirm(t('确认允许从其他设备经 HTTPS 访问面板和订阅？持有订阅链接者可取得代理凭据。', 'Allow the panel and subscriptions to be reached over HTTPS from other devices? Anyone with a subscription link can obtain proxy credentials.'))) return;
+    saving = true; error = ''; note = ''; status();
+    try {
+      // 每个分区保存成功即更新基线，后续分区失败时不会重复提交已保存的部分。
+      if (generalBody) { general = await api<GeneralStatus>('panel/general', jsonBody('PUT', generalBody.body)); baseline.general = now.general; }
+      if (planBody) {
+        plan = await api<PlanStatus>('system/plan', jsonBody('PUT', { revision: plan.revision, data: planBody.plan, usedGB: planBody.usedGB }));
+        baseline.plan = planForm(plan); draft.plan = { ...draft.plan, usedGB: '' };
+      }
+      if (subscriptionBody) { subscription = await api<SubscriptionStatus>('panel/subscription', jsonBody('PUT', { revision: subscription.revision, data: subscriptionBody })); baseline.subscription = now.subscription; }
+      saving = false;
+      if (changed('language')) { setLang(now.language as Lang); return; }
+      note = generalBody ? t('已保存。监听、域名、端口、路径与证书在重启面板后生效；会话时长对之后的登录生效。', 'Saved. Listen, domain, port, path and certificates apply after the panel restarts; the session duration applies to new sign-ins.') : t('已保存。', 'Saved.');
+      paint();
+    } catch (reason) { saving = false; fail(reason); }
+  }
+
+  async function reload(): Promise<void> {
+    if (saving || loading || !persistent) return;
+    if (dirty() && !window.confirm(t('重新读取会丢弃未保存的修改，请先复制需要保留的内容。是否继续？', 'Reloading discards unsaved changes; copy anything you want to keep first. Continue?'))) return;
+    await load();
+  }
+
+  async function changeAccount(target: HTMLFormElement): Promise<void> {
+    const value = (name: string) => String(new FormData(target).get(name) ?? '');
+    const current = value('current'), next = value('next'), name = value('username').trim(), code = value('code').trim();
+    const issue = passwordChangeError(current, next, value('confirm'), name) || (twoFactor && !/^\d{6}$/.test(code) ? t('请输入6位验证码。', 'Enter the 6-digit code.') : '');
+    if (issue) { error = issue; status(); return; }
+    const button = target.querySelector<HTMLButtonElement>('#account-save')!;
+    button.disabled = true; error = ''; note = t('正在验证并保存…', 'Verifying and saving…'); status();
+    try {
+      await api('auth/password', jsonBody('POST', { currentPassword: current, newPassword: next, ...(name ? { newUsername: name } : {}), ...(twoFactor ? { code } : {}) }));
+      window.dispatchEvent(new Event('panel-session-expired'));
+    } catch (reason) {
+      target.querySelectorAll<HTMLInputElement>('input').forEach(input => { input.value = ''; });
+      note = '';
+      if (reason instanceof APIError && reason.status === 401) { window.dispatchEvent(new Event('panel-session-expired')); return; }
+      error = (reason as Error).message; status();
+    } finally { button.disabled = false; }
+  }
+
+  // 两步验证：服务器生成密钥，扫码后输入一次验证码确认才启用；停用同样需要验证码。
+  async function openTwoFactor(enable: boolean): Promise<void> {
+    let setup: { secret: string; uri: string } | null = null;
+    if (enable) {
+      try { setup = await api<{ secret: string; uri: string }>('auth/2fa/setup', jsonBody('POST', {})); } catch (reason) { error = (reason as Error).message; status(); return; }
+    }
+    dialog.innerHTML = `<form method="dialog" class="twofactor-form"><div class="dialog-heading"><h2>${enable ? t('启用双重认证', 'Enable two-factor authentication') : t('停用双重认证', 'Disable two-factor authentication')}</h2></div><div class="dialog-body">
+      ${setup ? `<p>${t('要设定双重认证，请执行以下步骤：', 'To set up two-factor authentication, perform a few steps:')}</p><p>${t('1. 在认证应用中扫描此二维码，或复制二维码下方的密钥粘贴到应用中', '1. Scan this QR code in your authenticator app, or copy the key below it into the app')}</p>
+      <figure class="twofactor-qr"><img src="${connectionQR(setup.uri)}" width="180" height="180" alt="${t('两步验证二维码', 'Two-factor QR code')}"><figcaption><code>${esc(setup.secret)}</code></figcaption></figure><p>${t('2. 输入应用中的验证码', '2. Enter the code from the app')}</p>` : `<p>${t('输入应用中的验证码以移除双重认证。', 'Enter the code from the app to remove two-factor authentication.')}</p>`}
+      <input name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" required aria-label="${t('验证码', 'Code')}"><p class="form-error" role="alert" hidden></p></div>
+      <footer><button type="button" class="secondary-button" data-twofactor-cancel>${t('取消', 'Cancel')}</button> <button class="primary-button">${t('确认', 'Confirm')}</button></footer></form>`;
+    const body = dialog.querySelector<HTMLFormElement>('form')!, alert = dialog.querySelector<HTMLElement>('[role="alert"]')!, input = dialog.querySelector<HTMLInputElement>('[name="code"]')!;
+    dialog.querySelector('[data-twofactor-cancel]')!.addEventListener('click', () => dialog.close());
+    let busy = false;
+    body.addEventListener('submit', event => {
+      event.preventDefault();
+      if (busy) return;
+      const code = input.value.trim();
+      if (!/^\d{6}$/.test(code)) { alert.textContent = t('请输入6位验证码。', 'Enter the 6-digit code.'); alert.hidden = false; return; }
+      busy = true;
+      body.querySelectorAll<HTMLButtonElement | HTMLInputElement>('button, input').forEach(element => { element.disabled = true; });
+      void api('auth/2fa/' + (enable ? 'enable' : 'disable'), jsonBody('POST', { code })).then(() => {
+        twoFactor = enable; dialog.close();
+        error = ''; note = enable ? t('双因素认证已成功建立；下次登录需输入验证码。', 'Two-factor authentication is set up; signing in now needs a code.') : t('双因素认证已成功删除。', 'Two-factor authentication has been removed.');
+        paint();
+      }).catch(reason => {
+        alert.textContent = (reason as Error).message; alert.hidden = false;
+        body.querySelectorAll<HTMLButtonElement | HTMLInputElement>('button, input').forEach(element => { element.disabled = false; });
+      }).finally(() => { busy = false; });
+    });
+    dialog.showModal();
+    input.focus();
+  }
+
   async function restart(button: HTMLButtonElement): Promise<void> {
-    const label = top.querySelector<HTMLElement>('#panel-restart-status')!;
-    if (!window.confirm(t('确认重启面板？页面会短暂断开，Xray 会自动恢复运行。', 'Restart the panel? The page disconnects briefly and Xray resumes automatically.'))) return;
-    button.disabled = true; label.textContent = t('正在重启面板…', 'Restarting the panel…');
-    try { await api('panel/restart', jsonBody('POST', {})); }
-    catch (reason) { label.textContent = (reason as Error).message; button.disabled = false; return; }
+    if (saving) return;
+    if (dirty() && !window.confirm(t('还有未保存的修改，重启后会丢失。仍要重启面板？', 'You have unsaved changes that will be lost. Restart the panel anyway?'))) return;
+    if (!window.confirm(t('确定要重启面板吗？若重启后无法访问面板，请到服务器上查看面板日志。', 'Restart the panel? If you cannot reach it afterwards, check the panel log on the server.'))) return;
+    const access = general ? general.access.data ?? general.access.active : null;
+    const target = general && access && (general.access.pending || general.tls.pending) ? accessURL(access) : '';
+    button.disabled = true; error = ''; note = t('正在重启面板…', 'Restarting the panel…'); status();
+    try { await api('panel/restart', jsonBody('POST', {})); } catch (reason) { button.disabled = false; note = ''; error = (reason as Error).message; status(); return; }
+    // 访问地址改变时新地址与当前页面不同源，不能轮询，直接前往新地址。
+    if (target && target !== `${location.origin}${location.pathname}`) {
+      note = `${t('面板正在以新设置重启，即将前往：', 'The panel is restarting with the new settings; opening: ')}${target}`; status();
+      setTimeout(() => { location.href = target; }, 4000);
+      return;
+    }
     const started = Date.now();
     const poll = async (): Promise<void> => {
       try { if ((await fetch(apiURL('auth/status'), { cache: 'no-store' })).ok) { location.reload(); return; } } catch { /* 重启中暂时不可达。 */ }
       if (Date.now() - started < 60000) setTimeout(() => { void poll(); }, 1500);
-      else { label.textContent = t('面板未在 60 秒内恢复；如修改了访问地址，请打开新地址。', 'The panel did not come back within 60 seconds; if you changed the access address, open the new one.'); button.disabled = false; }
+      else { note = t('面板未在 60 秒内恢复，请到服务器上查看面板日志。', 'The panel did not come back within 60 seconds; check the panel log on the server.'); button.disabled = false; status(); }
     };
     setTimeout(() => { void poll(); }, 2000);
   }
-  function paint(): void {
-    tlsRoot.innerHTML = `<section><h2 class="xray-editor-title">${t('HTTPS 证书', 'HTTPS certificate')}</h2>
-      <p class="core-warning">${t('保存后点上方“重启面板”生效。自签证书需在浏览器中信任，访问地址须与证书域名或 IP 一致。', 'Click Restart panel above to apply after saving. Self-signed certificates must be trusted in the browser, and the address must match the certificate domain or IP.')}</p>
-      <p class="form-intro">${t('当前连接：', 'Current connection: ')}${location.protocol === 'https:' ? 'HTTPS' : 'HTTP'}${t('。', '. ')}${status?.active ? `${t('已加载面板证书 ·', 'Panel certificate loaded ·')} ${esc(status.serverNames.join(t('、', ', ')) || t('无可用域名', 'no usable names'))}${t('；TLS 入站可复用。', '; TLS inbounds can reuse it.')}` : t('尚无已生效的面板证书，不能自动复用。', 'No active panel certificate; it cannot be reused.')}${status?.data ? status.revision !== status.activeRevision ? t(' 有待重启生效的设置；当前仍用启动时的证书。', ' Settings are waiting for a restart; the certificate loaded at startup is still in use.') : t(' 保存设置已在本次启动加载；文件更新需再次重启。', ' Saved settings were loaded at this startup; file updates need another restart.') : ''}</p>
-      ${persistent ? `<form id="panel-tls-form"><label class="form-field" for="panel-cert">${t('证书绝对路径', 'Certificate absolute path')}<input id="panel-cert" name="certificateFile" required maxlength="4096" autocomplete="off" value="${esc(status?.data?.certificateFile ?? '')}" ${!status || saving || loading ? 'disabled' : ''}></label>
-        <label class="form-field" for="panel-key">${t('私钥绝对路径', 'Private key absolute path')}<input id="panel-key" name="keyFile" required maxlength="4096" autocomplete="off" value="${esc(status?.data?.keyFile ?? '')}" ${!status || saving || loading ? 'disabled' : ''}></label>
-        <p class="form-hint">${t('只填本机 PEM 文件路径，不在浏览器上传或显示私钥。保存会检查配对和有效期；不自动申请证书。设置损坏或重启时文件不可读将拒绝启动，不回退到 HTTP。此设置不包含在业务备份中。', 'Enter local PEM file paths only; the private key is never uploaded or shown in the browser. Saving checks key pairing and validity; certificates are not requested automatically. If the settings are corrupted or the files are unreadable at restart, o-ui refuses to start instead of falling back to HTTP. This setting is not included in backups.')}</p>
-        <p class="form-error" role="alert" tabindex="-1" ${error ? '' : 'hidden'}>${esc(error)}</p><p role="status" class="core-message">${esc(loading ? t('正在读取…', 'Reading…') : message)}</p>
-        <button id="panel-tls-save" class="primary-button" ${!status || saving || loading || reloadRequired ? 'disabled' : ''}>${saving ? t('正在校验证书…', 'Verifying certificate…') : t('保存证书设置', 'Save certificate settings')}</button></form><button type="button" class="secondary-button" data-reload ${loading || saving ? 'disabled' : ''}>${t('重新读取已保存设置', 'Reload saved settings')}</button>` : t('<p class="form-hint">离线演示不保存证书设置，请使用本机服务。</p>', '<p class="form-hint">The offline demo does not save certificate settings; use the running panel.</p>')}</section>`;
-    tlsRoot.querySelector('[data-reload]')?.addEventListener('click', () => { void load(); });
-    tlsRoot.querySelector<HTMLFormElement>('#panel-tls-form')?.addEventListener('submit', event => {
-      event.preventDefault(); if (!status || saving || loading || reloadRequired) return;
-      const form = event.target as HTMLFormElement, data = new FormData(form);
-      saving = true; error = ''; message = '';
-      updateControls();
-      void api<PanelTLSStatus>('panel/tls', jsonBody('PUT', { revision: status.revision, data: { certificateFile: String(data.get('certificateFile')).trim(), keyFile: String(data.get('keyFile')).trim() } })).then(next => {
-        status = next; message = t('证书设置已保存，点“重启面板”后生效。', 'Certificate settings saved; click Restart panel to apply.');
-      }).catch(reason => {
-        reloadRequired = !(reason instanceof APIError) || reason.status === 409 || reason.status >= 500;
-        error = `${(reason as Error).message}${t('；路径输入已保留。', '; the paths you entered are kept.')}${reloadRequired ? t('请先复制需要保留的路径，再重新读取已保存设置以确认结果，不要重复提交旧修订。', ' Copy any paths you want to keep, then reload the saved settings to confirm the result; do not resubmit the old revision.') : t('请修正后重试。', ' Please correct it and retry.')}`;
-      }).finally(() => {
-        saving = false;
-        if (root.isConnected) { if (error) updateControls(true); else paint(); }
-      });
-    });
-  }
-  function updateControls(focusError = false): void {
-    tlsRoot.querySelectorAll<HTMLInputElement>('input').forEach(element => { element.disabled = !status || saving || loading; });
-    const save = tlsRoot.querySelector<HTMLButtonElement>('#panel-tls-save');
-    if (save) { save.disabled = !status || saving || loading || reloadRequired; save.textContent = saving ? t('正在校验证书…', 'Verifying certificate…') : t('保存证书设置', 'Save certificate settings'); }
-    const reload = tlsRoot.querySelector<HTMLButtonElement>('[data-reload]');
-    if (reload) reload.disabled = loading || saving;
-    const label = tlsRoot.querySelector<HTMLElement>('[role="alert"]');
-    if (label) { label.textContent = error; label.hidden = !error; if (error && focusError) label.focus(); }
-    const feedback = tlsRoot.querySelector<HTMLElement>('[role="status"]');
-    if (feedback) feedback.textContent = loading ? t('正在读取…', 'Reading…') : saving ? t('正在校验证书…', 'Verifying certificate…') : message;
-  }
+
   async function load(): Promise<void> {
-    if (loading || saving) return;
-    const reloading = status !== null;
-    if (reloading && !window.confirm(t('重新读取会丢弃本页未保存的证书和私钥路径，请先复制需要保留的内容。仅读取已保存设置，不会重启面板或Xray，也不会清空密码表单。是否继续？', 'Reloading discards unsaved certificate and key paths on this page; copy anything you want to keep first. Only saved settings are read; o-ui and Xray are not restarted and the password form is not cleared. Continue?'))) return;
-    loading = true; error = ''; message = ''; updateControls();
-    let loaded = false;
+    if (loading) return;
+    loading = true; error = ''; note = ''; status();
     try {
-      const next = await api<PanelTLSStatus>('panel/tls');
-      status = next; reloadRequired = false; loaded = true;
-      message = reloading ? t('已重新读取已保存设置；未重启面板或Xray。', 'Saved settings reloaded; o-ui and Xray were not restarted.') : '';
-    } catch (reason) { error = `${(reason as Error).message}${reloading ? t('；原路径输入仍保留。', '; the paths you entered are kept.') : ''}`; }
-    finally { loading = false; if (root.isConnected) { if (loaded) paint(); else updateControls(true); } }
+      const [g, p, s, auth, factor] = await Promise.all([
+        api<GeneralStatus>('panel/general'), api<PlanStatus>('system/plan'), api<SubscriptionStatus>('panel/subscription'),
+        api<{ username: string }>('auth/status'), api<{ enabled: boolean }>('auth/2fa'),
+      ]);
+      general = g; plan = p; subscription = s; username = auth.username; twoFactor = factor.enabled;
+      try { interfaces = (await api<{ interfaces: string[] }>('system/status')).interfaces ?? []; } catch { interfaces = []; }
+      baseline = saved(); draft = copy(baseline); reloadRequired = false;
+    } catch (reason) { error = `${(reason as Error).message}${t('；点“重新读取”重试。', '; click Reload to retry.')}`; }
+    finally { loading = false; paint(); }
   }
-  return { render() { if (!tlsRoot.innerHTML) paint(); if (persistent && !status) void load(); access?.render(); plan?.render(); }, clearPassword() { password?.clear(); } };
+
+  return {
+    render() { if (!root.innerHTML) paint(); if (persistent && !general && !loading) void load(); },
+    clearPassword() { root.querySelector('#settings-account')?.querySelectorAll<HTMLInputElement>('input').forEach(input => { input.value = ''; }); },
+  };
 }

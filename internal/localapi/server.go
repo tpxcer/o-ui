@@ -49,6 +49,8 @@ func handler(manager *core.Manager, state *store.Store, dist string, hosts []str
 	registerBackup(mux, rt)
 	registerPanelTLS(mux, rt)
 	registerPanelAccess(mux, rt, access)
+	registerPanelGeneral(mux, rt, access)
+	registerTwoFactor(mux, state)
 	registerSubscriptions(mux, rt)
 	registerServerPlan(mux, rt)
 	registerPublicInfo(mux, rt)
@@ -56,6 +58,7 @@ func handler(manager *core.Manager, state *store.Store, dist string, hosts []str
 	registerSubscriptionSettings(mux, state)
 	registerPanelRestart(mux)
 	registerApplySaved(mux, rt)
+	registerOutboundTraffic(mux, rt)
 	registerFreePort(mux, state)
 	mux.HandleFunc("GET /api/logs", func(w http.ResponseWriter, r *http.Request) {
 		if rt == nil || rt.logs == nil {
@@ -98,13 +101,19 @@ func handler(manager *core.Manager, state *store.Store, dist string, hosts []str
 			respond(w, 500, map[string]string{"error": i18n.T("登录服务暂不可用", "Sign-in service temporarily unavailable")})
 			return
 		}
-		respond(w, 200, map[string]any{"initialized": initialized, "authenticated": session.Username != "", "username": session.Username})
+		twoFactor, err := state.TwoFactorEnabled(r.Context())
+		if err != nil {
+			respond(w, 500, map[string]string{"error": i18n.T("登录服务暂不可用", "Sign-in service temporarily unavailable")})
+			return
+		}
+		respond(w, 200, map[string]any{"initialized": initialized, "authenticated": session.Username != "", "username": session.Username, "twoFactor": twoFactor})
 	})
 	credentials := func(setup bool) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			var request struct {
 				Username string `json:"username"`
 				Password string `json:"password"`
+				Code     string `json:"code,omitempty"`
 			}
 			if !readJSON(w, r, &request, 2048) {
 				return
@@ -114,14 +123,14 @@ func handler(manager *core.Manager, state *store.Store, dist string, hosts []str
 			if setup {
 				session, err = state.Initialize(r.Context(), request.Username, request.Password)
 			} else {
-				session, err = state.Login(r.Context(), request.Username, request.Password)
+				session, err = state.LoginWithCode(r.Context(), request.Username, request.Password, request.Code)
 			}
 			if err != nil {
 				code, message := 500, i18n.T("登录服务暂不可用", "Sign-in service temporarily unavailable")
 				switch {
 				case errors.Is(err, store.ErrInitialized):
 					code, message = 409, err.Error()
-				case errors.Is(err, store.ErrCredentials):
+				case errors.Is(err, store.ErrCredentials), errors.Is(err, store.ErrTwoFactorCredentials):
 					code, message = 401, err.Error()
 				case errors.Is(err, store.ErrLimited):
 					code, message = 429, err.Error()
@@ -132,7 +141,7 @@ func handler(manager *core.Manager, state *store.Store, dist string, hosts []str
 				respond(w, code, map[string]string{"error": message})
 				return
 			}
-			http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: session.Token, Path: "/", HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode, MaxAge: int(store.SessionLifetime.Seconds()), Expires: session.ExpiresAt})
+			http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: session.Token, Path: "/", HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode, MaxAge: int(time.Until(session.ExpiresAt).Round(time.Second) / time.Second), Expires: session.ExpiresAt})
 			respond(w, 200, map[string]any{"authenticated": true, "username": session.Username, "expiresAt": session.ExpiresAt})
 		}
 	}
@@ -143,6 +152,7 @@ func handler(manager *core.Manager, state *store.Store, dist string, hosts []str
 			CurrentPassword string `json:"currentPassword"`
 			NewPassword     string `json:"newPassword"`
 			NewUsername     string `json:"newUsername,omitempty"`
+			Code            string `json:"code,omitempty"`
 		}
 		if !readJSON(w, r, &request, 2048) {
 			return
@@ -151,12 +161,12 @@ func handler(manager *core.Manager, state *store.Store, dist string, hosts []str
 			respond(w, 400, map[string]string{"error": i18n.T("请填写新用户名或新密码", "Enter a new username or a new password")})
 			return
 		}
-		if err := state.ChangeAccount(r.Context(), token(r), request.CurrentPassword, request.NewUsername, request.NewPassword); err != nil {
+		if err := state.ChangeAccountWithCode(r.Context(), token(r), request.CurrentPassword, request.NewUsername, request.NewPassword, request.Code); err != nil {
 			code, message := 500, i18n.T("密码修改失败，请重试；若请求超时，请尝试新密码登录确认结果", "Password change failed; retry, and if the request timed out try signing in with the new password to confirm")
 			switch {
 			case errors.Is(err, store.ErrSession):
 				code, message = 401, err.Error()
-			case errors.Is(err, store.ErrCurrentPassword):
+			case errors.Is(err, store.ErrCurrentPassword), errors.Is(err, store.ErrTwoFactorCode):
 				code, message = 403, err.Error()
 			case errors.Is(err, store.ErrLimited):
 				code, message = 429, err.Error()

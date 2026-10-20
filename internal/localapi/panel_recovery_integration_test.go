@@ -201,7 +201,7 @@ func TestOfficialPanelAccessRecovery(t *testing.T) {
 	call("POST", "runtime/resume", map[string]any{"revision": history.Revision, "confirmation": "确认恢复上次应用"}, 200)
 	connect()
 	decoded, err := base64.StdEncoding.DecodeString(string(subscriptionGET(t, handler, grant.Path, 200)))
-	if err != nil || string(decoded) != exported.Link+"\n" {
+	if err != nil || !sameShareLink(string(decoded), exported.Link) {
 		t.Fatal("recovery rotated subscription or original proxy identity")
 	}
 	current, _, err := rt.ledger(ctx)

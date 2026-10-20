@@ -62,3 +62,26 @@
 .settings-block + .settings-block { margin-top: 22px; padding-top: 22px; border-top: 1px solid var(--border); }
 .panel-restart-bar { align-items: center; }
 .panel-restart-bar p { margin: 0; flex: 1 1 260px; }
+.table-scroll { overflow-x: auto; border: 1px solid var(--border); border-radius: 10px; }
+.xray-table { width: 100%; min-width: 640px; border-collapse: collapse; font-size: 13px; }
+.xray-table th { color: var(--muted); font-size: 12px; font-weight: 500; background: var(--raised); text-align: left; padding: 12px 14px; white-space: nowrap; }
+.xray-table td { padding: 12px 14px; border-top: 1px solid var(--border); vertical-align: middle; overflow-wrap: anywhere; }
+.xray-table td:first-child, .xray-table th:first-child { width: 56px; }
+.xray-table .row-actions { display: flex; gap: 4px; align-items: center; justify-content: flex-end; flex-wrap: nowrap; }
+.xray-table .icon-button { width: 30px; height: 30px; }
+.danger-text { color: var(--danger); }
+.multi-select { width: 100%; }
+.multi-select > summary { cursor: pointer; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--raised); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.multi-options { display: grid; gap: 4px; padding: 10px 4px 0; }
+.multi-options .check-field { margin: 0; }
+.check-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px 12px; }
+.field-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 0 12px; }
+.import-row { display: flex; gap: 8px; align-items: flex-end; }
+.import-row .form-field { flex: 1; }
+.json-editor { width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.segmented { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.segmented label { cursor: pointer; }
+.segmented input { position: absolute; opacity: 0; }
+.segmented span { display: inline-block; padding: 6px 12px; border: 1px solid var(--border); border-radius: 999px; font-size: 13px; }
+.segmented input:checked + span { border-color: var(--blue); color: var(--blue); }
+.segmented input:focus-visible + span { outline: 2px solid var(--blue); outline-offset: 2px; }

@@ -1,9 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildSettings, defaultSettings, settingsTabs } from '../src/xray-settings-model.ts';
+import { buildSettings, defaultSettings } from '../src/xray-settings-model.ts';
 
-test('设置六分类、默认独立且没有可连接入站或控制接口', () => {
-  assert.equal(settingsTabs.length, 6);
+test('默认设置独立且没有可连接入站或控制接口', () => {
   const draft = defaultSettings(), before = JSON.stringify(draft);
   const config = buildSettings(draft);
   assert.equal(JSON.stringify(draft), before);

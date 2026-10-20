@@ -14,8 +14,12 @@ func (s *Store) ChangePassword(ctx context.Context, token, current, next string)
 	return s.ChangeAccount(ctx, token, current, "", next)
 }
 
-// ChangeAccount校验当前密码后修改用户名和/或密码（空值表示不改），成功后全部会话失效。
 func (s *Store) ChangeAccount(ctx context.Context, token, current, username, next string) error {
+	return s.ChangeAccountWithCode(ctx, token, current, username, next, "")
+}
+
+// ChangeAccountWithCode校验当前密码（已启用两步验证时还须验证码）后修改用户名和/或密码（空值表示不改），成功后全部会话失效。
+func (s *Store) ChangeAccountWithCode(ctx context.Context, token, current, username, next, code string) error {
 	if len(token) != 43 {
 		return ErrSession
 	}
@@ -66,6 +70,11 @@ func (s *Store) ChangeAccount(ctx context.Context, token, current, username, nex
 		}
 		return ErrCurrentPassword
 	}
+	if enabled, ok, err := checkTwoFactorTx(ctx, tx, code, now); err != nil {
+		return err
+	} else if enabled && !ok {
+		return failAttempt(ctx, tx, failures, reset, ErrTwoFactorCode)
+	}
 	if next != "" {
 		if current == next {
 			return ErrSamePassword
@@ -92,7 +101,7 @@ func (s *Store) ChangeAccount(ctx context.Context, token, current, username, nex
 	return tx.Commit()
 }
 
-// ResetAdministrator供服务器上的离线管理命令重置用户名和密码（不需要旧密码），并使全部会话失效、清除限速。
+// ResetAdministrator供服务器上的离线管理命令重置用户名和密码（不需要旧密码），并使全部会话失效、清除限速与两步验证。
 func (s *Store) ResetAdministrator(ctx context.Context, username, password string) error {
 	if err := ValidateAdministrator(username, password); err != nil {
 		return err
@@ -119,6 +128,9 @@ func (s *Store) ResetAdministrator(ctx context.Context, username, password strin
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, "UPDATE auth_throttle SET failures=0,reset_at=0 WHERE id=1"); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "DELETE FROM documents WHERE name=?", TwoFactorDocument); err != nil {
 		return err
 	}
 	return tx.Commit()

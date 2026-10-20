@@ -120,7 +120,7 @@ func TestOfficialProxyEndpointBoundaries(t *testing.T) {
 	}
 	grant := subscriptionCall(t, handler, "rotate", subscriptionRequest{ClientID: "client-one", WorkspaceRevision: 2, Confirm: true}, &http.Cookie{Name: sessionCookie, Value: session.Token}, 200)
 	decoded, err := base64.StdEncoding.DecodeString(string(subscriptionGET(t, handler, grant.Path, 200)))
-	if err != nil || string(decoded) != exported.Link+"\n" {
+	if err != nil || !sameShareLink(string(decoded), exported.Link) {
 		t.Fatal("subscription did not use same share address")
 	}
 	for _, path := range []string{"/api/runtime/status", "/api/workspace", grant.Path} {
