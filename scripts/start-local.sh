@@ -58,11 +58,11 @@ esac
 case "$(uname -m)" in
   x86_64|amd64) panel_arch=amd64 ;;
   arm64|aarch64) panel_arch=arm64 ;;
-  *) say '仅支持ARM64或x86_64测试环境，尚未启动面板。' 'Only ARM64 or x86_64 is supported; panel not started.'; exit 1 ;;
+  *) say '仅支持ARM64或x86_64，尚未启动面板。' 'Only ARM64 or x86_64 is supported; panel not started.'; exit 1 ;;
 esac
 if [ "$panel_target" != "$panel_os-$panel_arch" ]; then
-  say "测试包目标为${panel_target}，当前系统为${panel_os}-${panel_arch}；平台不匹配，尚未启动面板。" "Package targets ${panel_target} but this system is ${panel_os}-${panel_arch}; platform mismatch, panel not started."
+  say "安装包目标为${panel_target}，当前系统为${panel_os}-${panel_arch}；平台不匹配，尚未启动面板。" "Package targets ${panel_target} but this system is ${panel_os}-${panel_arch}; platform mismatch, panel not started."
   exit 1
 fi
-say '默认启动本机回环测试面板；已保存的访问设置优先。不安装系统服务、不改防火墙。' 'Starting the local loopback panel; saved access settings take precedence. No system service or firewall changes.'
+say '正在启动 o-ui；使用已保存的访问设置（未设置时仅本机访问）。' 'Starting o-ui; saved access settings are used (local only until configured).'
 exec "$panel_bundle/bin/o-ui" -listen "127.0.0.1:$panel_port" -data "$panel_data/core" -state "$panel_data/panel" -dist "$panel_bundle/dist"

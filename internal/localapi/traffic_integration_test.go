@@ -429,8 +429,9 @@ func TestOfficialTrafficLimits(t *testing.T) {
 						rt.mu.Lock()
 						_, candidateErr := rt.candidate(context.Background(), op)
 						rt.mu.Unlock()
-						if candidateErr == nil || !strings.Contains(candidateErr.Error(), "开启流量统计") {
-							t.Fatal("quota without stats accepted", candidateErr)
+						// 统计常开：旧草稿的statistics=false被忽略，额度仍可执行。
+						if candidateErr != nil {
+							t.Fatal("statistics=false must not disable quota enforcement", candidateErr)
 						}
 						// 故障注入只作用于当前临时夹具，既验证CLI失败，也验证账本不可用。
 						rt.mu.Lock()

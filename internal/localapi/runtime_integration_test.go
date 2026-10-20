@@ -169,6 +169,8 @@ func TestOfficialRuntimeAPI(t *testing.T) {
 	settings := map[string]any{"freedomStrategy": "AsIs", "routingStrategy": "AsIs", "probeURL": "https://example.test/", "statistics": true, "logLevel": "warning", "accessLog": false, "dnsLog": false, "rules": "[]", "outbounds": fmt.Sprintf(`[{"tag":"direct","protocol":"freedom","settings":{"finalRules":[{"action":"allow","network":"tcp","ip":["127.0.0.1/32"],"port":"%s"}]}}]`, originPort), "balancers": "[]", "dns": `{"servers":["localhost"]}`, "advanced": "{}"}
 	settingsData, _ := json.Marshal(settings)
 	request("PUT", "/api/settings", store.Document{Data: settingsData}, 200)
+	// 保存即生效会先启动核心；停止后再单独验证预检不启动、显式应用才启动。
+	request("POST", "/api/runtime/stop", map[string]any{}, 200)
 	operation := runtimeRequest{Version: version, WorkspaceRevision: 1, SettingsRevision: 1}
 	request("POST", "/api/runtime/preflight", operation, 200)
 	if rt.engine.Status().Running {
@@ -387,7 +389,10 @@ func TestOfficialRuntimeAPI(t *testing.T) {
 	}
 	settings["outbounds"] = previousOutbounds
 	settingsData, _ = json.Marshal(settings)
-	request("PUT", "/api/settings", store.Document{Revision: 2, Data: settingsData}, 200)
+	// 直接写库模拟“已保存但自动应用未生效”，以下继续验证显式应用与历史回退。
+	if _, err = s.SaveDocument(context.Background(), "xray-settings", 2, settingsData); err != nil {
+		t.Fatal(err)
+	}
 	operation.SettingsRevision = 3
 	// 原路径不再存在：若旧运行配置未保存证书快照，接下来的回退就无法启动。
 	if err = os.Rename(cert, cert+".moved"); err != nil {
@@ -404,7 +409,9 @@ func TestOfficialRuntimeAPI(t *testing.T) {
 	defer occupied.Close()
 	draft.Inbounds[0].Port = occupied.Addr().(*net.TCPAddr).Port
 	workspace, _ = json.Marshal(draft)
-	request("PUT", "/api/workspace", store.Document{Revision: 1, Data: workspace}, 200)
+	if _, err = s.SaveDocument(context.Background(), "workspace", 1, workspace); err != nil {
+		t.Fatal(err)
+	}
 	operation.WorkspaceRevision = 2
 	request("POST", "/api/runtime/apply", operation, 422)
 	logData := request("GET", "/api/logs", nil, 200)

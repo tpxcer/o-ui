@@ -1083,6 +1083,8 @@ cmd_update() {
   systemctl stop o-ui || true
   install_files
   deploy_firewall_access
+  # 旧版本未装Xray时补装官方最新正式版（已有选择则保持不变）；失败只警告
+  install_core
   write_unit
   systemctl daemon-reload
   if [ -n "$was_active" ]; then

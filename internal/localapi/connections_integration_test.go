@@ -144,6 +144,8 @@ func TestOfficialFourExportedConnections(t *testing.T) {
 			settings := map[string]any{"freedomStrategy": "AsIs", "routingStrategy": "AsIs", "probeURL": "https://example.test/", "statistics": true, "logLevel": "warning", "accessLog": false, "dnsLog": false, "rules": "[]", "outbounds": fmt.Sprintf(`[{"tag":"direct","protocol":"freedom","settings":{"finalRules":[{"action":"allow","network":"tcp","ip":["127.0.0.1/32"],"port":"%s"},{"action":"allow","network":"udp","ip":["127.0.0.1/32"],"port":"%d"}]}}]`, originPort, udpTarget.Port), "balancers": "[]", "dns": `{"servers":["localhost"]}`, "advanced": "{}"}
 			settingsData, _ := json.Marshal(settings)
 			request("PUT", "/api/settings", store.Document{Data: settingsData}, 200)
+			// 保存即生效会启动核心；停止后导出须拒绝，再经显式应用恢复。
+			request("POST", "/api/runtime/stop", map[string]any{}, 200)
 			operation := runtimeRequest{Version: version, WorkspaceRevision: 1, SettingsRevision: 1}
 			request("POST", "/api/runtime/connection", connectionRequest{ClientID: "client-one", WorkspaceRevision: 1}, 422)
 			request("POST", "/api/runtime/apply", operation, 200)
@@ -426,7 +428,10 @@ func TestOfficialFourExportedConnections(t *testing.T) {
 			checkUDP("udp-restored-auth", true)
 			draft.Clients[0].Enabled = false
 			workspace, _ = json.Marshal(draft)
-			request("PUT", "/api/workspace", store.Document{Revision: operation.WorkspaceRevision, Data: workspace}, 200)
+			// 直接写库模拟“已保存但未生效”的较新草稿（保存即生效失败时的状态）。
+			if _, err := s.SaveDocument(context.Background(), "workspace", operation.WorkspaceRevision, workspace); err != nil {
+				t.Fatal(err)
+			}
 			operation.WorkspaceRevision++
 			request("POST", "/api/runtime/connection", connectionRequest{ClientID: "client-one", WorkspaceRevision: operation.WorkspaceRevision}, 409)
 			// 五个变体重建运行控制器；较新的停用草稿不能冒充上次已应用配置。

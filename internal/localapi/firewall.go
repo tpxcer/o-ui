@@ -26,11 +26,15 @@ var runFirewall = func(ctx context.Context, action, port, protocol string) (stri
 	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	var output bytes.Buffer
+	// 只把助手的标准输出给页面；sudo的主机名解析等警告走标准错误，仅在失败时显示。
+	var output, warnings bytes.Buffer
 	command := exec.CommandContext(ctx, sudo, "-n", firewallHelper, action, port, protocol)
-	command.Stdout, command.Stderr = &output, &output
+	command.Stdout, command.Stderr = &output, &warnings
 	err = command.Run()
 	text := strings.TrimSpace(output.String())
+	if err != nil && text == "" {
+		text = strings.TrimSpace(warnings.String())
+	}
 	if len(text) > 300 {
 		text = text[:300]
 	}

@@ -103,7 +103,7 @@ test('启动命令提示按系统区域显示简体中文或英文', async () =>
   }
   const data = join(root, 'data');
   const english = await execute('sh', [join(output, 'o-ui'), data], { env: { ...process.env, LC_ALL: 'en_US.UTF-8' } });
-  assert.match(english.stderr, /Starting the local loopback panel/);
+  assert.match(english.stderr, /Starting o-ui/);
 });
 
 test('本机包不完整或资源摘要改变时拒绝启动', async () => {
@@ -125,7 +125,7 @@ test('启动脚本核对构建目标与uname，匹配才执行；错包不创建
   await writeFile(mock, '#!/bin/sh\ncase "$1" in -s) printf "%s\\n" Linux;; -m) printf "%s\\n" aarch64;; *) exit 1;; esac\n', { mode: 0o700 });
   const result = await execute('sh', [join(output, 'o-ui'), data], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } });
   assert.match(result.stdout, /127\.0\.0\.1:5180/);
-  assert.match(result.stderr, /默认启动本机回环.*已保存的访问设置优先/);
+  assert.match(result.stderr, /正在启动 o-ui；使用已保存的访问设置/);
 });
 
 test('启动平台识别覆盖两种系统的常用架构名，未知系统或架构拒绝', async () => {

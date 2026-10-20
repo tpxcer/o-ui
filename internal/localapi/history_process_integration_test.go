@@ -280,14 +280,15 @@ func TestOfficialHistoryProcessRecovery(t *testing.T) {
 		roundTrip(id, true)
 	}
 	// 较新草稿与所选版本均不同；恢复不得夹带这些尚未应用的内容。
+	// 保存即生效：先保存预检必然失败的设置，随后的草稿保存同样无法应用，从而得到“已保存未应用”的较新内容。
+	settings["outbounds"] = `[{"tag":"direct","protocol":"vless","settings":{"vnext":[]}}]`
+	data, _ = json.Marshal(settings)
+	call("PUT", "settings", store.Document{Revision: 1, Data: data}, 200)
 	for index := range draft.Clients {
 		draft.Clients[index].Enabled = false
 	}
 	data, _ = json.Marshal(draft)
 	call("PUT", "workspace", store.Document{Revision: 1, Data: data}, 200)
-	settings["outbounds"] = `[{"tag":"direct","protocol":"vless","settings":{"vnext":[]}}]`
-	data, _ = json.Marshal(settings)
-	call("PUT", "settings", store.Document{Revision: 1, Data: data}, 200)
 	call("POST", "core/install", map[string]string{"version": "26.3.27"}, 200)
 	workspaceBefore, settingsBefore := readDoc("workspace"), readDoc("xray-settings")
 	stop(false)

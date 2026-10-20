@@ -68,6 +68,8 @@ func TestOfficialProxyEndpointBoundaries(t *testing.T) {
 	draft.Inbounds[0].Connection = &connectionDraft{CertificateFile: cert, KeyFile: key, ServerName: "runtime-qa.test", Path: "/endpoint-test", Mode: "auto"}
 	data, _ := json.Marshal(draft)
 	call("PUT", "workspace", store.Document{Data: data}, 200)
+	// 保存即生效（参照OUI）不再要求非回环确认；显式应用接口仍要求确认，停止后单独验证。
+	call("POST", "runtime/stop", map[string]any{}, 200)
 	op := runtimeRequest{Version: version, WorkspaceRevision: 1}
 	call("POST", "runtime/preflight", op, 200)
 	call("POST", "runtime/apply", op, 422)
@@ -86,7 +88,11 @@ func TestOfficialProxyEndpointBoundaries(t *testing.T) {
 		t.Fatal(err)
 	}
 	data, _ = json.Marshal(record)
-	doc, err := s.SaveDocument(context.Background(), appliedDocument, 0, data)
+	current, err := s.ReadDocument(context.Background(), appliedDocument)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := s.SaveDocument(context.Background(), appliedDocument, current.Revision, data)
 	if err != nil {
 		t.Fatal(err)
 	}
