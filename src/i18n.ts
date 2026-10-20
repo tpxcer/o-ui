@@ -14,6 +14,7 @@ function detect(): Lang {
 
 export const lang: Lang = detect();
 export const locale = lang === 'en' ? 'en-US' : 'zh-CN';
+export const languageNames: Record<Lang, string> = { zh: '简体中文', en: 'English' };
 
 export function t(zh: string, en: string): string { return lang === 'en' ? en : zh; }
 

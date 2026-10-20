@@ -17,6 +17,7 @@ import (
 
 	"independent-panel/internal/core"
 	"independent-panel/internal/i18n"
+	"independent-panel/internal/monitor"
 	"independent-panel/internal/store"
 )
 
@@ -51,6 +52,9 @@ func handler(manager *core.Manager, state *store.Store, dist string, hosts []str
 	registerSubscriptions(mux, rt)
 	registerServerPlan(mux, rt)
 	registerPublicInfo(mux, rt)
+	registerPanelVersion(mux)
+	registerSubscriptionSettings(mux, state)
+	registerPanelRestart(mux)
 	mux.HandleFunc("GET /api/logs", func(w http.ResponseWriter, r *http.Request) {
 		if rt == nil || rt.logs == nil {
 			respond(w, 503, map[string]string{"error": i18n.T("诊断日志尚未启动", "Diagnostics log is not running")})
@@ -70,7 +74,16 @@ func handler(manager *core.Manager, state *store.Store, dist string, hosts []str
 			respond(w, 503, map[string]string{"error": i18n.T("系统采集尚未启动", "System sampling is not running")})
 			return
 		}
-		respond(w, 200, rt.monitor.Snapshot())
+		// 网速只算面板业务；网卡名单独给出，供服务器套餐选择计量网卡。
+		snapshot, interfaces := rt.monitor.Snapshot(), []string{}
+		if snapshot.Network != nil {
+			interfaces = snapshot.Network.Interfaces
+		}
+		snapshot.Network, snapshot.History = rt.business.network()
+		respond(w, 200, struct {
+			monitor.Snapshot
+			Interfaces []string `json:"interfaces"`
+		}{snapshot, interfaces})
 	})
 	mux.HandleFunc("GET /api/auth/status", func(w http.ResponseWriter, r *http.Request) {
 		initialized, err := state.Initialized(r.Context())
@@ -127,11 +140,16 @@ func handler(manager *core.Manager, state *store.Store, dist string, hosts []str
 		var request struct {
 			CurrentPassword string `json:"currentPassword"`
 			NewPassword     string `json:"newPassword"`
+			NewUsername     string `json:"newUsername,omitempty"`
 		}
 		if !readJSON(w, r, &request, 2048) {
 			return
 		}
-		if err := state.ChangePassword(r.Context(), token(r), request.CurrentPassword, request.NewPassword); err != nil {
+		if request.NewPassword == "" && request.NewUsername == "" {
+			respond(w, 400, map[string]string{"error": i18n.T("请填写新用户名或新密码", "Enter a new username or a new password")})
+			return
+		}
+		if err := state.ChangeAccount(r.Context(), token(r), request.CurrentPassword, request.NewUsername, request.NewPassword); err != nil {
 			code, message := 500, i18n.T("密码修改失败，请重试；若请求超时，请尝试新密码登录确认结果", "Password change failed; retry, and if the request timed out try signing in with the new password to confirm")
 			switch {
 			case errors.Is(err, store.ErrSession):
@@ -141,7 +159,7 @@ func handler(manager *core.Manager, state *store.Store, dist string, hosts []str
 			case errors.Is(err, store.ErrLimited):
 				code, message = 429, err.Error()
 				w.Header().Set("Retry-After", "900")
-			case errors.Is(err, store.ErrSamePassword), store.ValidatePassword(request.NewPassword) != nil:
+			case errors.Is(err, store.ErrSamePassword), request.NewPassword != "" && store.ValidatePassword(request.NewPassword) != nil, request.NewUsername != "" && store.ValidateUsername(request.NewUsername) != nil:
 				code, message = 400, err.Error()
 			}
 			respond(w, code, map[string]string{"error": message})
@@ -209,7 +227,7 @@ func handler(manager *core.Manager, state *store.Store, dist string, hosts []str
 			respond(w, code, map[string]string{"error": message})
 			return
 		}
-		respond(w, 200, doc)
+		respond(w, 200, rt.saved(r.Context(), doc))
 	})
 	mux.HandleFunc("PUT /api/settings", func(w http.ResponseWriter, r *http.Request) {
 		if rt != nil {
@@ -233,7 +251,7 @@ func handler(manager *core.Manager, state *store.Store, dist string, hosts []str
 			respond(w, code, map[string]string{"error": message})
 			return
 		}
-		respond(w, 200, doc)
+		respond(w, 200, rt.saved(r.Context(), doc))
 	})
 	mux.HandleFunc("GET /api/core/status", func(w http.ResponseWriter, r *http.Request) {
 		status := manager.Status()

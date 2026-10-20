@@ -13,7 +13,7 @@ export interface RuntimeStatus {
 export function runtimeStatusText(status: RuntimeStatus | null): string {
   if (!status) return t('核心运行状态未连接', 'Core status unavailable');
   if (status.running) return `${t('运行中 v', 'Running v')}${status.version ?? ''} · ${status.inbounds} ${t('条代理入站', 'proxy inbounds')}`;
-  return status.unexpectedExit ? t('独立核心异常退出 · 未自动重启，请检查后重新应用', 'Core exited unexpectedly · not restarted automatically; check and apply again') : t('独立核心已停止', 'Core stopped');
+  return status.unexpectedExit ? t('Xray 异常退出 · 未自动重启，请检查后重新应用', 'Xray exited unexpectedly · not restarted automatically; check and apply again') : t('Xray 已停止', 'Xray stopped');
 }
 export interface RuntimeHistory {
   revision: number; available: boolean; version?: string; workspaceRevision: number; settingsRevision: number; inbounds: number; appliedAt?: string; issue?: string; nonLoopbackProxy?: boolean;
@@ -21,7 +21,7 @@ export interface RuntimeHistory {
 export function runtimeHistoryText(history: RuntimeHistory | null): string {
   if (!history) return t('运行历史未读取，不能恢复。', 'Run history not loaded; cannot restore.');
   if (history.issue) return history.issue;
-  if (!history.appliedAt) return t('尚无成功应用记录，请先预检并应用已保存配置。', 'No successful apply yet; preflight and apply the saved configuration first.');
+  if (!history.appliedAt) return t('尚无成功应用记录。', 'Nothing has been applied yet.');
   const date = new Date(history.appliedAt);
   const time = Number.isNaN(date.getTime()) ? t('时间未知', 'Unknown time') : date.toLocaleString(locale, { hour12: false });
   return `${t('上次应用：v', 'Last applied: v')}${history.version ?? ''} ${t('· 入站修订', '· inbound revision')} ${history.workspaceRevision}${t('／设置修订', ' / settings revision')} ${history.settingsRevision} · ${history.inbounds} ${t('条入站 ·', 'inbounds ·')} ${time}${history.available ? '' : t('；无可恢复入站', '; no restorable inbounds')}`;
@@ -45,9 +45,9 @@ export function initRuntime(onStatus: (status: RuntimeStatus | null, at: number)
   const needsProxyConfirmation = () => action !== 'stop' && (action === 'apply' ? draftNonLoopback : !!history?.nonLoopbackProxy);
   function paint(): void {
     const compatibility = action === 'stop' ? '' : coreCompatibilityWarning(action === 'apply' ? snapshot?.version : history?.version);
-    dialog.innerHTML = `<header class="dialog-heading"><h2 id="runtime-title">${action === 'stop' ? t('停止独立 Xray', 'Stop Xray') : action === 'resume' ? t('恢复上次已应用配置', 'Restore last applied configuration') : action === 'restart' ? t('重启当前已应用配置', 'Restart applied configuration') : t('预检与应用 Xray', 'Preflight and apply Xray')}</h2><button class="icon-button" id="runtime-close" aria-label="${t('关闭核心操作', 'Close core actions')}" ${busy ? 'disabled' : ''}>×</button></header><div class="edit-body">
-      <p class="core-warning">${t('新项目独立核心；代理按已保存配置监听，管理面板和订阅的访问范围单独设置，默认仅本机。不接管旧OUI、不更新VPS、不改防火墙。应用会中断本项目现有连接；失败会保留配置并尝试恢复原核心。', 'o-ui\'s own core: proxies listen per the saved configuration, while panel and subscription access are set separately and default to this machine only. The firewall is not changed. Applying interrupts existing o-ui connections; on failure the configuration is kept and the previous core is restored if possible.')}</p>
-      <p>${esc(runtimeStatusText(status))}${t('；不会按进程名停止其他核心。', '; other cores are never stopped by process name.')}</p>
+    dialog.innerHTML = `<header class="dialog-heading"><h2 id="runtime-title">${action === 'stop' ? t('停止 Xray', 'Stop Xray') : action === 'resume' ? t('恢复上次已应用配置', 'Restore last applied configuration') : action === 'restart' ? t('重启当前已应用配置', 'Restart applied configuration') : t('预检与应用 Xray', 'Preflight and apply Xray')}</h2><button class="icon-button" id="runtime-close" aria-label="${t('关闭核心操作', 'Close core actions')}" ${busy ? 'disabled' : ''}>×</button></header><div class="edit-body">
+      <p class="core-warning">${t('应用会重启 Xray，现有连接会短暂中断；预检或启动失败时保留并尝试恢复原来的配置。', 'Applying restarts Xray and briefly interrupts existing connections; if the preflight or start fails, the previous configuration is kept and restored.')}</p>
+      <p>${esc(runtimeStatusText(status))}${''}</p>
       ${compatibility ? `<p class="core-warning" role="note">${esc(compatibility)}</p>` : ''}
       ${action === 'apply' && snapshot ? `<p class="form-intro">${t('本次使用：v', 'This run uses v')}${esc(snapshot.version)} ${t('· 入站修订', '· inbound revision')} ${snapshot.workspaceRevision}${t('／设置修订', ' / settings revision')} ${snapshot.settingsRevision}${t('。只应用已保存内容，不会自动保存其他页面未提交的修改。', '. Only saved content is applied; unsubmitted changes on other pages are not saved.')}</p><p class="form-hint">${t('官方预检后启动自有子进程。非零额度需开启统计，约2秒采样，可能超额；到期/用尽时重载会中断同核心其他用户。异常退出可能存在未采集尾流。', 'After the official preflight, o-ui starts its own child process. Non-zero quotas need statistics on; sampling runs about every 2 seconds, so quotas can be exceeded slightly. Reloading on expiry or exhaustion interrupts other users of the same core. Traffic just before an unexpected exit may not be counted.')}</p>` : ''}
       ${action !== 'stop' ? `<p class="form-intro">${esc(runtimeHistoryText(history))}</p>` : ''}

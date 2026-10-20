@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # o-ui 安装与管理：安装、升级、卸载、HTTPS证书（acme.sh/Let's Encrypt）与BBR。
 # 仅支持使用systemd的Linux amd64/arm64；首次安装后本脚本即/usr/local/bin/o-ui。
-# 不安装Xray核心，不修改其他防火墙规则；所有系统改动均先询问。
+# 不修改其他防火墙规则；所有系统改动均先询问。
 set -euo pipefail
 umask 022
 
@@ -695,13 +695,33 @@ ask_admin() {
     printf '%s' "$ADMIN_USER" | grep -Eq '^[A-Za-z0-9_.-]{3,64}$' && break
   done
   while :; do
-    ask_secret ADMIN_PASS "管理员密码（12–72字节；直接回车随机生成）" "Administrator password (12–72 bytes; press Enter to generate)"
+    ask_secret ADMIN_PASS "管理员密码（6–72字节；直接回车随机生成）" "Administrator password (6–72 bytes; press Enter to generate)"
     if [ -z "$ADMIN_PASS" ]; then ADMIN_PASS=$(random_alnum 24); ADMIN_GENERATED=1; break; fi
-    [ "$(printf '%s' "$ADMIN_PASS" | wc -c)" -ge 12 ] && [ "$(printf '%s' "$ADMIN_PASS" | wc -c)" -le 72 ] || { warn "长度须为12–72字节" "length must be 12–72 bytes"; continue; }
+    [ "$(printf '%s' "$ADMIN_PASS" | wc -c)" -ge 6 ] && [ "$(printf '%s' "$ADMIN_PASS" | wc -c)" -le 72 ] || { warn "长度须为6–72字节" "length must be 6–72 bytes"; continue; }
     ask_secret again "再次输入密码" "Repeat the password"
     [ "$again" = "$ADMIN_PASS" ] && break
     warn "两次输入不一致" "passwords do not match"
   done
+}
+
+# 由面板程序下载官方最新正式版并校验SHA256后选中（复用面板的核心管理）；失败只警告，不中断安装
+CORE_STATE=
+install_core() {
+  local out
+  if [ -f "$F_DATA/core/selection.json" ]; then
+    info "检测到已有Xray核心选择，保持不变。" "An existing Xray core selection was found; left unchanged."
+    CORE_STATE=kept
+    return 0
+  fi
+  info "正在下载并校验Xray官方最新正式版（不含预发布）…" "Downloading and verifying the latest official stable Xray (no prereleases)…"
+  if out=$(as_service "$F_INSTALL/bin/o-ui" -install-core latest -data "$F_DATA/core" 2>&1); then
+    printf '%s\n' "$out"
+    CORE_STATE=installed
+  else
+    printf '%s\n' "$out" >&2
+    warn "Xray未能自动安装（可能无法访问GitHub），面板照常启动" "Xray could not be installed automatically (GitHub may be unreachable); the panel starts anyway"
+    CORE_STATE=failed
+  fi
 }
 
 cmd_install() {
@@ -750,6 +770,7 @@ cmd_install() {
   [ "$OUI_MODE" = local ] || fw_offer
   [ "$OUI_RENEW" != timer ] || renew_timer_enable
   conf_save
+  install_core
   systemctl enable o-ui >/dev/null
   systemctl start o-ui
   wait_active || die "o-ui启动失败，请查看 journalctl -u o-ui" "o-ui failed to start; see journalctl -u o-ui"
@@ -768,7 +789,13 @@ cmd_install() {
       info "（随机生成，只显示这一次，不会保存到磁盘；请立即妥善保存）" "(generated, shown only once and never written to disk; store it safely now)"
     fi
   fi
-  info "Xray核心未自动安装，请登录后在面板中选择版本安装。管理命令：o-ui help" "The Xray core is not installed automatically; choose a version in the panel after signing in. Management: o-ui help"
+  if systemctl is-enabled --quiet o-ui; then
+    info "o-ui服务已启动并设为开机自启。" "The o-ui service is running and enabled at boot."
+  else
+    warn "o-ui未设为开机自启，请运行 systemctl enable o-ui" "o-ui is not enabled at boot; run systemctl enable o-ui"
+  fi
+  [ "$CORE_STATE" != failed ] || info "Xray未安装：登录后在面板中选择版本安装。" "Xray is not installed: choose a version in the panel after signing in."
+  info "管理命令：o-ui help" "Management: o-ui help"
 }
 
 cmd_update() {

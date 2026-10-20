@@ -12,15 +12,16 @@ export function initMonitor(root: HTMLElement, runtime: () => RuntimeStatus | nu
   status.className = 'monitor-status';
   status.textContent = t('正在读取系统采样…', 'Reading system samples…');
   $('.network-panel').append(status);
-  $('.network-panel .section-label').textContent = t('系统网卡速度', 'Network speed');
   $('.status-card').setAttribute('aria-label', t('真实系统资源', 'System resources'));
   $('.statistics').setAttribute('aria-label', t('真实运行统计', 'Runtime statistics'));
   const groups = [...root.querySelectorAll('.stat-group')];
   groups[1].querySelector('h2')!.textContent = t('Xray 使用情况', 'Xray usage');
   groups[1].querySelectorAll('dt')[0].textContent = t('常驻内存', 'Resident memory');
   groups[1].querySelectorAll('dt')[1].textContent = t('系统线程', 'OS threads');
-  groups[2].querySelector('h2')!.textContent = t('系统网卡累计（非月用量）', 'Interface totals (not monthly usage)');
-  groups[3].querySelector('h2')!.textContent = t('Xray 网络套接字', 'Xray sockets');
+  groups[2].querySelector('h2')!.textContent = t('业务流量累计', 'Proxy traffic totals');
+  groups[2].querySelectorAll('dt')[0].textContent = t('上传', 'Upload');
+  groups[2].querySelectorAll('dt')[1].textContent = t('下载', 'Download');
+  groups[3].querySelector('h2')!.textContent = t('连接数', 'Connections');
   groups[3].querySelectorAll('dt')[0].textContent = t('TCP 已建立', 'TCP established');
   groups[3].querySelectorAll('dt')[1].textContent = t('UDP 套接字', 'UDP sockets');
   const coreStatus = document.createElement('p');
@@ -71,10 +72,10 @@ export function initMonitor(root: HTMLElement, runtime: () => RuntimeStatus | nu
     const points = s?.history ?? [], end = Date.parse(s?.at ?? '');
     const peak = Math.max(1024, ...points.flatMap(p => [p.upload ?? 0, p.download ?? 0]));
     const graph = $('.traffic-chart');
-    graph.setAttribute('aria-label', t('最近三分钟真实系统网卡速度；缺失采样断线，不填充历史', 'Network speed over the last three minutes; missing samples break the line, no history is filled in'));
-    graph.innerHTML = !points.length ? t('<p class="form-intro">等待真实采样，不填充历史</p>', '<p class="form-intro">Waiting for samples; no history is filled in</p>') : `<div class="axis-labels">${[1, .75, .5, .25].map(n => `<span>${esc(bytes(peak * n))}/s</span>`).join('')}</div><svg viewBox="0 0 900 170" preserveAspectRatio="none" aria-hidden="true">${[0,42.5,85,127.5,169].map(y => `<line x1="0" y1="${y}" x2="900" y2="${y}" class="grid-line"/>`).join('')}<path d="${networkPath(points, 'upload', peak, end)}" class="chart-line" stroke="var(--blue)"/><path d="${networkPath(points, 'download', peak, end)}" class="chart-line" stroke="var(--green)"/></svg>`;
+    graph.setAttribute('aria-label', t('最近三分钟面板业务速度', 'Proxy traffic speed over the last three minutes'));
+    graph.innerHTML = !points.length ? t('<p class="form-intro">等待采样</p>', '<p class="form-intro">Waiting for samples</p>') : `<div class="axis-labels">${[1, .75, .5, .25].map(n => `<span>${esc(bytes(peak * n))}/s</span>`).join('')}</div><svg viewBox="0 0 900 170" preserveAspectRatio="none" aria-hidden="true">${[0,42.5,85,127.5,169].map(y => `<line x1="0" y1="${y}" x2="900" y2="${y}" class="grid-line"/>`).join('')}<path d="${networkPath(points, 'upload', peak, end)}" class="chart-line" stroke="var(--blue)"/><path d="${networkPath(points, 'download', peak, end)}" class="chart-line" stroke="var(--green)"/></svg>`;
     const at = s && fresh(s.at) ? new Date(s.at).toLocaleTimeString(locale, {hour12:false}) : s && Date.parse(s.at) > 0 ? `${t('已过期', 'stale')} ${new Date(s.at).toLocaleTimeString(locale, {hour12:false})}` : t('尚无有效采样', 'No valid samples yet');
-    status.textContent = `${error || (active ? s.issues.length ? `${t('部分不可用：', 'Partly unavailable: ')}${s.issues.join(t('；', '; '))}` : net?.upload == null ? t('正在建立速率基线', 'Building the rate baseline') : t('采集中', 'Sampling') : t('采样已过期或尚未就绪', 'Sample is stale or not ready'))} · ${at}${t('。最近3分钟，仅内存保留；活动非回环网卡：', '. Last 3 minutes, kept in memory only; active non-loopback interfaces: ')}${s?.network?.interfaces.join(t('、', ', ')) || t('无', 'None')}${t('。含虚拟网卡可能重复计数，不是 Xray 用量或套餐账单。', '. Virtual interfaces may be counted twice; this is not Xray usage or a provider bill.')}`;
+    status.textContent = `${error || (active ? s.issues.length ? `${t('部分不可用：', 'Partly unavailable: ')}${s.issues.join(t('；', '; '))}` : net?.upload == null ? t('正在建立速率基线', 'Building the rate baseline') : t('采集中', 'Sampling') : t('采样已过期或尚未就绪', 'Sample is stale or not ready'))} · ${at}${t('。只统计本面板客户端经 Xray 的流量，不含系统其他程序。', '. Counts only client traffic through o-ui\'s Xray, not other programs.')}`;
   }
   async function refresh(): Promise<void> {
     if (disposed || busy) return;

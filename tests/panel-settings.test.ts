@@ -48,6 +48,8 @@ class Control {
   fire(name = 'click') { this.handlers.get(name)?.({ preventDefault() {}, target: this }); }
 }
 function control(root: Control, selector: string): Control { const item = root.querySelector(selector); assert.ok(item, `缺少控件 ${selector}`); return item; }
+// 页面结构：顶部操作区、设置卡片（标签栏+常规/账号安全/订阅三个面板）；证书区是“常规”的第一块。
+const tlsBlock = (root: Control) => root.children[1].children[1].children[0];
 async function withPage(fetcher: typeof fetch, run: (root: Control, confirmation: { answer: boolean; count: number }) => Promise<void>, stubAccess = true) {
   const root = new Control(), confirmation = { answer: true, count: 0 };
   const values = {
@@ -99,7 +101,7 @@ test('HTTPS显式重读取消不请求，失败保留输入，成功换修订且
     assert.match(control(root, '[role="alert"]').textContent, /保留/);
     control(root, '[data-reload]').fire(); await settle();
     assert.equal(control(root, '#panel-cert').value, '/test/latest.crt');
-    assert.match(root.children[0].innerHTML, /待重启/); assert.equal(password.value, 'test-only-input');
+    assert.match(tlsBlock(root).innerHTML, /待重启/); assert.equal(password.value, 'test-only-input');
     control(root, '#panel-tls-form').fire('submit'); await settle();
     assert.equal(writes.length, 1); assert.equal(writes[0].revision, 9); assert.equal(writes[0].data.certificateFile, '/test/latest.crt');
     assert.equal(confirmation.count, 3); assert.equal(password.value, 'test-only-input');
@@ -147,7 +149,7 @@ test('HTTPS明确证书校验失败可修正后重试，仍使用原修订', asy
     assert.equal(control(root, '#panel-cert').disabled, false); assert.equal(control(root, '[role="alert"]').focused, true);
     control(root, '#panel-cert').value = '/test/correct.crt'; control(root, '#panel-tls-form').fire('submit'); await settle();
     assert.equal(writes, 2); assert.equal(control(root, '#panel-cert').value, '/test/correct.crt');
-    assert.match(root.children[0].innerHTML, /手动重启/);
+    assert.match(tlsBlock(root).innerHTML, /重启面板/);
   });
 });
 
@@ -209,12 +211,12 @@ test('HTTPS慢保存期间不重读或重复写入，返回页面不重绘，成
     certificate.value = '/test/new.crt'; password.value = 'test-only-input';
     control(root, '#panel-tls-form').fire('submit'); await settle();
     assert.equal(certificate.disabled, true); assert.equal(password.disabled, false);
-    assert.match(control(root, '[role="status"]').textContent, /校验证书/);
+    assert.match(control(tlsBlock(root), '[role="status"]').textContent, /校验证书/);
     panel.render(); control(root, '#panel-tls-form').fire('submit'); control(root, '[data-reload]').fire(); await settle();
     assert.equal(control(root, '#panel-cert'), certificate); assert.equal(writes, 1); assert.equal(reads, 1); assert.equal(confirmation.count, 0);
     complete(Response.json(saved(2, '/test/new.crt', '/test/first.key'))); await settle();
     assert.equal(control(root, '#panel-cert').value, '/test/new.crt'); assert.equal(control(root, '#panel-cert').disabled, false);
-    assert.match(root.children[0].innerHTML, /当前连接未切换/); assert.match(root.children[0].innerHTML, /待重启/);
+    assert.match(tlsBlock(root).innerHTML, /重启面板/); assert.match(tlsBlock(root).innerHTML, /待重启/);
     assert.equal(password.value, 'test-only-input');
   });
 });
@@ -223,8 +225,8 @@ test('HTTPS离线演示不读取或保存真实设置，不初始化密码功能
   let requests = 0;
   await withPage(async () => { requests++; throw new Error('unexpected'); }, async root => {
     const panel = initPanelSettings(root as unknown as HTMLElement, false); panel.render(); panel.render(); panel.clearPassword(); await settle();
-    assert.equal(requests, 0); assert.equal(root.children.length, 1); assert.equal(root.querySelector('#panel-tls-form'), null);
-    assert.match(root.children[0].innerHTML, /离线演示不保存/);
+    assert.equal(requests, 0); assert.equal(root.querySelector('#panel-tls-form'), null); assert.equal(root.querySelector('#password-current'), null);
+    assert.match(tlsBlock(root).innerHTML, /离线演示不保存/);
   });
 });
 
@@ -246,7 +248,7 @@ test('访问设置默认本机、返回页不丢输入、非本机保存须逐�
     control(root, '#access-confirm').checked = true; control(root, '#access-form').fire('submit'); await settle();
     assert.equal(writes, 1); assert.equal(control(root, '#access-confirm').checked, false);
     assert.equal(control(root, '#access-listen').value, '127.0.0.1:5190'); assert.match(root.innerHTML, /有待重启/);
-    assert.match(control(root, '[role="status"]').textContent, /当前监听未改变/);
+    assert.match(control(root, '[role="status"]').textContent, /重启面板/);
   }, false);
 });
 

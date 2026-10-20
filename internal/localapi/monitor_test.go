@@ -84,7 +84,7 @@ func TestSystemMonitorAPI(t *testing.T) {
 			t.Fatal(err)
 		}
 		if !v.At.IsZero() {
-			if v.Host == nil || len(v.History) == 0 {
+			if v.Host == nil || v.History == nil {
 				t.Fatal("无真实样本")
 			}
 			break

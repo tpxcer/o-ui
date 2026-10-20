@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -144,6 +145,27 @@ func (m *Manager) Releases(ctx context.Context) ([]Release, error) {
 		result = append(result, r)
 	}
 	return result, nil
+}
+
+// LatestStable返回官方正式版（不含预发布）中版本号最高者，不依赖列表顺序。
+func LatestStable(releases []Release) (string, error) {
+	best, bestParts := "", [3]int{}
+	for _, r := range releases {
+		if r.Prerelease || !versionPattern.MatchString(r.Version) {
+			continue
+		}
+		var parts [3]int
+		for i, field := range strings.Split(r.Version, ".") {
+			parts[i], _ = strconv.Atoi(field)
+		}
+		if best == "" || parts[0] > bestParts[0] || (parts[0] == bestParts[0] && (parts[1] > bestParts[1] || (parts[1] == bestParts[1] && parts[2] > bestParts[2]))) {
+			best, bestParts = r.Version, parts
+		}
+	}
+	if best == "" {
+		return "", i18n.New("官方发布列表中没有正式版", "No stable release found in the official release list")
+	}
+	return best, nil
 }
 
 func assetName(osName, arch string) (string, error) {

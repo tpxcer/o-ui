@@ -103,6 +103,7 @@ export function buildSettings(draft: SettingsDraft): ObjectValue {
     ...advanced,
     log: { loglevel: draft.logLevel, access: draft.accessLog ? '' : 'none', dnsLog: draft.dnsLog },
     outbounds, routing: { domainStrategy: draft.routingStrategy, rules, balancers }, dns,
-    ...(draft.statistics ? { stats: {}, policy: { levels: { '0': { statsUserUplink: true, statsUserDownlink: true } }, system: { statsInboundUplink: true, statsInboundDownlink: true } } } : {}),
+    // 统计常开：流量额度与首页业务网速都依赖它。
+    stats: {}, policy: { levels: { '0': { statsUserUplink: true, statsUserDownlink: true } }, system: { statsInboundUplink: true, statsInboundDownlink: true } },
   };
 }

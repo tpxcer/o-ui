@@ -11,11 +11,23 @@ import (
 )
 
 func (s *Store) ChangePassword(ctx context.Context, token, current, next string) error {
+	return s.ChangeAccount(ctx, token, current, "", next)
+}
+
+// ChangeAccount校验当前密码后修改用户名和/或密码（空值表示不改），成功后全部会话失效。
+func (s *Store) ChangeAccount(ctx context.Context, token, current, username, next string) error {
 	if len(token) != 43 {
 		return ErrSession
 	}
-	if err := ValidatePassword(next); err != nil {
-		return err
+	if username != "" {
+		if err := ValidateUsername(username); err != nil {
+			return err
+		}
+	}
+	if next != "" || username == "" {
+		if err := ValidatePassword(next); err != nil {
+			return err
+		}
 	}
 	s.authMu.Lock()
 	defer s.authMu.Unlock()
@@ -45,7 +57,7 @@ func (s *Store) ChangePassword(ctx context.Context, token, current, next string)
 	if failures >= 5 {
 		return ErrLimited
 	}
-	if len(current) < 12 || len(current) > 72 || bcrypt.CompareHashAndPassword(hash, []byte(current)) != nil {
+	if len(current) < 6 || len(current) > 72 || bcrypt.CompareHashAndPassword(hash, []byte(current)) != nil {
 		if _, err = tx.ExecContext(ctx, "UPDATE auth_throttle SET failures=?,reset_at=? WHERE id=1", failures+1, reset); err != nil {
 			return err
 		}
@@ -54,15 +66,22 @@ func (s *Store) ChangePassword(ctx context.Context, token, current, next string)
 		}
 		return ErrCurrentPassword
 	}
-	if current == next {
-		return ErrSamePassword
+	if next != "" {
+		if current == next {
+			return ErrSamePassword
+		}
+		hash, err = bcrypt.GenerateFromPassword([]byte(next), bcrypt.DefaultCost)
+		if err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "UPDATE administrator SET password_hash=? WHERE id=1", hash); err != nil {
+			return err
+		}
 	}
-	hash, err = bcrypt.GenerateFromPassword([]byte(next), bcrypt.DefaultCost)
-	if err != nil {
-		return err
-	}
-	if _, err = tx.ExecContext(ctx, "UPDATE administrator SET password_hash=? WHERE id=1", hash); err != nil {
-		return err
+	if username != "" {
+		if _, err = tx.ExecContext(ctx, "UPDATE administrator SET username=? WHERE id=1", username); err != nil {
+			return err
+		}
 	}
 	if _, err = tx.ExecContext(ctx, "UPDATE sessions SET expires=0"); err != nil {
 		return err

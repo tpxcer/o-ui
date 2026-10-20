@@ -68,6 +68,7 @@ type Runtime struct {
 	autoResume  autoResumeState
 	plan        *planAccount
 	public      *publicLookup
+	business    businessTraffic
 }
 
 func lockRuntimeDirectory(root string) (*os.File, error) {

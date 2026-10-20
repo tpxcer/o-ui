@@ -1,24 +1,27 @@
 import { api, APIError, jsonBody } from './api.ts';
 import { t } from './i18n.ts';
 
-export function passwordChangeError(current: string, next: string, confirm: string): string {
+export function passwordChangeError(current: string, next: string, confirm: string, username = ''): string {
   if (!current) return t('请输入当前密码。', 'Enter the current password.');
+  if (username && !/^[a-zA-Z0-9_.-]{3,64}$/.test(username)) return t('用户名需为3至64位字母、数字、点、下划线或短横线。', 'Username must be 3–64 letters, digits, dots, underscores or hyphens.');
+  if (!next && !confirm) return username ? '' : t('请填写新用户名或新密码。', 'Enter a new username or a new password.');
   if (next !== confirm) return t('两次输入的新密码不一致。', 'The two new passwords do not match.');
   const length = new TextEncoder().encode(next).length;
-  if (length < 12 || length > 72) return t('新密码需为12至72字节，中文字符会占多个字节。', 'The new password must be 12–72 bytes; non-ASCII characters take several bytes.');
+  if (length < 6 || length > 72) return t('新密码需为6至72字节，中文字符会占多个字节。', 'The new password must be 6–72 bytes; non-ASCII characters take several bytes.');
   if (current === next) return t('新密码不能与当前密码相同。', 'The new password must differ from the current one.');
   return '';
 }
 
 export function initPasswordChange(root: HTMLElement): { clear: () => void } {
-  root.innerHTML = `<h2 class="xray-editor-title">${t('修改管理员密码', 'Change administrator password')}</h2><p class="core-warning">${t('仅本机测试。必须验证当前密码；成功后所有旧登录立即失效并返回登录页。不会停止Xray、重置节点凭据或撤销订阅链接。', 'The current password is required. On success all existing sessions end immediately and you return to the sign-in page. Xray keeps running; node credentials and subscription links are not changed.')}</p>
-    <p class="form-hint" id="password-hint">${t('新密码需12至72字节，请使用独立的长密码；输入不保存到浏览器存储，切换页面会清空。如请求超时，结果可能已提交，请先尝试新密码登录确认，不要反复重试。', 'The new password must be 12–72 bytes; use a long, unique password. Inputs are not stored in the browser and are cleared when you leave the page. If the request times out it may have succeeded; try signing in with the new password before retrying.')}</p>
+  root.innerHTML = `<h2 class="xray-editor-title">${t('修改用户名和密码', 'Change username and password')}</h2><p class="core-warning">${t('需要验证当前密码；成功后所有登录失效，需用新账号重新登录。不影响 Xray、节点和订阅链接。', 'The current password is required. On success every session ends and you sign in again with the new credentials. Xray, nodes and subscription links are not affected.')}</p>
+    <p class="form-hint" id="password-hint">${t('新用户名或新密码可只填一项；密码需6至72字节。', 'You can change just the username or just the password; passwords must be 6–72 bytes.')}</p>
     <form id="password-change-form">
       <label class="form-field" for="password-current">${t('当前密码', 'Current password')}<input id="password-current" name="current" type="password" autocomplete="current-password" required maxlength="72" aria-describedby="password-hint"></label>
-      <label class="form-field" for="password-next">${t('新密码', 'New password')}<input id="password-next" name="next" type="password" autocomplete="new-password" required maxlength="72" aria-describedby="password-hint"></label>
-      <label class="form-field" for="password-confirm">${t('确认新密码', 'Confirm new password')}<input id="password-confirm" name="confirm" type="password" autocomplete="new-password" required maxlength="72" aria-describedby="password-hint"></label>
+      <label class="form-field" for="password-username">${t('新用户名（不改可留空）', 'New username (leave empty to keep)')}<input id="password-username" name="username" autocomplete="username" maxlength="64" aria-describedby="password-hint"></label>
+      <label class="form-field" for="password-next">${t('新密码', 'New password')}<input id="password-next" name="next" type="password" autocomplete="new-password" maxlength="72" aria-describedby="password-hint"></label>
+      <label class="form-field" for="password-confirm">${t('确认新密码', 'Confirm new password')}<input id="password-confirm" name="confirm" type="password" autocomplete="new-password" maxlength="72" aria-describedby="password-hint"></label>
       <p class="form-error" id="password-error" role="alert" tabindex="-1" hidden></p><p class="core-message" id="password-message" role="status"></p>
-      <button type="submit" class="primary-button">${t('修改密码并重新登录', 'Change password and sign in again')}</button> <button type="reset" class="secondary-button">${t('清空输入', 'Clear')}</button>
+      <button type="submit" class="primary-button">${t('保存并重新登录', 'Save and sign in again')}</button> <button type="reset" class="secondary-button">${t('清空输入', 'Clear')}</button>
     </form>`;
   const form = root.querySelector<HTMLFormElement>('form')!;
   const error = root.querySelector<HTMLElement>('#password-error')!;
@@ -29,12 +32,12 @@ export function initPasswordChange(root: HTMLElement): { clear: () => void } {
   form.addEventListener('reset', () => { error.hidden = true; error.textContent = ''; message.textContent = ''; });
   form.addEventListener('submit', event => {
     event.preventDefault(); if (busy) return;
-    const data = new FormData(form), current = String(data.get('current') ?? ''), next = String(data.get('next') ?? '');
-    const issue = passwordChangeError(current, next, String(data.get('confirm') ?? ''));
+    const data = new FormData(form), current = String(data.get('current') ?? ''), next = String(data.get('next') ?? ''), username = String(data.get('username') ?? '').trim();
+    const issue = passwordChangeError(current, next, String(data.get('confirm') ?? ''), username);
     if (issue) { showError(issue); return; }
-    busy = true; error.hidden = true; error.textContent = ''; message.textContent = t('正在验证并修改密码…', 'Verifying and changing the password…');
+    busy = true; error.hidden = true; error.textContent = ''; message.textContent = t('正在验证并保存…', 'Verifying and saving…');
     form.querySelectorAll<HTMLInputElement | HTMLButtonElement>('input,button').forEach(element => { element.disabled = true; });
-    void api('auth/password', jsonBody('POST', { currentPassword: current, newPassword: next })).then(() => {
+    void api('auth/password', jsonBody('POST', { currentPassword: current, newPassword: next, ...(username ? { newUsername: username } : {}) })).then(() => {
       clear(); window.dispatchEvent(new Event('panel-session-expired'));
     }).catch(reason => {
       clear();

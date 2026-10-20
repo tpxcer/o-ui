@@ -32,10 +32,10 @@ test('均衡前缀匹配与观测要求校验，路由顺序保持', () => {
   assert.throws(() => buildSettings({ ...draft, balancers: '[{"tag":"b","selector":["missing"]}]' }), /未匹配/);
   assert.throws(() => buildSettings({ ...draft, balancers: '[{"tag":"b","selector":["dir"],"strategy":{"type":"leastPing"}}]' }), /观测/);
 });
-test('高级配置不得覆盖其他分类，统计关闭不输出统计配置', () => {
+test('高级配置不得覆盖其他分类，统计常开', () => {
   for (const advanced of ['{"inbounds":[]}', '{"routing":{}}', '{"api":{}}', '{"log":{}}']) assert.throws(() => buildSettings({ ...defaultSettings(), advanced }), /暂不接受/);
   const config = buildSettings({ ...defaultSettings(), statistics: false });
-  assert.equal('stats' in config, false); assert.equal('policy' in config, false);
+  assert.equal('stats' in config, true); assert.equal('policy' in config, true);
 });
 test('Freedom策略统一使用官方targetStrategy，不被旧字段或出站草稿覆盖', () => {
   const draft = defaultSettings();

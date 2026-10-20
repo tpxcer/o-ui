@@ -57,7 +57,7 @@ export function initServerPlanSettings(root: HTMLElement): { render: () => void 
     let loaded = false;
     try {
       status = await api<PlanStatus>('system/plan'); reloadRequired = false; loaded = true;
-      try { interfaces = (await api<{ network: { interfaces: string[] } | null }>('system/status')).network?.interfaces ?? []; } catch { interfaces = []; }
+      try { interfaces = (await api<{ interfaces: string[] }>('system/status')).interfaces ?? []; } catch { interfaces = []; }
     } catch (reason) { error = `${(reason as Error).message}${t('；原输入仍保留。', '; your previous input is kept.')}`; }
     finally { loading = false; if (root.isConnected) { if (loaded) paint(); else controls(true); } }
   }

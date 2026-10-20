@@ -32,12 +32,14 @@ echo "systemctl $*" >>"$s/calls.log"
 unit="$O_UI_ROOT_PREFIX/etc/systemd/system/o-ui.service"
 case "$1" in
   is-active) [ -f "$s/active" ]; exit ;;
+  is-enabled) [ -f "$s/enabled" ]; exit ;;
+  enable) [ "$2" = o-ui ] && : >"$s/enabled"; exit 0 ;;
   start|restart)
     [ "$2" = o-ui ] || exit 0
     if [ -n "\${FAKE_FAIL_VERSION:-}" ] && [ "$(cat "$O_UI_ROOT_PREFIX/opt/o-ui/VERSION")" = "$FAKE_FAIL_VERSION" ]; then rm -f "$s/active" "$s/listening"; exit 0; fi
     : >"$s/active"; awk '/^ExecStart=/ { print $NF }' "$unit" >"$s/listening"; exit 0 ;;
   stop) [ "$2" = o-ui ] && rm -f "$s/active" "$s/listening"; exit 0 ;;
-  disable) case " $* " in *" o-ui "*) rm -f "$s/active" "$s/listening" ;; esac; exit 0 ;;
+  disable) case " $* " in *" o-ui "*) rm -f "$s/active" "$s/listening" "$s/enabled" ;; esac; exit 0 ;;
   status) echo "o-ui.service fake status"; exit 0 ;;
 esac
 exit 0`,
@@ -64,10 +66,15 @@ cp "$FAKE_DOWNLOADS/$(basename "$url")" "$out" 2>/dev/null || exit 22`,
 const fakePanel = `#!/bin/sh
 s=$FAKE_STATE
 { printf 'argv'; for a in "$@"; do printf ' [%s]' "$a"; done; printf ' LC_ALL=%s\\n' "$LC_ALL"; } >>"$s/oui.log"
-state=''; cert=''; key=''
+state=''; cert=''; key=''; data=''
 cmd=$1
-while [ $# -gt 0 ]; do case $1 in -state) state=$2; shift ;; -panel-cert) cert=$2; shift ;; -panel-key) key=$2; shift ;; esac; shift; done
+while [ $# -gt 0 ]; do case $1 in -state) state=$2; shift ;; -data) data=$2; shift ;; -panel-cert) cert=$2; shift ;; -panel-key) key=$2; shift ;; esac; shift; done
 case $cmd in
+  -install-core)
+    [ -z "\${FAKE_CORE_RC:-}" ] || { echo 'Official release service returned HTTP 404' >&2; exit "$FAKE_CORE_RC"; }
+    mkdir -p "$data"; printf '{"selected":"26.3.27"}' >"$data/selection.json"
+    case $LC_ALL in zh*) echo '已安装并选中Xray 26.3.27（官方包已校验）；未启动代理。' ;; *) echo 'Xray 26.3.27 installed and selected (official package verified); no proxy was started.' ;; esac
+    exit 0 ;;
   -init-panel-admin)
     IFS= read -r pw || exit 9
     printf '%s' "$pw" >"$s/admin-password"
@@ -192,13 +199,18 @@ test('全新安装：中文、HTTP-01域名证书、自动续期、BBR与UFW放�
   assert.match(calls, /^ufw allow 23456\/tcp comment o-ui panel$/m);
   assert.equal((calls.match(/^ufw /gm) ?? []).length, 1);
   assert.match(calls, /systemctl enable --now o-ui-cert-renew\.timer/);
+  // Xray：由面板程序以服务用户安装官方最新正式版，先于首次启动；服务设为开机自启后再启动
+  assert.ok(panel.includes(`argv [-install-core] [latest] [-data] [${box.root}/var/lib/o-ui/core] LC_ALL=zh_CN.UTF-8`), panel);
+  assert.ok(calls.indexOf('-install-core latest') < calls.indexOf('systemctl enable o-ui') && calls.indexOf('systemctl enable o-ui') < calls.indexOf('systemctl start o-ui'), calls);
+  assert.match(out, /已安装并选中Xray 26\.3\.27/);
+  assert.match(out, /o-ui服务已启动并设为开机自启/);
+  assert.doesNotMatch(out, /Xray未安装|未自动安装/);
   assert.deepEqual(await conf(box), { OUI_LANG: 'zh', OUI_PORT: '23456', OUI_MODE: 'acme', OUI_HOST: 'example.com', OUI_CHALLENGE: 'http', OUI_RENEW: 'timer', OUI_VERSION: 'v0.1.0', OUI_FW: 'ufw', OUI_BBR_PREV_QDISC: 'pfifo_fast', OUI_BBR_PREV_CC: 'cubic', OUI_BBR_MODULE: '' });
   assert.equal((await stat(join(box.root, 'etc/o-ui/o-ui.conf'))).mode & 0o777, 0o600);
   assert.ok(!(await box.read('etc/o-ui/o-ui.conf')).includes(password));
   // 终端只显示一次随机密码与HTTPS地址
   assert.equal(out.split(password).length - 1, 1);
   assert.match(out, /登录地址（HTTPS）：https:\/\/example\.com:23456\//);
-  assert.match(out, /Xray核心未自动安装/);
   assert.doesNotMatch(out, /http:\/\/(?!127\.0\.0\.1)/);
 });
 
@@ -361,6 +373,8 @@ test('卸载默认保留数据与证书；--purge须输入DELETE并删除全部'
   assert.equal(again.status, 0, again.out);
   assert.match(again.out, /检测到已有数据目录/);
   assert.equal(((await box.log('oui.log')).match(/-init-panel-admin/g) ?? []).length, 1);
+  assert.equal(((await box.log('oui.log')).match(/-install-core/g) ?? []).length, 1, '重新安装保持已有核心选择');
+  assert.match(again.out, /检测到已有Xray核心选择，保持不变/);
   assert.match(await box.log('oui.log'), /-recover-panel-access/);
   const refused = box.run(['uninstall', '--purge'], ['yes']);
   assert.notEqual(refused.status, 0);
@@ -436,4 +450,27 @@ test('非root、非Linux、不支持的架构、无systemd或已安装时拒绝'
   const again = box.run(['install', '--package', box.pkg], ['1']);
   assert.notEqual(again.status, 0); assert.match(again.out, /已安装/);
   assert.equal(await box.log('calls.log').then(text => text.includes('rm -rf')), false);
+});
+
+test('Xray自动安装失败（如断网）只警告，面板照常启用并启动', async () => {
+  const box = await sandbox();
+  const { status, out } = box.run(['install', '--package', box.pkg], ['2', '23456', 'admin-core', '', '3', 'n'], { FAKE_CORE_RC: '1' });
+  assert.equal(status, 0, out);
+  assert.match(out, /Xray could not be installed automatically/);
+  assert.match(out, /Xray is not installed: choose a version in the panel after signing in/);
+  assert.match(out, /enabled at boot/);
+  assert.ok(existsSync(join(box.state, 'active')) && existsSync(join(box.state, 'enabled')));
+});
+
+test('管理员密码须为6–72字节：5字节拒绝后重输，6字节接受', async () => {
+  const box = await sandbox();
+  const { status, out } = box.run(['install', '--package', box.pkg], ['1', '23456', 'admin-pw', 'abcde', 'abcdef', 'abcdef', '3', 'n']);
+  assert.equal(status, 0, out);
+  assert.match(out, /管理员密码（6–72字节/);
+  assert.match(out, /长度须为6–72字节/);
+  assert.equal(await box.log('admin-password'), 'abcdef');
+  const long = await sandbox();
+  const tooLong = long.run(['install', '--package', long.pkg], ['1', '23456', 'admin-pw', 'x'.repeat(73), 'y'.repeat(72), 'y'.repeat(72), '3', 'n']);
+  assert.equal(tooLong.status, 0, tooLong.out);
+  assert.equal(await long.log('admin-password'), 'y'.repeat(72));
 });

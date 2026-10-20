@@ -213,6 +213,11 @@ func registerSubscriptions(mux *http.ServeMux, rt *Runtime) {
 		}
 		rt.mu.Lock()
 		defer rt.mu.Unlock()
+		settings, _, err := readSubscriptionSettings(r.Context(), rt.state)
+		if err != nil || !settings.Enabled {
+			respond(w, 404, map[string]string{"error": i18n.T("订阅不存在或已失效", "Subscription does not exist or has expired")})
+			return
+		}
 		doc, err := rt.state.ReadDocument(r.Context(), subscriptionsDocument)
 		if err != nil {
 			respond(w, 503, map[string]string{"error": i18n.T("订阅暂不可用", "Subscription temporarily unavailable")})
@@ -264,6 +269,8 @@ func registerSubscriptions(mux *http.ServeMux, rt *Runtime) {
 			return
 		}
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		used := ledger.Totals[id]
+		subscriptionHeaders(w, settings, limit, used.Uplink, used.Downlink)
 		_, _ = w.Write([]byte(base64.StdEncoding.EncodeToString([]byte(result.Link + "\n"))))
 	})
 }

@@ -23,11 +23,23 @@ import (
 	"independent-panel/internal/store"
 )
 
+// 面板设置中的“重启面板”：run正常返回（defer已停核心、关库、释放锁）后原地重新执行自身。
+var restartRequested bool
+
 func main() {
 	if code, handled := engine.Supervisor(); handled {
 		os.Exit(code)
 	}
-	os.Exit(run())
+	code := run()
+	if code == 0 && restartRequested {
+		exe, err := os.Executable()
+		if err == nil {
+			err = syscall.Exec(exe, os.Args, os.Environ())
+		}
+		log.Print(i18n.Pick(i18n.EnvLang(), "面板重启失败：", "Panel restart failed: "), err)
+		os.Exit(1)
+	}
+	os.Exit(code)
 }
 
 func run() int {
@@ -41,7 +53,7 @@ func run() int {
 	dist := flag.String("dist", "dist", say("前端构建目录", "Frontend build directory"))
 	recoverAccess := flag.Bool("recover-panel-access", false, say("停面板后离线恢复本机HTTP访问，不重置账号或业务，不启动服务", "Offline restore of local HTTP access after stopping the panel; does not reset accounts or data and starts nothing"))
 	confirmation := flag.String("confirm-recovery", "", say("离线恢复须精确填写：恢复面板本机访问", "Offline recovery requires exactly: 恢复面板本机访问"))
-	initAdmin := flag.Bool("init-panel-admin", false, say("安装器离线设置管理员（密码从标准输入读一行），面板须已停止，不启动服务", "Installer: set the administrator offline (password read as one line from stdin); the panel must be stopped; starts nothing"))
+	initAdmin := flag.Bool("init-panel-admin", false, say("安装器离线设置管理员（密码6–72字节，从标准输入读一行），面板须已停止，不启动服务", "Installer: set the administrator offline (password of 6–72 bytes read as one line from stdin); the panel must be stopped; starts nothing"))
 	username := flag.String("username", "", say("与-init-panel-admin一起使用的管理员用户名", "Administrator username for -init-panel-admin"))
 	enableHTTPS := flag.Bool("enable-panel-https", false, say("安装器离线写入面板HTTPS证书与固定访问来源，面板须已停止，下次启动生效", "Installer: write the panel HTTPS certificate and fixed origin offline; the panel must be stopped; applies on next start"))
 	panelCert := flag.String("panel-cert", "", say("面板证书（含链）PEM的绝对路径", "Absolute path of the panel certificate PEM (with chain)"))
@@ -49,6 +61,7 @@ func run() int {
 	panelListen := flag.String("panel-listen", "", say("HTTPS直接监听，如0.0.0.0:23456", "HTTPS listen address, e.g. 0.0.0.0:23456"))
 	panelOrigin := flag.String("panel-origin", "", say("固定HTTPS访问来源，如https://panel.example.com:23456", "Fixed HTTPS origin, e.g. https://panel.example.com:23456"))
 	confirmHTTPS := flag.String("confirm-https", "", say("须精确填写：确认启用HTTPS非本机访问", "Requires exactly: 确认启用HTTPS非本机访问"))
+	installCore := flag.String("install-core", "", say("安装器离线下载、校验并选中官方Xray：latest为最新正式版（不含预发布），或填精确版本；须用-data指定核心目录，面板须已停止，不启动代理", "Installer: download, verify and select official Xray offline: latest is the newest stable release (no prereleases), or an exact version; requires -data with the core directory; the panel must be stopped; starts no proxy"))
 	flag.Parse()
 	host, port, err := net.SplitHostPort(*listen)
 	if err != nil || host != "127.0.0.1" {
@@ -58,15 +71,52 @@ func run() int {
 	if err != nil || portNumber < 1024 {
 		log.Fatal(say("仅允许非特权端口", "Only unprivileged ports are allowed"))
 	}
-	explicitState := false
+	explicitState, explicitData := false, false
 	flag.Visit(func(f *flag.Flag) {
-		if f.Name == "state" {
-			explicitState = true
-		}
+		explicitState = explicitState || f.Name == "state"
+		explicitData = explicitData || f.Name == "data"
 	})
-	if (*recoverAccess && *initAdmin) || (*recoverAccess && *enableHTTPS) || (*initAdmin && *enableHTTPS) {
+	modes := 0
+	for _, on := range []bool{*recoverAccess, *initAdmin, *enableHTTPS, *installCore != ""} {
+		if on {
+			modes++
+		}
+	}
+	if modes > 1 {
 		log.Print(say("离线命令一次只能执行一个", "Run one offline command at a time"))
 		return 1
+	}
+	if *installCore != "" {
+		if !explicitData {
+			log.Print(say("离线安装核心必须用-data明确指定核心目录的绝对路径", "Offline core installation requires -data with the absolute path of the core directory"))
+			return 1
+		}
+		// 下载与校验较慢，给足时间；失败不影响已有核心与选择。
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+		manager, err := core.NewManager(*data)
+		if err != nil {
+			log.Print(text(err))
+			return 1
+		}
+		defer manager.Close()
+		version := *installCore
+		if version == "latest" {
+			releases, err := manager.Releases(ctx)
+			if err == nil {
+				version, err = core.LatestStable(releases)
+			}
+			if err != nil {
+				log.Print(text(err))
+				return 1
+			}
+		}
+		if err := manager.Install(ctx, version); err != nil {
+			log.Print(text(err))
+			return 1
+		}
+		fmt.Printf(say("已安装并选中Xray %s（官方包已校验）；未启动代理。\n", "Xray %s installed and selected (official package verified); no proxy was started.\n"), manager.Selected())
+		return 0
 	}
 	if *initAdmin || *enableHTTPS {
 		if !explicitState {
@@ -165,7 +215,13 @@ func run() int {
 	stopped := make(chan struct{})
 	go func() {
 		defer close(stopped)
-		<-ctx.Done()
+		select {
+		case <-ctx.Done():
+		case <-localapi.RestartRequests():
+			restartRequested = true
+			fmt.Println(say("收到重启请求，正在正常关闭后重新启动面板", "Restart requested; shutting down cleanly and starting the panel again"))
+			stop()
+		}
 		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = server.Shutdown(shutdown)

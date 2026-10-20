@@ -231,3 +231,35 @@ func TestPasswordChangeCancelledAndConcurrentLogin(t *testing.T) {
 		}
 	}
 }
+
+func TestChangeAccountRenamesWithShortPasswords(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	session, err := s.Initialize(ctx, "tester", "abc123")
+	if err != nil {
+		t.Fatal("six-byte passwords must be accepted", err)
+	}
+	if err = s.ChangeAccount(ctx, session.Token, "abc123", "a b", ""); err == nil {
+		t.Fatal("invalid username accepted")
+	}
+	if err = s.ChangeAccount(ctx, session.Token, "abc123", "admin2", ""); err != nil {
+		t.Fatal("rename with a six-byte current password failed", err)
+	}
+	if _, err = s.Login(ctx, "tester", "abc123"); !errors.Is(err, ErrCredentials) {
+		t.Fatal("old username still works", err)
+	}
+	session, err = s.Login(ctx, "admin2", "abc123")
+	if err != nil {
+		t.Fatal("renamed account cannot sign in with the kept password", err)
+	}
+	if err = s.ChangeAccount(ctx, session.Token, "abc123", "", "xyz789"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Login(ctx, "admin2", "xyz789"); err != nil {
+		t.Fatal("new password not saved", err)
+	}
+}

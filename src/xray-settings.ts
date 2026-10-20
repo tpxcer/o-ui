@@ -18,7 +18,7 @@ import { t } from './i18n.ts';
 const select = (id: string, label: string, hint: string, value: string, choices: string[]) => `<label class="xray-setting-row"><span><strong id="xray-label-${id}">${label}</strong><small id="xray-hint-${id}">${hint}</small></span><select name="${id}" aria-labelledby="xray-label-${id}" aria-describedby="xray-hint-${id}">${choices.map(choice => `<option ${choice === value ? 'selected' : ''}>${choice}</option>`).join('')}</select></label>`;
 const check = (name: string, label: string, value: boolean) => `<label class="check-field"><input name="${name}" type="checkbox" ${value ? 'checked' : ''}><span>${label}</span></label>`;
 
-export function initXraySettings(root: HTMLElement, icons: () => void, persistent = false, onApply: () => void = () => {}): { render: () => void; setRuntime: (status: RuntimeStatus | null, at: number) => void } {
+export function initXraySettings(root: HTMLElement, icons: () => void, persistent = false, onApply: () => void = () => {}, onSaved: () => void = () => {}): { render: () => void; setRuntime: (status: RuntimeStatus | null, at: number) => void } {
   let draft = defaultSettings();
   let saved = structuredClone(draft);
   let tab: SettingsTab = 'basic';
@@ -92,11 +92,11 @@ export function initXraySettings(root: HTMLElement, icons: () => void, persisten
         if (!fields) throw new Error(t('此出站需要JSON编辑，原文未修改。', 'This outbound needs JSON editing; the original was not changed.'));
         outboundEditing = index; outboundForm = fields; focus = '#outbound-form-title';
       }
-      if (action === 'commit' && outboundEditing !== null) { draft.outbounds = putOutbound(draft, outboundEditing, outboundForm); outboundEditing = null; outboundForm = emptyOutbound(); feedback = t('出站列表已更新，请保存草稿；尚未应用。', 'Outbound list updated; save the draft. Not applied yet.'); }
+      if (action === 'commit' && outboundEditing !== null) { draft.outbounds = putOutbound(draft, outboundEditing, outboundForm); outboundEditing = null; outboundForm = emptyOutbound(); feedback = t('出站列表已更新，点“保存”后生效。', 'Outbound list updated; click Save to apply.'); }
       if (action === 'cancel') { outboundEditing = null; outboundForm = emptyOutbound(); }
-      if (action === 'up' || action === 'down') { draft.outbounds = moveOutbound(draft.outbounds, index, action === 'up' ? -1 : 1); feedback = t('出站顺序已更新，首项为默认；请保存草稿，尚未应用。', 'Outbound order updated; the first is the default. Save the draft; not applied yet.'); }
+      if (action === 'up' || action === 'down') { draft.outbounds = moveOutbound(draft.outbounds, index, action === 'up' ? -1 : 1); feedback = t('出站顺序已更新，首项为默认出站；点“保存”后生效。', 'Outbound order updated; the first is the default. Click Save to apply.'); }
       if (action === 'delete') { outboundDeleting = index; focus = '#outbound-confirm-delete'; }
-      if (action === 'confirm-delete' && outboundDeleting !== null) { draft.outbounds = removeOutbound(draft, outboundDeleting); outboundDeleting = null; feedback = t('仅移除所选出站，请保存草稿；尚未应用。', 'Removed only the selected outbound; save the draft. Not applied yet.'); }
+      if (action === 'confirm-delete' && outboundDeleting !== null) { draft.outbounds = removeOutbound(draft, outboundDeleting); outboundDeleting = null; feedback = t('已移除所选出站，点“保存”后生效。', 'Outbound removed; click Save to apply.'); }
       if (action === 'cancel-delete') outboundDeleting = null;
     } catch (reason) { error = (reason as Error).message; focus = '#xray-settings-error'; }
     paint(); root.querySelector<HTMLElement>(focus)?.focus();
@@ -138,10 +138,10 @@ export function initXraySettings(root: HTMLElement, icons: () => void, persisten
         if (!fields) throw new Error(t('此均衡需要JSON编辑，原文未修改。', 'This balancer needs JSON editing; the original was not changed.'));
         balancerEditing = index; balancerForm = fields; focus = '#balancer-form-title';
       }
-      if (action === 'commit' && balancerEditing !== null) { draft.balancers = putBalancer(draft, balancerEditing, balancerForm); balancerEditing = null; feedback = t('均衡列表已更新，请保存草稿；尚未应用。', 'Balancer list updated; save the draft. Not applied yet.'); }
+      if (action === 'commit' && balancerEditing !== null) { draft.balancers = putBalancer(draft, balancerEditing, balancerForm); balancerEditing = null; feedback = t('均衡列表已更新，点“保存”后生效。', 'Balancer list updated; click Save to apply.'); }
       if (action === 'cancel') { balancerEditing = null; balancerForm = emptyBalancer(); }
       if (action === 'delete') { balancerDeleting = index; focus = '#balancer-confirm-delete'; }
-      if (action === 'confirm-delete' && balancerDeleting !== null) { draft.balancers = removeBalancer(draft, balancerDeleting); balancerDeleting = null; feedback = t('仅移除所选均衡，请保存草稿；尚未应用。', 'Removed only the selected balancer; save the draft. Not applied yet.'); }
+      if (action === 'confirm-delete' && balancerDeleting !== null) { draft.balancers = removeBalancer(draft, balancerDeleting); balancerDeleting = null; feedback = t('已移除所选均衡，点“保存”后生效。', 'Balancer removed; click Save to apply.'); }
       if (action === 'cancel-delete') balancerDeleting = null;
     } catch (reason) { error = (reason as Error).message; focus = '#xray-settings-error'; }
     paint(); root.querySelector<HTMLElement>(focus)?.focus();
@@ -167,7 +167,7 @@ export function initXraySettings(root: HTMLElement, icons: () => void, persisten
         if (!fields) throw new Error(t('此DNS配置含高级字段、重复键或表单无法完整表达的内容，请继续使用JSON；原文未改动。', 'This DNS configuration has advanced fields, duplicate keys or content the form cannot express; keep using JSON. The original was not changed.'));
         dnsForm = fields; dnsJSON = false;
       }
-      if (action === 'commit') { draft.dns = buildDNS(dnsForm); dnsEditing = false; feedback = t('DNS草稿已更新，请保存草稿；未查询、未应用。', 'DNS draft updated; save the draft. Nothing was queried or applied.'); }
+      if (action === 'commit') { draft.dns = buildDNS(dnsForm); dnsEditing = false; feedback = t('DNS 已更新，点“保存”后生效。', 'DNS updated; click Save to apply.'); }
       if (action === 'cancel') { dnsEditing = false; feedback = t('已取消本次DNS表单编辑，原草稿保持。', 'DNS form edit canceled; the draft is unchanged.'); }
     } catch (reason) { error = (reason as Error).message; focus = '#xray-settings-error'; }
     paint(); root.querySelector<HTMLElement>(focus)?.focus();
@@ -205,11 +205,11 @@ export function initXraySettings(root: HTMLElement, icons: () => void, persisten
         if (!fields) throw new Error(t('该规则需用JSON编辑，以保留全部字段。', 'This rule needs JSON editing to keep all fields.'));
         routeEditing = index; routeForm = fields; focus = '#route-form-title';
       }
-      if (action === 'commit' && routeEditing !== null) { draft.rules = putRoute(draft, routeEditing, routeForm); routeEditing = null; feedback = t('规则列表已更新，请保存草稿；尚未应用。', 'Rule list updated; save the draft. Not applied yet.'); }
+      if (action === 'commit' && routeEditing !== null) { draft.rules = putRoute(draft, routeEditing, routeForm); routeEditing = null; feedback = t('规则列表已更新，点“保存”后生效。', 'Rule list updated; click Save to apply.'); }
       if (action === 'cancel') { routeEditing = null; routeForm = emptyRoute(); }
-      if (action === 'up' || action === 'down') { draft.rules = moveRoute(draft.rules, index, action === 'up' ? -1 : 1); feedback = t('规则顺序已更改，请保存草稿；尚未应用。', 'Rule order changed; save the draft. Not applied yet.'); focus = `[data-route-action="${action}"][data-route-index="${index + (action === 'up' ? -1 : 1)}"]`; }
+      if (action === 'up' || action === 'down') { draft.rules = moveRoute(draft.rules, index, action === 'up' ? -1 : 1); feedback = t('规则顺序已更改，点“保存”后生效。', 'Rule order changed; click Save to apply.'); focus = `[data-route-action="${action}"][data-route-index="${index + (action === 'up' ? -1 : 1)}"]`; }
       if (action === 'delete') { routeDeleting = index; focus = '#route-confirm-delete'; }
-      if (action === 'confirm-delete' && routeDeleting !== null) { draft.rules = removeRoute(draft.rules, routeDeleting); routeDeleting = null; feedback = t('仅移除所选规则，请保存草稿；尚未应用。', 'Removed only the selected rule; save the draft. Not applied yet.'); }
+      if (action === 'confirm-delete' && routeDeleting !== null) { draft.rules = removeRoute(draft.rules, routeDeleting); routeDeleting = null; feedback = t('已移除所选规则，点“保存”后生效。', 'Rule removed; click Save to apply.'); }
       if (action === 'cancel-delete') routeDeleting = null;
     } catch (reason) { error = (reason as Error).message; focus = '#xray-settings-error'; }
     paint();
@@ -217,11 +217,11 @@ export function initXraySettings(root: HTMLElement, icons: () => void, persisten
     (target && !(target instanceof HTMLButtonElement && target.disabled) ? target : root.querySelector<HTMLElement>('#route-add'))?.focus();
   }
   function statusText(): string {
-    if (loading) return t('正在读取已保存草稿…', 'Reading the saved draft…');
+    if (loading) return t('正在读取…', 'Loading…');
     if (!loaded) return t('草稿尚未读取，无法核对应用状态。', 'The draft is not loaded; cannot check the apply status.');
-    if (saving) return t('正在保存草稿，保存不会自动应用核心…', 'Saving the draft; saving does not apply the core…');
+    if (saving) return t('正在保存并应用…', 'Saving and applying…');
     const pending = outboundEditing !== null || outboundDeleting !== null ? t('出站有未完成的编辑或删除确认，请完成或取消。', 'Outbounds have an unfinished edit or delete; finish or cancel it.') : balancerEditing !== null || balancerDeleting !== null ? t('负载均衡有未完成的编辑或删除确认，请完成或取消。', 'Balancers have an unfinished edit or delete; finish or cancel it.') : routeEditing !== null ? t('路由表单尚未加入规则列表，请完成或取消编辑。', 'The routing form is not in the rule list yet; finish or cancel the edit.') : routeDeleting !== null ? t('路由删除尚未确认，原规则仍保留。', 'The routing deletion is not confirmed; the rule is kept.') : dnsEditing ? t('DNS表单尚未更新草稿，请完成或取消编辑。', 'The DNS form has not updated the draft; finish or cancel the edit.') : '';
-    const dirty = JSON.stringify(draft) !== JSON.stringify(saved) ? t('有未保存修改，当前页面修改尚未应用。', 'There are unsaved changes; changes on this page are not applied.') : '';
+    const dirty = JSON.stringify(draft) !== JSON.stringify(saved) ? t('有未保存修改，点“保存”后生效。', 'There are unsaved changes; click Save to apply.') : '';
     return [pending || dirty, feedback, settingsStatusText(persistent, revision, runtime, runtimeAt)].filter(Boolean).join(' ');
   }
   function updateStatus(): void {
@@ -230,20 +230,19 @@ export function initXraySettings(root: HTMLElement, icons: () => void, persisten
     if (message && message.textContent !== text) message.textContent = text;
   }
   function paint(): void {
-    const content = tab === 'basic' ? `<details class="xray-setting-section" open><summary>${t('常规配置', 'General')}</summary><div class="xray-setting-content"><p class="core-warning">${t('这些选项决定核心配置草稿；保存后需另行确认应用。下方状态仅核对设置修订，不代表入站一致或代理连接验收通过。', 'These options shape the core configuration draft; after saving, apply separately. The status below checks only the settings revision, not inbounds or verified proxy connections.')}</p>
+    const content = tab === 'basic' ? `<details class="xray-setting-section" open><summary>${t('常规配置', 'General')}</summary><div class="xray-setting-content"><p class="core-warning">${t('保存后立即生效（自动预检并重启 Xray）。', 'Changes apply as soon as you save (preflight, then Xray restarts).')}</p>
       ${select('freedomStrategy', t('Freedom协议策略', 'Freedom domain strategy'), t('设置Freedom出站的域名解析策略', 'Domain resolution strategy for Freedom outbounds'), draft.freedomStrategy, freedomStrategies)}
       ${select('routingStrategy', t('配置路由域策略', 'Routing domain strategy'), t('设置路由匹配时的域名解析策略', 'Domain resolution strategy used for routing'), draft.routingStrategy, routingStrategies)}
-      <label class="xray-setting-row"><span><strong id="xray-label-probeURL">${t('出站测试URL', 'Outbound test URL')}</strong><small id="xray-hint-probeURL">${t('只保存面板草稿选项，本轮不会发起测试请求', 'Saved as a draft option only; no test request is sent')}</small></span><input name="probeURL" type="url" value="${esc(draft.probeURL)}" required aria-labelledby="xray-label-probeURL" aria-describedby="xray-hint-probeURL"></label></div></details>
-      <details class="xray-setting-section"><summary>${t('统计', 'Statistics')}</summary><div class="xray-setting-content">${check('statistics', t('生成用户及入站上下行统计配置', 'Generate per-user and per-inbound traffic statistics'), draft.statistics)}<p class="form-hint">${t('保存后需应用：开启时通过受限本机套接字采集累计；非零额度必须开启。关闭期间不计流量，后续累计会标为可能不完整。离线预览不采集。', 'Takes effect after applying: when on, totals are collected through a restricted local socket; non-zero quotas require it. Traffic is not counted while off, and later totals are marked as possibly incomplete. The offline preview does not collect.')}</p></div></details>
+      <label class="xray-setting-row"><span><strong id="xray-label-probeURL">${t('出站测试URL', 'Outbound test URL')}</strong><small id="xray-hint-probeURL">${t('出站连通性测试使用的地址', 'URL used for outbound connectivity tests')}</small></span><input name="probeURL" type="url" value="${esc(draft.probeURL)}" required aria-labelledby="xray-label-probeURL" aria-describedby="xray-hint-probeURL"></label></div></details>
       <details class="xray-setting-section"><summary>${t('日志', 'Logs')}</summary><div class="xray-setting-content">${select('logLevel', t('日志级别', 'Log level'), t('调试日志可能包含连接信息，使用时注意隐私', 'Debug logs may contain connection details; mind privacy'), draft.logLevel, ['none', 'error', 'warning', 'info', 'debug'])}${check('accessLog', t('开启访问日志（输出到核心控制台）', 'Enable access log (to the core console)'), draft.accessLog)}${check('dnsLog', t('开启DNS日志', 'Enable DNS log'), draft.dnsLog)}</div></details>
       <details class="xray-setting-section"><summary>${t('基本路由', 'Basic routing')}</summary><div class="xray-setting-content"><p class="form-intro">${t('默认仅保留direct与block两个出站，不自动添加屏蔽或绕过规则。在“路由规则”分类可通过表单添加域名/IP/端口/嗅探协议规则，或用JSON编辑高级规则。', 'By default only the direct and block outbounds exist, and no blocking or bypass rules are added. In Routing rules you can add domain, IP, port and sniffed-protocol rules with the form, or edit advanced rules as JSON.')}</p><button type="button" class="secondary-button" id="xray-open-routing">${t('管理路由规则', 'Manage routing rules')}</button></div></details>` : tab === 'routing' ? routeContent() : tab === 'dns' ? dnsContent() : tab === 'balancers' ? balancerContent() : tab === 'outbounds' ? outboundContent() : (() => {
         const [key, title, hint] = editorInfo[tab];
         return `<div class="xray-setting-content"><h2 class="xray-editor-title">${title}</h2><p class="form-intro" id="xray-json-hint">${hint}</p><label class="form-field"><span id="xray-json-label">${title} JSON</span><textarea id="xray-json-editor" name="${key}" rows="16" spellcheck="false" autocomplete="off" aria-labelledby="xray-json-label" aria-describedby="xray-json-hint">${esc(draft[key])}</textarea></label></div>`;
       })();
     root.innerHTML = `<div class="page-heading"><div><h1 class="page-title" tabindex="-1">${t('Xray 设置', 'Xray settings')}</h1><p>${t('六类配置独立编辑；版本切换在首页Xray弹窗。', 'Six categories are edited separately; switch versions from the Xray dialog on the dashboard.')}</p></div></div>
-      <div class="card xray-settings-actions"><button class="primary-button" id="xray-save" ${!loaded || saving || loading || reloadRequired ? 'disabled' : ''}>${saving ? t('正在保存…', 'Saving…') : persistent ? t('保存草稿', 'Save draft') : t('保存会话草稿', 'Save session draft')}</button><button class="secondary-button" id="xray-preview" ${!loaded || saving || loading ? 'disabled' : ''}>${t('校验并预览', 'Verify and preview')}</button>${persistent ? `<button class="secondary-button" id="xray-reload" ${loading || saving ? 'disabled' : ''}>${t('重新读取已保存草稿', 'Reload saved draft')}</button>` : ''}<button class="secondary-button" id="xray-apply" ${!persistent || !loaded || saving || loading || reloadRequired ? 'disabled' : ''}>${t('应用已保存配置', 'Apply saved configuration')}</button></div>
+      <div class="card xray-settings-actions"><button class="primary-button" id="xray-save" ${!loaded || saving || loading || reloadRequired ? 'disabled' : ''}>${saving ? t('正在保存…', 'Saving…') : persistent ? t('保存', 'Save') : t('保存会话草稿', 'Save session draft')}</button><button class="secondary-button" id="xray-preview" ${!loaded || saving || loading ? 'disabled' : ''}>${t('校验并预览', 'Verify and preview')}</button>${persistent ? `<button class="secondary-button" id="xray-reload" ${loading || saving ? 'disabled' : ''}>${t('刷新', 'Refresh')}</button>` : ''}<button class="secondary-button" id="xray-apply" ${!persistent || !loaded || saving || loading || reloadRequired ? 'disabled' : ''}>${t('重新应用', 'Re-apply')}</button></div>
       ${reloadRequired ? t('<p class="form-error" role="alert">上次保存失败或结果未确认，已保留本页输入。请先复制需要保留的修改，再重新读取已保存草稿；不会自动合并或覆盖其它页面的数据。</p>', '<p class="form-error" role="alert">The last save failed or was not confirmed; your input on this page is kept. Copy any changes you need, then reload the saved draft. Data from other pages is never merged or overwritten automatically.</p>') : ''}
-      <p class="form-intro">${persistent ? t('草稿保存到本项目独立SQLite，刷新或重启后保留；保存不等于应用核心。应用会单独确认并执行官方预检，仅限本机。', 'Drafts are saved to o-ui\'s own SQLite and survive refreshes and restarts; saving does not apply the core. Applying is confirmed separately and runs the official preflight.') : t('离线演示草稿只保留到页面刷新，不写数据库、不应用核心。', 'Offline demo drafts last until the page refreshes; nothing is written to the database or applied.')}${t('路由、DNS、出站和负载均衡支持常用表单与JSON；其他高级配置使用JSON。', ' Routing, DNS, outbounds and balancers support forms and JSON; other advanced settings use JSON.')}</p>
+      <p class="form-intro">${persistent ? t('保存后立即生效：先用官方核心预检，通过后重启 Xray；预检失败时保留原配置。', 'Changes apply as soon as you save: the official core runs a preflight first, then Xray restarts; if the preflight fails, the previous configuration keeps running.') : t('离线演示草稿只保留到页面刷新，不写数据库、不应用核心。', 'Offline demo drafts last until the page refreshes; nothing is written to the database or applied.')}${t('路由、DNS、出站和负载均衡支持常用表单与JSON；其他高级配置使用JSON。', ' Routing, DNS, outbounds and balancers support forms and JSON; other advanced settings use JSON.')}</p>
       <section class="card xray-settings-card"><div class="xray-settings-tabs" role="tablist" aria-label="${t('Xray配置分类', 'Xray setting categories')}">${settingsTabs.map(([id, label, icon]) => `<button role="tab" id="xray-tab-${id}" aria-selected="${id === tab}" aria-controls="xray-settings-panel" tabindex="${id === tab ? 0 : -1}" data-settings-tab="${id}"><i data-lucide="${icon}" aria-hidden="true"></i>${label}</button>`).join('')}</div>
       <div id="xray-settings-panel" role="tabpanel" aria-labelledby="xray-tab-${tab}"><form id="xray-settings-form"><fieldset class="xray-edit-fields" ${!loaded || saving || loading ? 'disabled' : ''}>${content}</fieldset></form></div></section>
       <p class="core-message" id="xray-settings-status" role="status">${esc(statusText())}</p>
@@ -293,10 +292,12 @@ export function initXraySettings(root: HTMLElement, icons: () => void, persisten
         if (save) {
           if (persistent) {
             saving = true; paint();
-            const document = await api<{ revision: number; data: SettingsDraft }>('settings', jsonBody('PUT', { revision, data: draft })).catch(reason => { if (!(reason instanceof APIError) || reason.status === 409 || reason.status >= 500) reloadRequired = true; throw reason; });
+            const document = await api<{ revision: number; data: SettingsDraft; applied?: boolean; applyError?: string }>('settings', jsonBody('PUT', { revision, data: draft })).catch(reason => { if (!(reason instanceof APIError) || reason.status === 409 || reason.status >= 500) reloadRequired = true; throw reason; });
             revision = document.revision;
-          }
-          saved = structuredClone(draft); feedback = persistent ? `${t('草稿已保存到数据库（修订', 'Draft saved to the database (revision ')}${revision}${t('）；保存不会自动应用。', '); saving does not apply automatically.')}` : t('已保存当前会话草稿；刷新会恢复默认，不应用核心。', 'Session draft saved; refreshing restores defaults and nothing is applied.');
+            feedback = document.applied ? t('已保存并生效。', 'Saved and applied.') : `${t('已保存，但未生效：', 'Saved, but not applied: ')}${document.applyError ?? ''}`;
+            onSaved();
+          } else feedback = t('已保存当前会话草稿；刷新会恢复默认，不应用核心。', 'Session draft saved; refreshing restores defaults and nothing is applied.');
+          saved = structuredClone(draft);
         }
         else { preview = JSON.stringify(config, null, 2); feedback = t('基础结构及引用校验通过；本次未执行官方核心预检或更改运行核心。', 'Structure and reference checks passed; no official core preflight was run and the running core is unchanged.'); }
       } catch (reason) { error = (reason as Error).message; }
@@ -313,7 +314,7 @@ export function initXraySettings(root: HTMLElement, icons: () => void, persisten
       if (balancerEditing !== null || balancerDeleting !== null) { error = t('请先完成或取消“负载均衡”的编辑/删除确认，再保存并应用。', 'Finish or cancel the edit or delete in “Balancers” before saving and applying.'); paint(); root.querySelector<HTMLElement>('#xray-settings-error')?.focus(); return; }
       if (routeEditing !== null || routeDeleting !== null) { error = t('请先完成或取消“路由规则”中的编辑/删除确认，再保存并应用。', 'Finish or cancel the edit or delete in “Routing rules” before saving and applying.'); paint(); root.querySelector<HTMLElement>('#xray-settings-error')?.focus(); return; }
       if (dnsEditing) { error = t('请先更新或取消“DNS”中的表单编辑，再保存并应用。', 'Update or cancel the form edit in “DNS” before saving and applying.'); paint(); root.querySelector<HTMLElement>('#xray-settings-error')?.focus(); return; }
-      if (JSON.stringify(draft) !== JSON.stringify(saved)) { error = t('有未保存修改，请先保存草稿，再应用。', 'There are unsaved changes; save the draft before applying.'); paint(); root.querySelector<HTMLElement>('#xray-settings-error')?.focus(); return; }
+      if (JSON.stringify(draft) !== JSON.stringify(saved)) { error = t('有未保存修改，请先保存。', 'There are unsaved changes; save first.'); paint(); root.querySelector<HTMLElement>('#xray-settings-error')?.focus(); return; }
       onApply();
     });
     icons();
@@ -333,7 +334,7 @@ export function initXraySettings(root: HTMLElement, icons: () => void, persisten
       routeEditing = routeDeleting = balancerEditing = balancerDeleting = outboundEditing = outboundDeleting = null;
       routingJSON = dnsJSON = balancerJSON = outboundJSON = dnsEditing = false;
       routeForm = emptyRoute(); dnsForm = dnsFields(draft.dns) ?? dnsForm; balancerForm = emptyBalancer(); outboundForm = emptyOutbound();
-      if (force) feedback = `${t('已重新读取数据库草稿（修订', 'Reloaded the database draft (revision ')}${revision}${t('）；未保存或应用核心。', '); nothing was saved or applied.')}`;
+      if (force) feedback = `${t('已刷新（修订', 'Refreshed (revision ')}${revision}${t('）。', ').')}`;
     } catch (reason) { error = (reason as Error).message; if (force) reloadRequired = true; }
     finally { loading = false; if (visible) { paint(); if (force) root.querySelector<HTMLElement>(error ? '#xray-settings-error' : '#xray-reload')?.focus(); } }
   }

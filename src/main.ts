@@ -130,10 +130,13 @@ app.innerHTML = `
   </main>
   <dialog id="detail-dialog" aria-labelledby="dialog-title" aria-describedby="dialog-description"><div class="dialog-heading"><h2 id="dialog-title"></h2><button class="icon-button" id="close-dialog" aria-label="${t('关闭弹窗', 'Close dialog')}">${icon('x')}</button></div><div class="dialog-body"><p id="dialog-description"></p></div><footer><button class="primary-button" id="confirm-dialog">${t('知道了', 'OK')}</button></footer></dialog>
 `;
+type PanelVersion = { current: string; latest?: string; url?: string; updateAvailable: boolean; issue?: string };
 if (authenticated) {
-  document.querySelector('.demo-label')!.textContent = t('本机', 'Local');
-  document.querySelector('.demo-notice span')!.textContent = t('本机测试 · 系统资源为真实采集，系统网卡流量与客户端累计分开；草稿保存不等于生效，不接管旧OUI或VPS', 'Local · system resources are sampled live, and interface traffic is separate from client totals; saving a draft does not apply it');
-  document.querySelector('#panel-title .version-tag')!.textContent = t('本机测试', 'Local');
+  document.querySelector('.demo-label')!.remove();
+  document.querySelector('.demo-notice')!.remove();
+  const versionTag = document.querySelector('#panel-title .version-tag')!, sidebarVersion = document.querySelector('.prototype-version')!;
+  versionTag.textContent = ''; sidebarVersion.textContent = 'o-ui';
+  void api<PanelVersion>('panel/version').then(version => { versionTag.textContent = version.current; sidebarVersion.textContent = `o-ui ${version.current}`; }).catch(() => {});
   document.querySelector('.speed-readings')!.innerHTML = t('<p class="form-intro">网速尚未采集</p>', '<p class="form-intro">Network speed not sampled yet</p>');
   document.querySelector('.traffic-chart')!.innerHTML = t('<p class="form-intro">暂无真实历史记录</p>', '<p class="form-intro">No history yet</p>');
   document.querySelector('.traffic-chart')!.setAttribute('aria-label', t('暂无真实流量采样', 'No traffic samples yet'));
@@ -230,11 +233,20 @@ const descriptions: Record<string, [string, string]> = {
   'update': [t('面板更新', 'Panel updates'), authenticated ? t('内部测试包不提供在线更新，也不检查更新。更换版本时先正常停止面板，再用新包的 o-ui 命令指定同一数据目录启动（见包内《本机运行说明》）；Xray 核心在版本管理中单独选择，不随面板更新。', 'The panel does not update online or check for updates. To change versions, stop the panel normally, then start the new package\'s o-ui command with the same data directory (see the package\'s run guide). The Xray core is selected separately in version management and is not updated with the panel.') : t('当前原型尚未发版，没有发起更新检查。后续面板更新与 Xray 核心更新分开，不自动覆盖现有核心。', 'This prototype has no releases; no update check was made. Panel updates and Xray core updates are separate and never overwrite the existing core automatically.')],
   'backup': [t('备份和恢复', 'Backup and restore'), t('离线演示不读写真实数据。请登录本机服务使用加密备份与恢复。', 'The offline demo does not read or write real data. Sign in to use encrypted backup and restore.')],
   'config': [t('配置', 'Config'), t('核心配置管理尚未接入。后续采用生成候选、官方核心预检、应用与核验的流程，失败保留上一份可用配置。', 'Core configuration management is not connected here. It generates a candidate, runs the official preflight, applies and verifies, keeping the last working configuration on failure.')],
-  'history': [t('系统历史', 'System history'), authenticated ? t('首页保留最近3分钟真实系统网卡采样，仅在内存中，后端重启后清空；缺失/网卡变化/计数归零会断线，不补假点。长期系统历史尚未落库。', 'The dashboard keeps the last 3 minutes of interface samples in memory only, cleared when the backend restarts; missing samples, interface changes or counter resets break the line and are never filled in. Long-term system history is not stored.') : t('当前趋势是固定演示样本，并非采集结果。', 'The current trend is a fixed demo sample, not collected data.')],
-  'metrics': [t('Xray 指标', 'Xray metrics'), authenticated ? t('首页显示本面板自有 Xray 的常驻内存、系统线程、已建立 TCP 和 UDP 套接字，约2秒采样；切换/停止/过期时撤下读数。UDP 含监听，不等于 QUIC 会话、客户端或设备数；客户端累计流量见客户端页。在线 IP 尚未采集。', 'The dashboard shows resident memory, OS threads, established TCP and UDP sockets of o-ui\'s own Xray, sampled about every 2 seconds; readings are removed on switch, stop or staleness. UDP includes listeners and is not QUIC sessions, clients or devices; client traffic totals are on the Clients page. Online IPs are not collected yet.') : t('离线预览只显示演示数据，不采集核心指标。', 'The offline preview shows demo data only and collects no core metrics.')],
+  'history': [t('系统历史', 'System history'), authenticated ? t('首页显示最近3分钟的面板业务网速，只保存在内存中，面板重启后清空。', 'The dashboard shows proxy traffic speed for the last 3 minutes, kept in memory and cleared when o-ui restarts.') : t('当前趋势是固定演示样本，并非采集结果。', 'The current trend is a fixed demo sample, not collected data.')],
+  'metrics': [t('Xray 指标', 'Xray metrics'), authenticated ? t('首页显示本面板 Xray 的内存、线程和 TCP/UDP 连接数，约每2秒更新；客户端流量见客户端页。', 'The dashboard shows memory, threads and TCP/UDP sockets of o-ui\'s Xray, updated about every 2 seconds; client traffic is on the Clients page.') : t('离线预览只显示演示数据，不采集核心指标。', 'The offline preview shows demo data only and collects no core metrics.')],
   'xray-log': [t('Xray 日志', 'Xray logs'), t('离线演示不读取真实日志，请登录本机面板查看脱敏诊断。', 'The offline demo reads no real logs; sign in to view redacted diagnostics.')],
   'panel-log': [t('面板日志', 'Panel logs'), t('离线演示不读取真实日志，请登录本机面板查看本轮操作摘要。', 'The offline demo reads no real logs; sign in to view the operation summary.')],
 };
+async function checkUpdate(): Promise<void> {
+  showDetail(t('检测更新', 'Check for updates'), t('正在检查 GitHub 最新版本…', 'Checking GitHub for the latest release…'));
+  let text: string;
+  try {
+    const v = await api<PanelVersion>('panel/version?check=1');
+    text = v.issue ? v.issue : v.updateAvailable ? `${t('发现新版本 ', 'New version ')}${v.latest}${t('（当前 ', ' is available (current ')}${v.current}${t('）。在服务器上运行 o-ui update 升级，数据和配置会保留。', '). Run o-ui update on the server to upgrade; data and settings are kept.')}` : `${t('已是最新版本 ', 'You are on the latest version ')}${v.current}${t('。', '.')}`;
+  } catch (reason) { text = (reason as Error).message; }
+  if (dialog.open) document.querySelector('#dialog-description')!.textContent = text;
+}
 let detailReturnFocus: HTMLElement | null = null;
 function showDetail(title: string, description: string): void {
   detailReturnFocus = document.activeElement as HTMLElement;
@@ -248,6 +260,7 @@ document.querySelectorAll<HTMLButtonElement>('[data-action]').forEach(button => 
     if (authenticated && button.dataset.action === 'backup') { closeMenu(); backup.open(); return; }
     if (authenticated && ['xray-log', 'panel-log'].includes(button.dataset.action!)) { closeMenu(); logs.open(button.dataset.action === 'xray-log' ? 'xray' : 'panel'); return; }
     if (authenticated && ['restart', 'stop', 'config'].includes(button.dataset.action!)) { closeMenu(); runtime.open(button.dataset.action === 'stop' ? 'stop' : button.dataset.action === 'restart' ? 'restart' : 'apply'); return; }
+    if (authenticated && button.dataset.action === 'update') { closeMenu(); void checkUpdate(); return; }
     const [title, description] = descriptions[button.dataset.action!]!;
     closeMenu();
     showDetail(title, description);
@@ -268,12 +281,12 @@ const logs = initLogs(refreshIcons);
 if (authenticated) initMonitor(document.querySelector<HTMLElement>('#home-view')!, () => latestRuntime);
 const serverInfo = authenticated ? initServerInfo(document.querySelector<HTMLElement>('#home-view')!, () => showPrivate) : null;
 if (authenticated) window.setInterval(() => { if (!document.hidden) void runtime.refresh(); }, 5000);
-management = initManagement(document.querySelector('#workspace-view')!, refreshIcons, navigate, showDetail, authenticated, () => runtime.open());
+management = initManagement(document.querySelector('#workspace-view')!, refreshIcons, navigate, showDetail, authenticated, () => runtime.open(), () => { void runtime.refresh(); });
 const core = initCore(refreshIcons, status => {
   const label = document.querySelector('[data-action="core-version"] span');
   if (label) label.textContent = status ? `v${status.selected}` : t('版本管理', 'Version management');
 });
-xraySettings = initXraySettings(document.querySelector('#core-view')!, refreshIcons, authenticated, () => runtime.open());
+xraySettings = initXraySettings(document.querySelector('#core-view')!, refreshIcons, authenticated, () => runtime.open(), () => { void runtime.refresh(); });
 const panelSettings = initPanelSettings(document.querySelector('#panel-view')!, authenticated);
 function navigate(page: string): void {
   logs.close();

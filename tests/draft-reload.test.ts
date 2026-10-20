@@ -253,7 +253,7 @@ test('入站客户端列表应显示应用状态入口，而非仅指向首页',
     const management = initManagement(root as unknown as HTMLElement, () => {}, () => {}, () => {}, true);
     management.render('inbounds'); await settle();
     assert.match(root.innerHTML, /id="workspace-application-status"[^>]*role="status"/);
-    assert.match(root.querySelector('#list-content').innerHTML, /草稿启用/);
+    assert.match(root.querySelector('#list-content').innerHTML, /已启用/);
     assert.doesNotMatch(root.querySelector('#list-content').innerHTML, /待应用/);
     management.render('clients');
     assert.match(root.innerHTML, /id="workspace-application-status"[^>]*role="status"/);
@@ -261,7 +261,7 @@ test('入站客户端列表应显示应用状态入口，而非仅指向首页',
   });
 });
 
-test('保存入站客户端后显示待应用，状态更新或切页不重绘表单、不追加请求', async () => {
+test('保存入站客户端后核对生效状态，状态更新或切页不重绘表单、不追加请求', async () => {
   const initial = workspaceFixture(); let reads = 0, writes = 0;
   let complete!: (value: Response) => void;
   const pending = new Promise<Response>(resolve => { complete = resolve; });
@@ -280,11 +280,11 @@ test('保存入站客户端后显示待应用，状态更新或切页不重绘�
     const input = new Control(); input.value = '尚未提交的本地输入'; form.controls.set('[name="local"]', input);
     const pageHTML = root.innerHTML, modalHTML = dialog.innerHTML;
     management.setRuntime({ ...current, running: false }, Date.now());
-    assert.match(root.querySelector('#workspace-application-status').textContent, /弹窗操作尚未提交.*核心已停止/);
+    assert.match(root.querySelector('#workspace-application-status').textContent, /核心已停止/);
     assert.equal(root.innerHTML, pageHTML); assert.equal(dialog.innerHTML, modalHTML); assert.equal(form.querySelector('[name="local"]'), input);
     management.setRuntime(current, Date.now());
     form.fire('submit'); await settle();
-    assert.match(root.querySelector('#workspace-application-status').textContent, /正在保存.*不会自动应用/);
+    assert.match(root.querySelector('#workspace-application-status').textContent, /正在保存并应用/);
     const next = structuredClone(initial); next.clients[0].enabled = false;
     complete(Response.json({ revision: 4, data: next })); await settle();
     assert.equal(dialog.open, false); assert.equal(writes, 1);
@@ -355,7 +355,7 @@ test('草稿校验失败仍可修正，重读失败则撤下旧修订已应用�
     clickWorkspace(root, 'data-op', 'toggle-client', initial.clients[0].id);
     const dialog = dialogs.at(-1)!, form = dialog.querySelector('form');
     form.fire('submit'); await settle();
-    assert.match(root.querySelector('#workspace-application-status').textContent, /弹窗操作尚未提交.*修订3当前已应用/);
+    assert.match(root.querySelector('#workspace-application-status').textContent, /修订3当前已应用/);
     assert.equal(form.querySelector('[type="submit"]').disabled, false);
     form.fire('submit'); await settle(); assert.equal(writes, 2);
     dialog.querySelector('[data-reload]').fire(); await settle();
@@ -390,7 +390,7 @@ test('入站客户端慢保存锁定所有编辑控件，失败恢复原禁用�
       form.fire('submit'); await settle();
       try {
         assert.ok(controls.every(control => control.disabled), '提交期间输入、选择、文本域和按钮全部锁定');
-        assert.equal(save.textContent, '正在保存草稿…');
+        assert.equal(save.textContent, '正在保存并生效…');
         assert.equal(dialog.open, true); assert.equal(name.value, '原输入'); assert.equal(textarea.value, '原排除规则');
         let prevented = false; dialog.fire('cancel', { preventDefault() { prevented = true; } }); assert.equal(prevented, true);
         form.fire('submit'); dialog.querySelector('[data-reload]').fire(); await settle();

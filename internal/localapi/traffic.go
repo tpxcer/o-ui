@@ -105,7 +105,8 @@ func (rt *Runtime) checkpoint(ctx context.Context, c engine.Candidate, started t
 		return err
 	}
 	// 文件快照与启动时间共同识别实例，失败回退重启同一文件也不会复用旧基线。
-	ledger, err = traffic.Merge(ledger, fmt.Sprintf("%s:%d", c.File, started.UnixNano()), counts, time.Now())
+	epoch, now := fmt.Sprintf("%s:%d", c.File, started.UnixNano()), time.Now()
+	ledger, err = traffic.Merge(ledger, epoch, counts, now)
 	if err != nil {
 		return err
 	}
@@ -116,6 +117,7 @@ func (rt *Runtime) checkpoint(ctx context.Context, c engine.Candidate, started t
 	if _, err = rt.state.SaveDocument(ctx, "traffic", revision, data); err != nil {
 		return i18n.New("流量检查点保存失败", "Failed to save the traffic checkpoint")
 	}
+	rt.business.observe(epoch, counts, ledger.Totals, now)
 	return nil
 }
 
@@ -333,6 +335,7 @@ func (rt *Runtime) guard(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		rt.business.observe("", nil, ledger.Totals, time.Now())
 		if ledger.Active {
 			if err = rt.markStopped(ctx, true); err != nil {
 				return err

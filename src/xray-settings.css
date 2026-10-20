@@ -59,3 +59,6 @@
   .routing-form-grid, .dns-form-grid { grid-template-columns: 1fr; }
   .routing-rule-form, .routing-delete { padding: 12px; }
 }
+.settings-block + .settings-block { margin-top: 22px; padding-top: 22px; border-top: 1px solid var(--border); }
+.panel-restart-bar { align-items: center; }
+.panel-restart-bar p { margin: 0; flex: 1 1 260px; }

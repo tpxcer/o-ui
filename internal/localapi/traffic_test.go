@@ -120,9 +120,10 @@ func TestUncleanLedgerKeepsWarningAcrossRuntimeReopen(t *testing.T) {
 	}
 }
 
-func TestStatsDisabledDoesNotOutputCollectors(t *testing.T) {
+// 统计常开：旧草稿里的statistics=false也输出统计，避免额度与业务网速失效。
+func TestStatisticsAlwaysOutputCollectors(t *testing.T) {
 	full, err := compileSettings(json.RawMessage(`{"freedomStrategy":"AsIs","routingStrategy":"AsIs","probeURL":"https://example.test/","statistics":false,"logLevel":"warning","accessLog":false,"dnsLog":false,"rules":"[]","outbounds":"[{\"tag\":\"direct\",\"protocol\":\"freedom\"}]","balancers":"[]","dns":"{\"servers\":[\"localhost\"]}","advanced":"{}"}`))
-	if err != nil || full["stats"] != nil || full["policy"] != nil {
-		t.Fatal("stats off ignored", err)
+	if err != nil || full["stats"] == nil || full["policy"] == nil {
+		t.Fatal("statistics not forced on", err)
 	}
 }

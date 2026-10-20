@@ -180,9 +180,8 @@ func compileSettings(data json.RawMessage) (map[string]any, error) {
 	advanced["outbounds"] = outbounds
 	advanced["routing"] = map[string]any{"domainStrategy": d.RoutingStrategy, "rules": rules, "balancers": balancers}
 	advanced["dns"] = dns
-	if *d.Statistics {
-		advanced["stats"] = map[string]any{}
-		advanced["policy"] = map[string]any{"levels": map[string]any{"0": map[string]bool{"statsUserUplink": true, "statsUserDownlink": true}}, "system": map[string]bool{"statsInboundUplink": true, "statsInboundDownlink": true}}
-	}
+	// 统计常开：流量额度与首页业务网速都依赖用户计数。
+	advanced["stats"] = map[string]any{}
+	advanced["policy"] = map[string]any{"levels": map[string]any{"0": map[string]bool{"statsUserUplink": true, "statsUserDownlink": true}}, "system": map[string]bool{"statsInboundUplink": true, "statsInboundDownlink": true}}
 	return advanced, nil
 }

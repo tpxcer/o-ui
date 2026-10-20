@@ -138,15 +138,22 @@ func (s *Store) Initialized(ctx context.Context) (bool, error) {
 }
 
 func ValidateAdministrator(username, password string) error {
-	if !usernamePattern.MatchString(username) {
-		return i18n.New("用户名需为3至64位字母、数字、点、下划线或短横线", "Username must be 3–64 letters, digits, dots, underscores or hyphens")
+	if err := ValidateUsername(username); err != nil {
+		return err
 	}
 	return ValidatePassword(password)
 }
 
+func ValidateUsername(username string) error {
+	if !usernamePattern.MatchString(username) {
+		return i18n.New("用户名需为3至64位字母、数字、点、下划线或短横线", "Username must be 3–64 letters, digits, dots, underscores or hyphens")
+	}
+	return nil
+}
+
 func ValidatePassword(password string) error {
-	if len(password) < 12 || len(password) > 72 {
-		return i18n.New("密码需为12至72字节，建议使用较长的随机密码", "Password must be 12–72 bytes; a long random password is recommended")
+	if len(password) < 6 || len(password) > 72 {
+		return i18n.New("密码需为6至72字节", "Password must be 6–72 bytes")
 	}
 	return nil
 }
@@ -243,7 +250,7 @@ func (s *Store) Login(ctx context.Context, username, password string) (Session, 
 		return Session{}, err
 	}
 	validPassword := false
-	if len(password) >= 12 && len(password) <= 72 {
+	if len(password) >= 6 && len(password) <= 72 {
 		validPassword = bcrypt.CompareHashAndPassword(hash, []byte(password)) == nil
 	}
 	if !validPassword || subtle.ConstantTimeCompare([]byte(actual), []byte(username)) != 1 {
