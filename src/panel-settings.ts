@@ -1,4 +1,4 @@
-import { api, APIError, jsonBody } from './api.ts';
+import { api, apiURL, APIError, jsonBody } from './api.ts';
 import { escapeHtml as esc } from './workspace.ts';
 import { initPasswordChange } from './password.ts';
 import { initPanelAccess } from './panel-access.ts';
@@ -51,7 +51,7 @@ export function initPanelSettings(root: HTMLElement, persistent: boolean): { ren
     catch (reason) { label.textContent = (reason as Error).message; button.disabled = false; return; }
     const started = Date.now();
     const poll = async (): Promise<void> => {
-      try { if ((await fetch('/api/auth/status', { cache: 'no-store' })).ok) { location.reload(); return; } } catch { /* 重启中暂时不可达。 */ }
+      try { if ((await fetch(apiURL('auth/status'), { cache: 'no-store' })).ok) { location.reload(); return; } } catch { /* 重启中暂时不可达。 */ }
       if (Date.now() - started < 60000) setTimeout(() => { void poll(); }, 1500);
       else { label.textContent = t('面板未在 60 秒内恢复；如修改了访问地址，请打开新地址。', 'The panel did not come back within 60 seconds; if you changed the access address, open the new one.'); button.disabled = false; }
     };

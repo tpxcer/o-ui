@@ -91,3 +91,45 @@ func (s *Store) ChangeAccount(ctx context.Context, token, current, username, nex
 	}
 	return tx.Commit()
 }
+
+// ResetAdministrator供服务器上的离线管理命令重置用户名和密码（不需要旧密码），并使全部会话失效、清除限速。
+func (s *Store) ResetAdministrator(ctx context.Context, username, password string) error {
+	if err := ValidateAdministrator(username, password); err != nil {
+		return err
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+	s.authMu.Lock()
+	defer s.authMu.Unlock()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, "UPDATE administrator SET username=?,password_hash=? WHERE id=1", username, hash)
+	if err != nil {
+		return err
+	}
+	if n, _ := result.RowsAffected(); n != 1 {
+		return ErrSession
+	}
+	if _, err = tx.ExecContext(ctx, "UPDATE sessions SET expires=0"); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "UPDATE auth_throttle SET failures=0,reset_at=0 WHERE id=1"); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// AdministratorName返回管理员用户名；未初始化时为空。
+func (s *Store) AdministratorName(ctx context.Context) (string, error) {
+	var name string
+	err := s.db.QueryRowContext(ctx, "SELECT username FROM administrator WHERE id=1").Scan(&name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return name, err
+}

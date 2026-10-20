@@ -11,6 +11,7 @@ type savedDocument struct {
 	store.Document
 	Applied    bool   `json:"applied"`
 	ApplyError string `json:"applyError,omitempty"`
+	Firewall   string `json:"firewall,omitempty"`
 }
 
 // applySaved按已保存的入站与设置生成候选并应用；调用方须持有rt.mu。

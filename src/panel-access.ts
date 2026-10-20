@@ -2,7 +2,7 @@ import { api, APIError, jsonBody } from './api.ts';
 import { escapeHtml as esc } from './workspace.ts';
 import { t } from './i18n.ts';
 
-interface AccessDraft { public: boolean; listen: string; origin: string }
+interface AccessDraft { public: boolean; listen: string; origin: string; basePath?: string }
 interface AccessStatus { active: AccessDraft; activeRevision: number; revision: number; data: AccessDraft | null }
 
 export function initPanelAccess(root: HTMLElement): { render: () => void } {
@@ -23,9 +23,10 @@ export function initPanelAccess(root: HTMLElement): { render: () => void } {
     const draft = status?.data ?? status?.active;
     root.innerHTML = `<h2 class="xray-editor-title">${t('访问设置', 'Access')}</h2>
       <p class="core-warning">${t('开启后可通过 HTTPS 从其他设备访问面板和订阅；订阅链接含代理凭据，请勿公开。保存后点“重启面板”生效。', 'When enabled, the panel and subscriptions are reachable over HTTPS from other devices; subscription links contain proxy credentials, keep them private. Click Restart panel to apply after saving.')}</p>
-      <p class="form-intro">${t('本次启动：', 'This run: ')}${status ? `${status.active.public ? t('固定来源 HTTPS', 'Fixed-origin HTTPS') : t('仅本机', 'Local only')} · ${esc(status.active.listen)}${status.active.origin ? ` · ${esc(status.active.origin)}` : ''}${t('。', '. ')}${status.revision !== status.activeRevision ? t('有待重启生效的访问设置。', 'Access settings are waiting for a restart.') : t('已保存设置与本次启动一致。', 'Saved settings match this run.')}` : t('尚未读取。', 'Not read yet.')}</p>
+      <p class="form-intro">${t('本次启动：', 'This run: ')}${status ? `${status.active.public ? t('固定来源 HTTPS', 'Fixed-origin HTTPS') : t('仅本机', 'Local only')} · ${esc(status.active.listen)}${status.active.origin ? ` · ${esc(status.active.origin)}` : ''}${status.active.basePath ? ` · ${t('路径', 'path')} ${esc(status.active.basePath)}` : ''}${t('。', '. ')}${status.revision !== status.activeRevision ? t('有待重启生效的访问设置。', 'Access settings are waiting for a restart.') : t('已保存设置与本次启动一致。', 'Saved settings match this run.')}` : t('尚未读取。', 'Not read yet.')}</p>
       <form id="access-form"><label class="check-field"><input id="access-public" type="checkbox" ${draft?.public ? 'checked' : ''}><span>${t('允许固定来源的非本机 HTTPS 管理与订阅', 'Allow remote HTTPS management and subscriptions from a fixed origin')}</span></label>
       <label class="form-field" for="access-listen">${t('监听 IP 与端口', 'Listen IP and port')}<input id="access-listen" required maxlength="100" autocomplete="off" value="${esc(draft?.listen ?? '')}"></label>
+      <label class="form-field" for="access-path">${t('访问路径', 'Access path')}<input id="access-path" maxlength="66" autocomplete="off" placeholder="/" value="${esc(draft?.basePath || '/')}"><small class="form-hint">${t('如 /abc123/，可隐藏面板入口；/ 表示根路径。订阅链接仍在 /sub/ 下，不暴露此路径。', 'For example /abc123/ to hide the panel entry; / means the root. Subscription links stay under /sub/ and do not reveal this path.')}</small></label>
       <label class="form-field" for="access-origin">${t('HTTPS 访问来源', 'HTTPS origin')}<input id="access-origin" maxlength="300" autocomplete="off" placeholder="https://panel.example.com:5180" value="${esc(draft?.origin ?? '')}"></label>
       <p class="form-hint">${t('仅本机模式须回环 IP，访问来源留空。非本机模式须先保存有效且匹配来源的证书；使用直接监听的相同端口（1024–65535），不含路径，暂不支持反向代理或端口映射。保存不代表网络可达或证书已获设备信任。', 'Local-only mode needs a loopback IP and an empty origin. Remote mode first needs a saved valid certificate matching the origin, and the same directly listened port (1024–65535) without a path; reverse proxies and port mapping are not supported. Saving does not mean the network is reachable or devices trust the certificate.')}</p>
       <label class="check-field"><input id="access-confirm" type="checkbox"><span>${t('我确认启用 HTTPS 非本机访问的风险（每次保存启用设置均需勾选）。', 'I understand the risks of enabling remote HTTPS access (required on every save that enables it).')}</span></label>
@@ -35,7 +36,7 @@ export function initPanelAccess(root: HTMLElement): { render: () => void } {
     controls();
     root.querySelector('#access-form')!.addEventListener('submit', event => {
       event.preventDefault(); if (!status || loading || saving || reloadRequired) return;
-      const data: AccessDraft = { public: input('public').checked, listen: input('listen').value.trim(), origin: input('origin').value.trim() };
+      const path = input('path').value.trim(), data: AccessDraft = { public: input('public').checked, listen: input('listen').value.trim(), origin: input('origin').value.trim(), basePath: path === '/' ? '' : path };
       if (data.public && !input('confirm').checked) { error = t('请先勾选非本机访问风险确认；当前监听未改变。', 'Tick the remote access risk confirmation first; the listen address is unchanged.'); controls(true); return; }
       saving = true; error = ''; message = ''; controls();
       void api<AccessStatus>('panel/access', jsonBody('PUT', { revision: status.revision, data, confirmation: data.public ? '确认启用HTTPS非本机访问' : '' })).then(next => {

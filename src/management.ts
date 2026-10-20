@@ -16,6 +16,8 @@ import './management.css';
 import { t } from './i18n.ts';
 
 const icon = (name: string) => `<i data-lucide="${name}" aria-hidden="true"></i>`;
+// 一键创建菜单沿用OUI的四个预设名称。
+const quickLabels: Record<Preset, string> = { hy2: 'Hysteria2', reality: 'VLESS Reality Vision', 'xhttp-tls': 'VLESS XHTTP TLS', 'xhttp-reality': 'VLESS XHTTP Reality' };
 const input = (label: string, name: string, value: string | number, attrs = '', hint = '') => `<label class="form-field">${label}<input name="${name}" value="${esc(String(value))}" ${attrs}>${hint ? `<small class="form-hint">${hint}</small>` : ''}</label>`;
 const check = (label: string, name: string, checked: boolean) => `<label class="check-field"><input type="checkbox" name="${name}"${checked ? ' checked' : ''}><span>${label}</span></label>`;
 const badge = (text: string, ok: boolean) => `<span class="status-badge ${ok ? 'is-good' : 'is-muted'}"><b></b>${esc(text)}</span>`;
@@ -73,9 +75,9 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
         form.querySelector<HTMLButtonElement>('[type="submit"]')!.textContent = persistent ? t('正在保存并生效…', 'Saving and applying…') : t('正在处理…', 'Working…');
         if (persistent) {
           writing = true;
-          const document = await api<{ revision: number; data: Workspace; applied?: boolean; applyError?: string }>('workspace', jsonBody('PUT', { revision, data: state }));
+          const document = await api<{ revision: number; data: Workspace; applied?: boolean; applyError?: string; firewall?: string }>('workspace', jsonBody('PUT', { revision, data: state }));
           revision = document.revision; state = document.data;
-          pendingNotice = document.applied ? t('已保存并生效', 'Saved and applied') : `${t('已保存，但未生效：', 'Saved, but not applied: ')}${document.applyError ?? ''}`;
+          pendingNotice = `${document.applied ? t('已保存并生效', 'Saved and applied') : `${t('已保存，但未生效：', 'Saved, but not applied: ')}${document.applyError ?? ''}`}${document.firewall ? `${t(' · 防火墙：', ' · firewall: ')}${document.firewall}` : ''}`;
           onSaved();
         }
         submitting = false; modal.close(); renderList(); announce(pendingNotice || t('演示数据已更改', 'Demo data changed'));
@@ -164,11 +166,49 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
     while (port < 65535 && state.inbounds.some(item => item.port === port && presets[item.preset].transport === presets[preset].transport)) port++;
     return port;
   }
+  function quickMenu(open: boolean): void {
+    const menu = root.querySelector<HTMLElement>('.quick-menu');
+    if (!menu) return;
+    menu.hidden = !open;
+    root.querySelector('[data-quick-toggle]')?.setAttribute('aria-expanded', String(open));
+    if (open) menu.querySelector<HTMLButtonElement>('button')?.focus();
+  }
+  document.addEventListener('click', event => { if (!(event.target as Element).closest?.('.quick-create')) quickMenu(false); });
+  document.addEventListener('keydown', event => { if (event.key === 'Escape') quickMenu(false); });
+  // 参照OUI一键创建：选预设后自动挑空闲端口、生成客户端与名称、公网地址，保存即生效，不弹表单。
+  async function quickCreateNow(preset: Preset): Promise<void> {
+    if (submitting || loading || !loaded || reloadRequired) return;
+    const previous = structuredClone(state), tls = preset === 'hy2' || preset === 'xhttp-tls', proto = preset === 'hy2' ? 'udp' : 'tcp';
+    submitting = true; let writing = false; renderList(); notice.textContent = t('正在一键创建…', 'Creating…');
+    try {
+      const [free, info, cert] = await Promise.all([
+        api<{ port: number }>(`system/free-port?transport=${proto}`),
+        api<PublicInfo>('system/public').catch(() => null),
+        tls ? api<PanelTLSStatus>('panel/tls') : Promise.resolve(null),
+      ]);
+      const domain = cert?.serverNames.find(name => !name.includes('*'));
+      if (tls && (!cert?.active || !domain)) throw new Error(t('Hysteria2 和 XHTTP TLS 需要面板证书，请先在“面板设置”配置证书，或用“添加入站”手动填写证书路径。', 'Hysteria2 and XHTTP TLS need the panel certificate; configure it in Panel settings first, or use Add inbound to enter certificate paths.'));
+      const shareHost = tls ? domain! : info?.ipv4?.ip || info?.ipv6?.ip || '';
+      if (!shareHost) throw new Error(t('未查询到服务器公网 IP，请用“添加入站”手动填写分享主机。', 'The public IP is unknown; use Add inbound and enter the share host manually.'));
+      const client = { name: randomName(), quotaGB: 0, ipLimit: 0, expiresAt: null, subscription: true };
+      state = createQuick(state, { ...client, preset, port: free.port, sniffing: defaultSniffing() }, crypto.randomUUID());
+      const inbound = state.inbounds.at(-1)!;
+      Object.assign(inbound, { name: `${regionLabel(info)}-${presets[preset].label}-${client.name}`, connection: tls ? { ...defaultConnection(), usePanelCertificate: true } : newRealityConnection(), listen: '0.0.0.0', shareHost });
+      writing = true;
+      const document = await api<{ revision: number; data: Workspace; applied?: boolean; applyError?: string; firewall?: string }>('workspace', jsonBody('PUT', { revision, data: state }));
+      revision = document.revision; state = document.data; submitting = false; search = ''; filter = 'all'; renderList(); onSaved();
+      announce(document.applied ? `${inbound.name} ${t('已创建并生效 · 端口', 'created and applied · port')} ${free.port}/${proto}${document.firewall ? `${t(' · 防火墙：', ' · firewall: ')}${document.firewall}` : ''}` : `${inbound.name} ${t('已创建，但未生效：', 'created, but not applied: ')}${document.applyError ?? ''}`);
+    } catch (reason) {
+      state = previous; submitting = false;
+      if (writing && (!(reason instanceof APIError) || reason.status === 409 || reason.status >= 500)) reloadRequired = true;
+      renderList(); announce((reason as Error).message);
+    }
+  }
   function quickCreate(): void {
     let preset: Preset = 'reality';
     const demoClient = { name: randomName(), quotaGB: persistent ? 0 : 100, ipLimit: persistent ? 0 : 2, expiresAt: null, subscription: false };
     let date: { value: () => number | null };
-    const form = openModal(t('一键创建', 'Quick create'), `<p class="form-intro">${persistent ? t('同时创建入站和一个客户端，保存后立即生效。', 'Creates an inbound and one client; changes apply as soon as you save.') : t('同时添加一条演示入站和一个客户端，不生成连接凭据，不应用到 Xray。', 'Adds a demo inbound and a client together; no credentials are generated and Xray is not applied.')}</p>
+    const form = openModal(persistent ? t('添加入站', 'Add inbound') : t('一键创建', 'Quick create'), `<p class="form-intro">${persistent ? t('同时创建入站和一个客户端，保存后立即生效。', 'Creates an inbound and one client; changes apply as soon as you save.') : t('同时添加一条演示入站和一个客户端，不生成连接凭据，不应用到 Xray。', 'Adds a demo inbound and a client together; no credentials are generated and Xray is not applied.')}</p>
       <fieldset class="preset-field"><legend>${t('创建类型', 'Type')}</legend><div class="preset-options">${(Object.keys(presets) as Preset[]).map(key => `<label><input type="radio" name="preset" value="${key}"${key === preset ? ' checked' : ''}><span>${presets[key].label}</span></label>`).join('')}</div></fieldset>
       <div class="name-preview"><small>${t('入站名称预览', 'Inbound name preview')}</small><strong id="inbound-name-preview">${esc(persistent ? `${region}-${presets[preset].label}-${demoClient.name}` : inboundName(preset, demoClient.name))}</strong><small>${persistent ? region === t('未知地区', 'Unknown region') ? t('尚未查询到服务器国家，不用演示国家冒充实际归属地。', 'The server country is not known yet; no demo country is used in its place.') : t('国家来自首页公网信息查询，可在保存后编辑名称。', 'The country comes from the public IP lookup on the dashboard; you can edit the name after saving.') : t('国家固定为演示“美国”，未查询服务器归属地。', 'The country is the demo “United States”; the server location was not looked up.')}</small></div>
       <div class="port-row">${input(t('监听端口', 'Listen port'), 'port', persistent ? Math.max(1024, suggestedPort(preset)) : suggestedPort(preset), `type="number" required min="${persistent ? 1024 : 1}" max="65535" step="1"`, t('仅检查草稿列表冲突，应用时还需检查系统端口。', 'Only conflicts within drafts are checked; system ports are checked when applying.'))}<button type="button" class="secondary-button" id="random-name">${icon('shuffle')}${t('重新生成名称', 'Regenerate name')}</button></div>
@@ -277,7 +317,7 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
   }
   function renderList(): void {
     const available = state.clients.filter(item => clientStatus(viewClient(item), state.inbounds.find(record => record.id === item.inboundId)) === t('可用', 'Available')).length;
-    root.innerHTML = `<header class="page-heading"><div><h1 class="page-title" tabindex="-1">${page === 'inbounds' ? t('入站列表', 'Inbounds') : t('客户端', 'Clients')}</h1><p>${page === 'inbounds' ? t('创建和管理入站，保存后立即生效。', 'Create and manage inbounds; changes apply as soon as you save.') : persistent ? t('管理客户端，查看累计流量与到期时间。', 'Manage clients and view traffic totals and expiry.') : t('管理客户端演示数据与到期时间。', 'Manage demo client data and expiry.')}</p></div><button class="primary-button create-button" data-create ${!loaded || loading || reloadRequired ? 'disabled' : ''}>${icon('plus')}${page === 'inbounds' ? t('一键创建', 'Quick create') : t('添加客户端', 'Add client')}</button></header>
+    root.innerHTML = `<header class="page-heading"><div><h1 class="page-title" tabindex="-1">${page === 'inbounds' ? t('入站列表', 'Inbounds') : t('客户端', 'Clients')}</h1><p>${page === 'inbounds' ? t('创建和管理入站，保存后立即生效。', 'Create and manage inbounds; changes apply as soon as you save.') : persistent ? t('管理客户端，查看累计流量与到期时间。', 'Manage clients and view traffic totals and expiry.') : t('管理客户端演示数据与到期时间。', 'Manage demo client data and expiry.')}</p></div>${page === 'inbounds' && persistent ? `<div class="create-actions"><button class="primary-button create-button" data-create ${!loaded || loading || reloadRequired ? 'disabled' : ''}>${icon('plus')}${t('添加入站', 'Add inbound')}</button><div class="quick-create"><button class="secondary-button" data-quick-toggle aria-haspopup="menu" aria-expanded="false" ${!loaded || loading || submitting || reloadRequired ? 'disabled' : ''}>${icon('zap')}${t('一键创建', 'Quick create')}</button><div class="quick-menu" role="menu" hidden>${(Object.keys(quickLabels) as Preset[]).map(key => `<button type="button" role="menuitem" data-quick-preset="${key}">${quickLabels[key]}</button>`).join('')}</div></div></div>` : `<button class="primary-button create-button" data-create ${!loaded || loading || reloadRequired ? 'disabled' : ''}>${icon('plus')}${page === 'inbounds' ? t('一键创建', 'Quick create') : t('添加客户端', 'Add client')}</button>`}</header>
       ${loading ? t('<p class="core-message" role="status">正在读取独立数据库…</p>', '<p class="core-message" role="status">Reading the database…</p>') : loadError ? `<p class="form-error" role="alert">${esc(loadError)}</p>` : ''}
       ${reloadRequired ? t('<p class="form-error" role="alert">保存失败或结果未确认，当前列表可能已过期；请重新读取草稿后再修改，不会自动覆盖最新数据。</p>', '<p class="form-error" role="alert">The save failed or was not confirmed, so this list may be stale. Reload the draft before editing; the latest data is never overwritten automatically.</p>') : ''}${persistent ? `<button class="secondary-button" data-reload ${loading || submitting ? 'disabled' : ''}>${t('刷新', 'Refresh')}</button>` : ''}
       <div class="workspace-summary"><span>${t('入站', 'Inbounds')} <strong>${state.inbounds.length}</strong></span><span>${t('客户端', 'Clients')} <strong>${state.clients.length}</strong></span><span>${persistent ? t('可用', 'Available') : t('演示可用', 'Demo available')} <strong>${available}</strong></span>${persistent ? `<button class="secondary-button" data-apply ${!loaded || loading || submitting || reloadRequired ? 'disabled' : ''}>${t('重新应用', 'Re-apply')}</button>` : ''}</div>
@@ -306,6 +346,8 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
     if (button.hasAttribute('data-apply')) { if (loaded && !loading && !submitting && !reloadRequired) onApply(); return; }
     if (!loaded || loading || submitting || reloadRequired) return;
     if (button.hasAttribute('data-create')) { if (page === 'inbounds') quickCreate(); else clientEditor(); }
+    if (button.hasAttribute('data-quick-toggle')) { quickMenu(root.querySelector<HTMLElement>('.quick-menu')!.hidden === true); return; }
+    if (button.dataset.quickPreset) { quickMenu(false); void quickCreateNow(button.dataset.quickPreset as Preset); }
     if (button.hasAttribute('data-clear')) { search = ''; filter = 'all'; inboundFilter = ''; renderList(); root.querySelector<HTMLInputElement>('#workspace-search')!.focus(); }
     if (button.dataset.op) operate(button.dataset.op, button.dataset.id!);
   });

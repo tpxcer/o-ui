@@ -199,6 +199,13 @@ func TestBrowserFixture(t *testing.T) {
 	}
 	finished := make(chan struct{}, 1)
 	handler := Handler(m, s, dist, []string{address}, rt)
+	// 手动验收访问路径：PANEL_BROWSER_BASE_PATH=/abc/ 时只在该路径下提供面板。
+	if path := os.Getenv("PANEL_BROWSER_BASE_PATH"); path != "" {
+		if !validPanelBasePath(path) {
+			t.Fatal("invalid PANEL_BROWSER_BASE_PATH")
+		}
+		handler = PanelHandler(m, s, dist, &PanelAccess{Data: PanelAccessDraft{Listen: address, BasePath: path}}, rt)
+	}
 	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "POST" && r.URL.Path == "/__finish_browser_qa" && r.Host == address {
 			select {

@@ -1,6 +1,8 @@
 import { defineConfig } from 'vite';
 
 export default defineConfig({
+  // 相对资源地址：面板可部署在访问路径下（如 /abc/）。
+  base: './',
   build: { license: { fileName: 'THIRD-PARTY-LICENSES.json' } },
   server: {
     host: '127.0.0.1', port: 5178, strictPort: true,

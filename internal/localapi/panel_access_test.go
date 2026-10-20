@@ -51,7 +51,7 @@ func TestPanelAccessValidation(t *testing.T) {
 			if !tc.tls {
 				certificate = nil
 			}
-			if err := validatePanelAccess(PanelAccessDraft{tc.public, tc.listen, tc.origin}, certificate); (err == nil) != tc.valid {
+			if err := validatePanelAccess(PanelAccessDraft{Public: tc.public, Listen: tc.listen, Origin: tc.origin}, certificate); (err == nil) != tc.valid {
 				t.Fatal("unexpected access validation", err)
 			}
 		})
@@ -131,7 +131,7 @@ func TestPanelAccessSettingsAndNetworkBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	draft := PanelAccessDraft{true, "127.0.0.1:5180", "https://panel-qa.test:5180"}
+	draft := PanelAccessDraft{Public: true, Listen: "127.0.0.1:5180", Origin: "https://panel-qa.test:5180"}
 	data, _ := json.Marshal(draft)
 	if _, err := s.SaveDocument(ctx, "panel-access", 0, data); err != nil {
 		t.Fatal(err)

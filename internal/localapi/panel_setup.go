@@ -89,6 +89,11 @@ func EnablePanelHTTPS(ctx context.Context, stateRoot, certFile, keyFile, listen,
 	if err != nil {
 		return i18n.New("读取面板访问设置失败，未做修改", "Failed to read panel access settings; nothing changed")
 	}
+	// 重新配置证书时保留已设置的访问路径。
+	var previous PanelAccessDraft
+	if raw := docs["panel-access"].Data; len(raw) > 0 && string(raw) != "null" && decodeStrict(raw, &previous) == nil {
+		access.BasePath = previous.BasePath
+	}
 	accessData, _ := json.Marshal(access)
 	tlsData, _ := json.Marshal(tlsDraft)
 	if err := s.ReplaceDocuments(ctx, docs, map[string]json.RawMessage{"panel-access": accessData, "panel-tls": tlsData}); err != nil {

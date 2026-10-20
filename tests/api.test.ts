@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { api, APIError, jsonBody } from '../src/api.ts';
+import { api, apiURL, APIError, jsonBody } from '../src/api.ts';
 
 test('管理请求携带同源会话和界面语言，JSON写入格式明确', async () => {
   const previous = globalThis.fetch;
@@ -46,4 +46,14 @@ test('断线、非JSON服务和离线文件不会误报保存成功', async () =
     Object.assign(globalThis, { location: { protocol: 'file:' } });
     await assert.rejects(api('settings'), /离线预览不能/);
   } finally { globalThis.fetch = previous; }
+});
+
+test('面板部署在访问路径下时，接口地址随页面目录变化', () => {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'location');
+  try {
+    Object.defineProperty(globalThis, 'location', { configurable: true, value: { protocol: 'https:', pathname: '/secret-9/' } });
+    assert.equal(apiURL('auth/status'), '/secret-9/api/auth/status');
+    Object.defineProperty(globalThis, 'location', { configurable: true, value: { protocol: 'https:', pathname: '/' } });
+    assert.equal(apiURL('auth/status'), '/api/auth/status');
+  } finally { if (previous) Object.defineProperty(globalThis, 'location', previous); else Reflect.deleteProperty(globalThis, 'location'); }
 });

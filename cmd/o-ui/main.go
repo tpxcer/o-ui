@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -54,7 +55,7 @@ func run() int {
 	recoverAccess := flag.Bool("recover-panel-access", false, say("停面板后离线恢复本机HTTP访问，不重置账号或业务，不启动服务", "Offline restore of local HTTP access after stopping the panel; does not reset accounts or data and starts nothing"))
 	confirmation := flag.String("confirm-recovery", "", say("离线恢复须精确填写：恢复面板本机访问", "Offline recovery requires exactly: 恢复面板本机访问"))
 	initAdmin := flag.Bool("init-panel-admin", false, say("安装器离线设置管理员（密码6–72字节，从标准输入读一行），面板须已停止，不启动服务", "Installer: set the administrator offline (password of 6–72 bytes read as one line from stdin); the panel must be stopped; starts nothing"))
-	username := flag.String("username", "", say("与-init-panel-admin一起使用的管理员用户名", "Administrator username for -init-panel-admin"))
+	username := flag.String("username", "", say("与-init-panel-admin或-reset-panel-admin一起使用的管理员用户名", "Administrator username for -init-panel-admin or -reset-panel-admin"))
 	enableHTTPS := flag.Bool("enable-panel-https", false, say("安装器离线写入面板HTTPS证书与固定访问来源，面板须已停止，下次启动生效", "Installer: write the panel HTTPS certificate and fixed origin offline; the panel must be stopped; applies on next start"))
 	panelCert := flag.String("panel-cert", "", say("面板证书（含链）PEM的绝对路径", "Absolute path of the panel certificate PEM (with chain)"))
 	panelKey := flag.String("panel-key", "", say("面板私钥PEM的绝对路径", "Absolute path of the panel private key PEM"))
@@ -62,6 +63,9 @@ func run() int {
 	panelOrigin := flag.String("panel-origin", "", say("固定HTTPS访问来源，如https://panel.example.com:23456", "Fixed HTTPS origin, e.g. https://panel.example.com:23456"))
 	confirmHTTPS := flag.String("confirm-https", "", say("须精确填写：确认启用HTTPS非本机访问", "Requires exactly: 确认启用HTTPS非本机访问"))
 	installCore := flag.String("install-core", "", say("安装器离线下载、校验并选中官方Xray：latest为最新正式版（不含预发布），或填精确版本；须用-data指定核心目录，面板须已停止，不启动代理", "Installer: download, verify and select official Xray offline: latest is the newest stable release (no prereleases), or an exact version; requires -data with the core directory; the panel must be stopped; starts no proxy"))
+	setPath := flag.String("set-panel-path", "", say("管理命令离线设置访问路径（/或/段/），须用-state指定状态目录，面板须已停止，下次启动生效", "Management: set the access path offline (/ or /segment/); requires -state; the panel must be stopped; applies on next start"))
+	resetAdmin := flag.Bool("reset-panel-admin", false, say("管理命令离线重置用户名和密码（密码6–72字节，从标准输入读一行），面板须已停止，全部登录失效", "Management: reset username and password offline (password of 6–72 bytes read as one line from stdin); the panel must be stopped; all sessions are signed out"))
+	showPanel := flag.Bool("show-panel", false, say("管理命令以JSON输出当前面板设置（不含密码），面板运行中也可用", "Management: print the current panel settings as JSON (no password); works while the panel runs"))
 	flag.Parse()
 	host, port, err := net.SplitHostPort(*listen)
 	if err != nil || host != "127.0.0.1" {
@@ -77,7 +81,7 @@ func run() int {
 		explicitData = explicitData || f.Name == "data"
 	})
 	modes := 0
-	for _, on := range []bool{*recoverAccess, *initAdmin, *enableHTTPS, *installCore != ""} {
+	for _, on := range []bool{*recoverAccess, *initAdmin, *enableHTTPS, *installCore != "", *setPath != "", *resetAdmin, *showPanel} {
 		if on {
 			modes++
 		}
@@ -118,24 +122,51 @@ func run() int {
 		fmt.Printf(say("已安装并选中Xray %s（官方包已校验）；未启动代理。\n", "Xray %s installed and selected (official package verified); no proxy was started.\n"), manager.Selected())
 		return 0
 	}
-	if *initAdmin || *enableHTTPS {
+	if *initAdmin || *enableHTTPS || *setPath != "" || *resetAdmin || *showPanel {
 		if !explicitState {
 			log.Print(say("离线设置必须用-state明确指定状态目录的绝对路径", "Offline setup requires -state with the absolute path of the state directory"))
 			return 1
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		if *initAdmin {
+		if *initAdmin || *resetAdmin {
 			// 密码只从标准输入读取，避免出现在进程参数中。
 			line, err := bufio.NewReader(io.LimitReader(os.Stdin, 128)).ReadString('\n')
+			password := strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
 			if err == nil || err == io.EOF {
-				err = localapi.InitPanelAdmin(ctx, *stateDir, *username, strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r"))
+				if *initAdmin {
+					err = localapi.InitPanelAdmin(ctx, *stateDir, *username, password)
+				} else {
+					err = localapi.ResetPanelAdmin(ctx, *stateDir, *username, password)
+				}
 			}
 			if err != nil {
 				log.Print(text(err))
 				return 1
 			}
-			fmt.Println(say("管理员已离线设置；尚未启动服务。", "Administrator set offline; nothing was started."))
+			if *initAdmin {
+				fmt.Println(say("管理员已离线设置；尚未启动服务。", "Administrator set offline; nothing was started."))
+			} else {
+				fmt.Println(say("用户名和密码已离线重置，全部登录已失效；尚未启动服务。", "Username and password reset offline and all sessions signed out; nothing was started."))
+			}
+			return 0
+		}
+		if *setPath != "" {
+			if err := localapi.SetPanelPath(ctx, *stateDir, *setPath); err != nil {
+				log.Print(text(err))
+				return 1
+			}
+			fmt.Printf(say("访问路径已设为%s；下次启动生效，尚未启动服务。\n", "Access path set to %s; applies on next start, nothing was started.\n"), *setPath)
+			return 0
+		}
+		if *showPanel {
+			info, err := localapi.ReadPanelInfo(ctx, *stateDir)
+			if err != nil {
+				log.Print(text(err))
+				return 1
+			}
+			data, _ := json.Marshal(info)
+			fmt.Println(string(data))
 			return 0
 		}
 		if err := localapi.EnablePanelHTTPS(ctx, *stateDir, *panelCert, *panelKey, *panelListen, *panelOrigin, *confirmHTTPS); err != nil {

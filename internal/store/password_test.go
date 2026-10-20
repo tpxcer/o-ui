@@ -263,3 +263,37 @@ func TestChangeAccountRenamesWithShortPasswords(t *testing.T) {
 		t.Fatal("new password not saved", err)
 	}
 }
+
+func TestResetAdministratorOffline(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	if name, err := s.AdministratorName(ctx); err != nil || name != "" {
+		t.Fatal("uninitialized store must have no administrator", name, err)
+	}
+	if err = s.ResetAdministrator(ctx, "admin", "abc123"); err == nil {
+		t.Fatal("reset must not create an administrator")
+	}
+	session, err := s.Initialize(ctx, "tester", testPassword)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.ResetAdministrator(ctx, "a b", "abc123"); err == nil {
+		t.Fatal("invalid username accepted")
+	}
+	if err = s.ResetAdministrator(ctx, "admin", "abc123"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Authenticate(ctx, session.Token); !errors.Is(err, ErrSession) {
+		t.Fatal("old sessions must end after a reset")
+	}
+	if name, _ := s.AdministratorName(ctx); name != "admin" {
+		t.Fatal("username not reset", name)
+	}
+	if _, err = s.Login(ctx, "admin", "abc123"); err != nil {
+		t.Fatal("new credentials rejected", err)
+	}
+}

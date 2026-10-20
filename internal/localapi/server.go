@@ -55,6 +55,7 @@ func handler(manager *core.Manager, state *store.Store, dist string, hosts []str
 	registerPanelVersion(mux)
 	registerSubscriptionSettings(mux, state)
 	registerPanelRestart(mux)
+	registerFreePort(mux, state)
 	mux.HandleFunc("GET /api/logs", func(w http.ResponseWriter, r *http.Request) {
 		if rt == nil || rt.logs == nil {
 			respond(w, 503, map[string]string{"error": i18n.T("诊断日志尚未启动", "Diagnostics log is not running")})
@@ -227,7 +228,9 @@ func handler(manager *core.Manager, state *store.Store, dist string, hosts []str
 			respond(w, code, map[string]string{"error": message})
 			return
 		}
-		respond(w, 200, rt.saved(r.Context(), doc))
+		result := rt.saved(r.Context(), doc)
+		result.Firewall = syncFirewall(r.Context(), old.Data, doc.Data)
+		respond(w, 200, result)
 	})
 	mux.HandleFunc("PUT /api/settings", func(w http.ResponseWriter, r *http.Request) {
 		if rt != nil {
@@ -319,8 +322,22 @@ func handler(manager *core.Manager, state *store.Store, dist string, hosts []str
 		})
 	}
 	mux.Handle("/", http.FileServer(http.Dir(dist)))
+	base := access.Data.basePath()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w = &langWriter{ResponseWriter: w, lang: i18n.RequestLang(r)}
+		// 面板只在访问路径下提供；订阅保留根路径/sub/，其余路径一律404，不提示面板位置。
+		if base != "/" && r.URL.Path != "/sub" && !strings.HasPrefix(r.URL.Path, "/sub/") {
+			if r.URL.Path == strings.TrimSuffix(base, "/") {
+				http.Redirect(w, r, base, http.StatusFound)
+				return
+			}
+			if !strings.HasPrefix(r.URL.Path, base) {
+				http.NotFound(w, r)
+				return
+			}
+			r = r.Clone(r.Context())
+			r.URL.Path, r.URL.RawPath = "/"+strings.TrimPrefix(r.URL.Path, base), ""
+		}
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("X-Frame-Options", "DENY")

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -17,9 +18,29 @@ import (
 )
 
 type PanelAccessDraft struct {
-	Public bool   `json:"public"`
-	Listen string `json:"listen"`
-	Origin string `json:"origin"`
+	Public   bool   `json:"public"`
+	Listen   string `json:"listen"`
+	Origin   string `json:"origin"`
+	BasePath string `json:"basePath,omitempty"`
+}
+
+// 面板访问路径（参照OUI的Web路径）：/ 或 /一段字母数字下划线短横线/；订阅/sub/始终在根路径，分享订阅不暴露面板路径。
+var panelBasePath = regexp.MustCompile(`^/(?:[A-Za-z0-9_-]{1,64}/)?$`)
+
+func validPanelBasePath(path string) bool {
+	switch strings.ToLower(path) {
+	case "/api/", "/sub/", "/assets/":
+		return false
+	}
+	return path == "" || panelBasePath.MatchString(path)
+}
+
+// basePath返回规范化路径；空值视为根路径。
+func (d PanelAccessDraft) basePath() string {
+	if d.BasePath == "" {
+		return "/"
+	}
+	return d.BasePath
 }
 
 // PanelAccess为启动快照；保存新设置不会改变当前监听或请求边界。
@@ -29,6 +50,9 @@ type PanelAccess struct {
 }
 
 func validatePanelAccess(d PanelAccessDraft, certificate *PanelTLS) error {
+	if !validPanelBasePath(d.BasePath) {
+		return i18n.New("访问路径须为 / 或 /字母数字下划线短横线/（1–64位），不能是 /api/、/sub/、/assets/", "The access path must be / or /letters-digits-underscores-hyphens/ (1–64), and cannot be /api/, /sub/ or /assets/")
+	}
 	address, err := netip.ParseAddrPort(d.Listen)
 	if err != nil || address.Addr().Zone() != "" || address.Addr().Is4In6() || address.Addr().IsMulticast() || address.Addr().String() == "255.255.255.255" || address.Port() < 1024 {
 		return i18n.New("面板监听须为字面IPv4或带方括号IPv6及1024–65535端口，不含区域标识", "Panel listen must be a literal IPv4 or bracketed IPv6 with port 1024–65535, without zone")

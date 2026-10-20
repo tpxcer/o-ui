@@ -30,28 +30,31 @@ sha256sum -c --ignore-missing SHA256SUMS && sudo bash install.sh
 
 1. **语言**：简体中文/English。安装提示、`o-ui`管理命令、面板服务日志及网页默认语言随之（网页里切换并保存的语言仍优先）。
 2. **面板端口**：1024–65535，默认随机，占用时重选。
-3. **管理员**：用户名可改；密码可输入（6–72字节，不回显），直接回车则随机生成24位，**只在安装结束时显示一次**，不写入磁盘。管理员由安装器在面板首次启动前离线设置（`bin/o-ui -init-panel-admin`，密码经标准输入），因此公网上不存在可被抢先的网页初始化入口。
-4. **访问方式**：
-   - `1` HTTPS + 自动申请证书（推荐）：填写域名或公网IP。
+3. **访问路径**：默认随机18位（如`/AbC…/`），可自定义为单段字母数字`_-`，`/`表示根路径；登录地址为`https://域名或IP:端口/路径/`。
+4. **管理员**：用户名默认随机10位，可改；密码可输入（6–72字节，不回显），直接回车则随机生成18位，**只在安装结束时显示一次**，不写入磁盘。管理员由安装器在面板首次启动前离线设置（`bin/o-ui -init-panel-admin`，密码经标准输入），因此公网上不存在可被抢先的网页初始化入口。
+5. **面板证书**（只提供HTTPS）：
+   - `1` 自动申请证书（推荐）：填写域名或公网IP。
      - 域名：选**HTTP-01**（申请和每次续期时80端口须空闲且公网可达；80被占用时脚本会拒绝该选项）或**Cloudflare DNS API**（令牌需Zone.DNS编辑权限，可填Zone ID；不占80端口）。
      - IP：Let's Encrypt的IP证书是约6天的短期证书，只能用HTTP-01，按3天续期。
      - 续期：自动（systemd定时器每6小时检查，续期后重启面板，代理短暂中断，核心按“退出时在运行则自动恢复”恢复）或手动（`o-ui cert renew`）。
-   - `2` HTTPS + 已有证书文件：复制到`/etc/o-ui/tls/`，不会自动续期。
-   - `3` 仅本机：面板只听`127.0.0.1`，经`ssh -L 端口:127.0.0.1:端口 root@服务器`访问。
-   证书申请失败时不会开放HTTP：面板以仅本机启动，排除问题后运行`o-ui cert`。
-5. **BBR**：显示当前队列/拥塞控制并检查内核（4.9+且有tcp_bbr）；同意后写入`/etc/sysctl.d/99-o-ui-bbr.conf`（`net.core.default_qdisc=fq`、`net.ipv4.tcp_congestion_control=bbr`），记录原值，`o-ui bbr off`回退。容器等无法生效时自动撤销。
-6. **防火墙**：仅在检测到已启用的UFW/firewalld时询问是否放行面板端口这一条规则；不改其他规则，也不改80端口。云安全组需自行放行。
+   - `2` 使用本机已有证书：自动扫描`/etc/o-ui/tls`、`/root/cert/*/`、`/root/.acme.sh/*/`、`/etc/letsencrypt/live/*/`、`/etc/o-ui/acme/certs/*/`，只列出在有效期内、含SAN且证书与私钥配对的证书（显示名称、到期时间与路径），编号选择；证书含多个名称时再选面板用的域名。选中后复制到`/etc/o-ui/tls/`并写入面板，不会自动续期。找不到时改为自动申请。
+   申请成功或选中已有证书后都会自动写入面板证书与固定HTTPS来源。证书失败时可重新选择方式重试；放弃则面板只听`127.0.0.1`（不开放HTTP），之后运行`o-ui`在“证书管理”配置。
+6. **BBR**：显示当前队列/拥塞控制并检查内核（4.9+且有tcp_bbr）；同意后写入`/etc/sysctl.d/99-o-ui-bbr.conf`（`net.core.default_qdisc=fq`、`net.ipv4.tcp_congestion_control=bbr`），记录原值，`o-ui bbr off`回退。容器等无法生效时自动撤销。
+7. **防火墙**：仅在检测到已启用的UFW/firewalld时询问是否放行面板端口这一条规则；不改其他规则，也不改80端口。云安全组需自行放行。
 
 ### 3. 首次登录
 
-安装结束会显示`https://域名或IP:端口/`、用户名与（随机生成时的）密码。用浏览器打开该HTTPS地址登录；非本机访问只接受该HTTPS来源，明文HTTP、其他Host和网页初始化均被拒绝。Xray已在安装时选中（失败时登录后在面板中安装），登录后直接创建入站。o-ui服务在安装结束前已设为开机自启并启动。
+安装结束显示完整信息：访问地址（`https://域名或IP:端口/路径/`）、端口与路径、用户名、密码（仅随机生成时显示这一次）、证书类型/域名/到期时间、Xray版本、服务与开机自启状态、BBR和管理方式。用浏览器打开该HTTPS地址登录；非本机访问只接受该HTTPS来源，明文HTTP、其他Host和网页初始化均被拒绝。Xray已在安装时选中（失败时登录后在面板中安装），登录后直接创建入站。o-ui服务在安装结束前已设为开机自启并启动。
 
 ### 4. 管理命令
 
+安装后直接运行`o-ui`进入中英双语编号菜单（参照OUI的菜单）：1 查看当前设置、2 修改端口、3 修改访问路径、4 重置用户名和密码、5 证书管理（申请/改用已有证书、立即续期、查看证书）、6–10 启动/停止/重启/状态/日志、11 更新、12 卸载、13 BBR、0 退出。修改端口、路径或重置管理员时会先停面板、离线写入再启动；改端口时同步服务单元，并询问移除旧端口、放行新端口的防火墙规则。子命令仍可直接使用：
+
 ```sh
+o-ui info | port [端口] | path | reset-admin
 o-ui status | start | stop | restart | log
 o-ui update [--version v1.2.3]     # 升级程序，数据保留；新版本启动失败自动回退，上一版保留在/opt/o-ui.prev
-o-ui cert                          # 重新申请/更换证书，或改回仅本机
+o-ui cert                          # 重新申请证书或改用扫描到的已有证书
 o-ui cert renew [--force]          # 手动续期
 o-ui bbr status | on | off
 o-ui uninstall                     # 移除程序与服务，保留/var/lib/o-ui与/etc/o-ui
@@ -67,8 +70,11 @@ o-ui uninstall --purge             # 输入DELETE后删除全部数据、证书�
 | `/etc/o-ui/o-ui.conf` | 语言、端口、证书方式等安装记录（不含密码或令牌） | root，0600 |
 | `/etc/o-ui/tls` | 面板证书与私钥 | root:o-ui，目录0750/文件0640 |
 | `/etc/o-ui/acme` | 固定版本acme.sh（3.1.6）及其账号/证书；Cloudflare令牌由acme.sh保存在`data/account.conf`供续期 | root，0700 |
-| `/etc/systemd/system/o-ui.service` | `User=o-ui`、`Restart=on-failure`、`KillMode=mixed`（SIGTERM只给面板主进程，由面板停核心并保留自动恢复标记） | — |
+| `/etc/systemd/system/o-ui.service` | `User=o-ui`、`Restart=on-failure`、`KillMode=mixed`（SIGTERM只给面板主进程，由面板停核心并保留自动恢复标记）；为调用防火墙助手不设`NoNewPrivileges`，`/etc/ufw`可写 | — |
 | `o-ui-cert-renew.service/.timer` | 自动续期时才有 | — |
+| `/usr/local/libexec/o-ui-firewall` | 入站端口防火墙助手：面板创建/删除入站时经sudo放行或撤销该端口（`allow\|delete 端口 tcp\|udp`），只删除自己记录过的规则 | root，0755 |
+| `/etc/sudoers.d/o-ui` | 只允许`o-ui`以root运行上述助手（`visudo -c`校验后安装） | root，0440 |
+| `/var/lib/o-ui-firewall/rules` | 助手放行过的规则记录；`uninstall --purge`时按此撤销 | root，0600 |
 
 ### 6. 生成Release文件
 
@@ -80,7 +86,7 @@ npm run build:release -- --version v0.1.0
 
 ### 7. 验证范围
 
-- 已测：`tests/install.test.ts`在临时根目录内用命令桩（systemctl、runuser、useradd、acme.sh、sysctl、ufw、curl等）跑通中英文安装、Xray自动安装与失败不中断、开机自启、密码6–72字节、HTTP-01/Cloudflare DNS/IP证书参数、已有证书、80端口占用、申请失败降为仅本机、发布包篡改/路径穿越/链接/平台拒绝、升级与失败回退、卸载保留/彻底删除、BBR开启/不支持/撤销/回退、续期回调；`internal/localapi`用实际程序验证离线设管理员→离线写HTTPS→启动后只能HTTPS首登、网页初始化403、SIGTERM退出码0；`tests/release-build.test.ts`验证Release包结构。
+- 已测：`tests/install.test.ts`在临时根目录内用命令桩（systemctl、runuser、useradd、acme.sh、sysctl、ufw、curl等）跑通中英文安装、随机/自定义访问路径、已有证书扫描（排除过期、无SAN、不配对）、证书失败重试或降为仅本机、编号菜单（查看信息/改路径/重置管理员/改端口）、完整信息页、Xray自动安装与失败不中断、开机自启、密码6–72字节、HTTP-01/Cloudflare DNS/IP证书参数、已有证书、80端口占用、申请失败降为仅本机、发布包篡改/路径穿越/链接/平台拒绝、升级与失败回退、卸载保留/彻底删除、BBR开启/不支持/撤销/回退、续期回调；`internal/localapi`用实际程序验证离线设管理员→离线写HTTPS→启动后只能HTTPS首登、网页初始化403、SIGTERM退出码0；`tests/release-build.test.ts`验证Release包结构。
 - 未测：真实systemd、Let's Encrypt签发/续期、BBR真实内核、UFW/firewalld、Linux GNU工具下运行脚本（测试在macOS bash 3.2）、Release包在x86_64/ARM64服务器实装。
 
 ## 本地查看
@@ -347,6 +353,9 @@ PANEL_RUNTIME_QA_CORE="$PWD/.runtime/core" go test -race ./internal/localapi -ru
 - 按最新要求取消独立“管理”卡片，五项管理操作并入“独立面板”；侧栏显示当前版本，“检测更新”按需查询GitHub `tpxcer/o-ui`最新正式版（结果缓存10分钟），有新版时提示在服务器运行`o-ui update`，网页不执行升级。
 - 面板设置参照OUI分为“常规”（证书、访问、服务器套餐、界面语言）、“账号安全”、“订阅”三个标签，顶部“重启面板”在正常关闭后原地重启程序，Xray按上次运行状态自动恢复。订阅标签可设置总开关、客户端更新间隔（1–168小时）、订阅名称，以及是否通过`Subscription-Userinfo`向客户端显示已用流量/额度/到期。
 - 新建入站默认监听`0.0.0.0`，分享主机自动填入首页查询到的公网IP（可改为域名）；改为`127.0.0.1`则仅本机。
+- 入站列表参照OUI：“添加入站”打开完整表单；“一键创建”下拉选择 Hysteria2 / VLESS Reality Vision / VLESS XHTTP TLS / VLESS XHTTP Reality，直接在50000–65000随机挑选空闲端口（避开已保存入站并实际试监听），自动生成客户端、`地区-类型-客户端`名称、监听`0.0.0.0`与公网IP（TLS类用面板证书域名），保存即生效，不弹表单。TLS类需要面板已有证书。
+- 防火墙：入站新增/删除（含一键创建、改端口、删除）后，面板经`sudo -n /usr/local/libexec/o-ui-firewall allow|delete 端口 tcp|udp`放行或撤销（HY2为UDP，其余TCP）；助手由安装器安装，只接受1024以上单端口，并只删除自己加过的规则。没有助手时页面提示需手动放行的端口。
+- 面板访问路径（参照OUI的Web路径）：访问设置可填`/abc123/`，面板页面与`/api`只在该路径下提供，其余路径一律404；订阅`/sub/`始终在根路径，分享订阅不暴露面板路径。前端资源与接口均用相对地址。修改后重启面板生效。
 - 深浅色切换、本机主题偏好、IP 统一显隐、桌面侧栏折叠及手机导航。
 - 界面与命令仅支持简体中文和英文：网页首次按浏览器语言（`zh`开头为中文，其余英文），登录页与侧栏可切换并记在本浏览器；前端请求带`X-O-UI-Lang`，后端只在`en`时把错误、日志等已登记的中文文本换成英文，缺省中文。`o-ui`启动命令与程序提示按`LC_ALL`/`LC_MESSAGES`/`LANG`选择。后端确认口令（如`确认重启当前配置`）两种语言下原样提交，不翻译。
 - 入站/客户端搜索、状态与关联入站筛选；桌面表格、窄屏卡片。

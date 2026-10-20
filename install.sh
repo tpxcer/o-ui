@@ -21,20 +21,25 @@ P_ETC=/etc/o-ui
 P_TLS=$P_ETC/tls
 P_ACME=$P_ETC/acme
 P_CMD=/usr/local/bin/o-ui
+P_HELPER=/usr/local/libexec/o-ui-firewall
+P_FWRULES=/var/lib/o-ui-firewall/rules
 F_INSTALL=$R$P_INSTALL
 F_DATA=$R$P_DATA
 F_ETC=$R$P_ETC
 F_TLS=$R$P_TLS
 F_ACME=$R$P_ACME
 F_CMD=$R$P_CMD
+F_HELPER=$R$P_HELPER
+F_FWRULES=$R$P_FWRULES
+F_SUDOERS=$R/etc/sudoers.d/o-ui
 F_CONF=$F_ETC/o-ui.conf
 F_UNITS=$R/etc/systemd/system
 F_SYSCTL=$R/etc/sysctl.d/99-o-ui-bbr.conf
 F_MODULES=$R/etc/modules-load.d/o-ui-bbr.conf
 F_PROC=$R/proc
 
-CONF_KEYS='OUI_LANG OUI_PORT OUI_MODE OUI_HOST OUI_CHALLENGE OUI_RENEW OUI_VERSION OUI_FW OUI_BBR_PREV_QDISC OUI_BBR_PREV_CC OUI_BBR_MODULE'
-OUI_LANG= OUI_PORT= OUI_MODE= OUI_HOST= OUI_CHALLENGE= OUI_RENEW= OUI_VERSION= OUI_FW= OUI_BBR_PREV_QDISC= OUI_BBR_PREV_CC= OUI_BBR_MODULE=
+CONF_KEYS='OUI_LANG OUI_PORT OUI_PATH OUI_MODE OUI_HOST OUI_CHALLENGE OUI_RENEW OUI_VERSION OUI_FW OUI_BBR_PREV_QDISC OUI_BBR_PREV_CC OUI_BBR_MODULE'
+OUI_LANG= OUI_PORT= OUI_PATH= OUI_MODE= OUI_HOST= OUI_CHALLENGE= OUI_RENEW= OUI_VERSION= OUI_FW= OUI_BBR_PREV_QDISC= OUI_BBR_PREV_CC= OUI_BBR_MODULE=
 WORK=
 PKG_DIR=
 OPT_PACKAGE=
@@ -88,15 +93,15 @@ ask_yes() {
   done
 }
 
-# choose 变量 默认序号 选项数；选项文本须先由调用方打印
+# choose 变量 默认序号 最大序号 [最小序号，默认1]；选项文本须先由调用方打印
 choose() {
-  local __var=$1 __def=$2 __max=$3 __ans
+  local __var=$1 __def=$2 __max=$3 __min=${4:-1} __ans
   while :; do
     printf '%s [%s]: ' "$(t '请输入序号' 'Enter a number')" "$__def"
     IFS= read -r __ans || die "输入已结束" "input ended"
     [ -n "$__ans" ] || __ans=$__def
     case $__ans in *[!0-9]*|'') continue ;; esac
-    if [ "$__ans" -ge 1 ] && [ "$__ans" -le "$__max" ]; then printf -v "$__var" '%s' "$__ans"; return 0; fi
+    if [ "$__ans" -ge "$__min" ] && [ "$__ans" -le "$__max" ]; then printf -v "$__var" '%s' "$__ans"; return 0; fi
   done
 }
 
@@ -195,7 +200,7 @@ conf_load() {
   local key value
   while IFS='=' read -r key value; do
     case " $CONF_KEYS " in *" $key "*) ;; *) continue ;; esac
-    case $value in *[!A-Za-z0-9._:@-]*) die "配置文件含无效值：$key" "invalid value in config: $key" ;; esac
+    case $value in *[!A-Za-z0-9._:@/-]*) die "配置文件含无效值：$key" "invalid value in config: $key" ;; esac
     printf -v "$key" '%s' "$value"
   done <"$F_CONF"
 }
@@ -309,8 +314,15 @@ ensure_user() {
 # ---------- systemd ----------
 
 write_unit() {
-  local loc=zh_CN.UTF-8
+  local loc=zh_CN.UTF-8 envs
   [ "$OUI_LANG" = en ] && loc=en_US.UTF-8
+  envs="Environment=LANG=$loc
+Environment=O_UI_DEFAULT_LANG=$OUI_LANG"
+  # 升级时保留单元里其他已有的环境变量
+  if [ -f "$F_UNITS/o-ui.service" ]; then
+    envs="$envs$(grep '^Environment=' "$F_UNITS/o-ui.service" | grep -v -e '^Environment=LANG=' -e '^Environment=O_UI_DEFAULT_LANG=' | sed 's/^/\
+/' || true)"
+  fi
   mkdir -p "$F_UNITS"
   cat >"$F_UNITS/o-ui.service" <<EOF
 [Unit]
@@ -324,8 +336,7 @@ StartLimitBurst=5
 Type=simple
 User=$SERVICE_USER
 Group=$SERVICE_USER
-Environment=LANG=$loc
-Environment=O_UI_DEFAULT_LANG=$OUI_LANG
+$envs
 ExecStart=$P_INSTALL/o-ui $P_DATA $OUI_PORT
 Restart=on-failure
 RestartSec=5s
@@ -333,9 +344,10 @@ RestartSec=5s
 KillMode=mixed
 KillSignal=SIGTERM
 TimeoutStopSec=30s
-NoNewPrivileges=yes
+# 不设NoNewPrivileges：面板经sudo调用防火墙助手放行入站端口；/etc只读但留/etc/ufw供ufw保存规则
 PrivateTmp=yes
 ProtectSystem=full
+ReadWritePaths=-/etc/ufw
 ProtectHome=yes
 
 [Install]
@@ -415,13 +427,32 @@ panel_local_only() {
     -listen "127.0.0.1:$OUI_PORT" -confirm-recovery "$RECOVERY_CONFIRM"
 }
 
+panel_set_path() {
+  as_service "$F_INSTALL/bin/o-ui" -set-panel-path "$OUI_PATH" -state "$F_DATA/panel"
+}
+
+panel_reset_admin() {
+  printf '%s\n' "$2" | as_service "$F_INSTALL/bin/o-ui" -reset-panel-admin -state "$F_DATA/panel" -username "$1"
+}
+
+# 面板运行中也可只读查询，输出单行JSON
+panel_show() {
+  as_service "$F_INSTALL/bin/o-ui" -show-panel -state "$F_DATA/panel"
+}
+
+# 取面板自身输出的扁平JSON中的字符串或布尔字段
+json_field() {
+  printf '%s' "$1" | sed -n -e "s/.*\"$2\":\"\([^\"]*\)\".*/\1/p" -e "s/.*\"$2\":\(true\)[,}].*/\1/p" -e "s/.*\"$2\":\(false\)[,}].*/\1/p" | head -n 1
+}
+
 panel_url() {
+  local path=${OUI_PATH:-/}
   if [ "$OUI_MODE" = local ]; then
-    printf 'http://127.0.0.1:%s/' "$OUI_PORT"
+    printf 'http://127.0.0.1:%s%s' "$OUI_PORT" "$path"
   elif is_ipv6 "$OUI_HOST"; then
-    printf 'https://[%s]:%s/' "$OUI_HOST" "$OUI_PORT"
+    printf 'https://[%s]:%s%s' "$OUI_HOST" "$OUI_PORT" "$path"
   else
-    printf 'https://%s:%s/' "$OUI_HOST" "$OUI_PORT"
+    printf 'https://%s:%s%s' "$OUI_HOST" "$OUI_PORT" "$path"
   fi
 }
 
@@ -467,20 +498,108 @@ cert_fix_perms() {
   done
 }
 
-# 交互收集证书方式，结果写入OUI_MODE/OUI_HOST/OUI_CHALLENGE/OUI_RENEW及CERT_*变量
+# 证书名称（SAN中的域名与IP，逗号分隔）、到期时间；面板只按SAN校验名称
+cert_names() {
+  { openssl x509 -in "$1" -noout -text 2>/dev/null || true; } | awk '/Subject Alternative Name/ { getline; gsub(/ /, ""); gsub(/IPAddress:/, ""); gsub(/DNS:/, ""); print tolower($0); exit }'
+}
+
+cert_end() { { openssl x509 -in "$1" -noout -enddate 2>/dev/null || true; } | sed 's/^notAfter=//'; }
+
+# 证书在有效期内、含SAN，且公钥与私钥配对
+cert_pair_ok() {
+  local a b
+  [ -f "$1" ] && [ -f "$2" ] || return 1
+  openssl x509 -in "$1" -noout -checkend 0 >/dev/null 2>&1 || return 1
+  [ -n "$(cert_names "$1")" ] || return 1
+  a=$(openssl x509 -in "$1" -noout -pubkey 2>/dev/null | openssl sha256 2>/dev/null) || return 1
+  b=$(openssl pkey -in "$2" -pubout 2>/dev/null | openssl sha256 2>/dev/null) || return 1
+  [ -n "$a" ] && [ "$a" = "$b" ]
+}
+
+first_file() {
+  local dir=$1 name
+  shift
+  for name in "$@"; do
+    if [ -f "$dir/$name" ]; then printf '%s' "$dir/$name"; return 0; fi
+  done
+  return 1
+}
+
+# 扫描常见证书位置，只保留有效配对，结果放入SCAN_CERTS/SCAN_KEYS
+SCAN_CERTS=() SCAN_KEYS=()
+cert_scan() {
+  local dir base cert key i dup
+  SCAN_CERTS=() SCAN_KEYS=()
+  for dir in "$F_TLS" "$R"/root/cert/*/ "$R"/root/.acme.sh/*/ "$R"/etc/letsencrypt/live/*/ "$F_ACME"/certs/*/; do
+    [ -d "$dir" ] || continue
+    dir=${dir%/}
+    base=${dir##*/}
+    base=${base%_ecc}
+    cert=$(first_file "$dir" fullchain.pem fullchain.cer fullchain.crt cert.pem "$base.cer" "$base.crt") || continue
+    key=$(first_file "$dir" privkey.pem key.pem "$base.key" private.key privkey.key) || continue
+    cert_pair_ok "$cert" "$key" || continue
+    dup=''
+    i=0
+    while [ $i -lt ${#SCAN_CERTS[@]} ]; do
+      if cmp -s "${SCAN_CERTS[$i]}" "$cert"; then dup=1; fi
+      i=$((i + 1))
+    done
+    [ -n "$dup" ] && continue
+    SCAN_CERTS+=("$cert")
+    SCAN_KEYS+=("$key")
+  done
+}
+
+# 编号选择扫描到的证书；没有可用证书时返回1
+choose_existing_cert() {
+  local i n names host
+  ensure_tool openssl openssl || { warn "扫描证书需要openssl" "scanning certificates needs openssl"; return 1; }
+  cert_scan
+  if [ ${#SCAN_CERTS[@]} -eq 0 ]; then
+    warn "未在 /root/cert、/root/.acme.sh、/etc/letsencrypt/live、/etc/o-ui 找到有效的证书与私钥配对" "no valid certificate/key pair found in /root/cert, /root/.acme.sh, /etc/letsencrypt/live or /etc/o-ui"
+    return 1
+  fi
+  info "找到以下有效证书：" "Valid certificates found:"
+  i=0
+  while [ $i -lt ${#SCAN_CERTS[@]} ]; do
+    printf '  %d) %s  %s  %s\n' $((i + 1)) "$(cert_names "${SCAN_CERTS[$i]}")" "$(t 到期 expires) $(cert_end "${SCAN_CERTS[$i]}")" "${SCAN_CERTS[$i]#$R}"
+    i=$((i + 1))
+  done
+  choose n 1 ${#SCAN_CERTS[@]}
+  CERT_SRC_CERT=${SCAN_CERTS[$((n - 1))]}
+  CERT_SRC_KEY=${SCAN_KEYS[$((n - 1))]}
+  names=$(cert_names "$CERT_SRC_CERT")
+  host=${names%%,*}
+  case $names in
+    *,*)
+      info "证书包含多个名称，选择面板访问用的一个：" "The certificate has several names; choose the one for panel access:"
+      i=1
+      for host in $(printf '%s' "$names" | tr ',' ' '); do printf '  %d) %s\n' $i "$host"; i=$((i + 1)); done
+      choose n 1 $((i - 1))
+      host=$(printf '%s' "$names" | tr ',' '\n' | sed -n "${n}p")
+      ;;
+  esac
+  case $host in \*.*) ask host "通配符证书，请输入具体子域名" "Wildcard certificate; enter the exact subdomain" "panel.${host#\*.}" ;; esac
+  OUI_HOST=$host
+}
+
+# 交互收集证书方式，结果写入OUI_MODE/OUI_HOST/OUI_CHALLENGE/OUI_RENEW及CERT_*变量；只提供HTTPS
 CERT_EMAIL= CERT_CF_TOKEN= CERT_CF_ZONE= CERT_SRC_CERT= CERT_SRC_KEY=
 ask_access() {
   local n host
-  info "面板访问方式：" "Panel access:"
-  info "  1) HTTPS + 自动申请证书（ACME/Let's Encrypt，推荐）" "  1) HTTPS + automatic certificate (ACME/Let's Encrypt, recommended)"
-  info "  2) HTTPS + 使用已有证书文件" "  2) HTTPS + existing certificate files"
-  info "  3) 仅本机（127.0.0.1，经SSH隧道访问，不开放公网）" "  3) Local only (127.0.0.1 via SSH tunnel, nothing exposed)"
-  choose n 1 3
-  case $n in
-    3) OUI_MODE=local; OUI_HOST=; OUI_CHALLENGE=; OUI_RENEW=; return 0 ;;
-    2) OUI_MODE=file ;;
-    1) OUI_MODE=acme ;;
-  esac
+  info "面板证书：" "Panel certificate:"
+  info "  1) 自动申请证书（ACME/Let's Encrypt，推荐）" "  1) Request a certificate automatically (ACME/Let's Encrypt, recommended)"
+  info "  2) 使用本机已有证书（自动扫描）" "  2) Use an existing certificate on this server (scanned automatically)"
+  choose n 1 2
+  if [ "$n" = 2 ]; then
+    OUI_MODE=file OUI_CHALLENGE= OUI_RENEW=
+    if choose_existing_cert; then
+      info "已有证书不会自动续期；更换后请在菜单“证书管理”重新选择。" "Existing certificates are not renewed automatically; choose again under Certificates after replacing them."
+      return 0
+    fi
+    info "改为自动申请证书。" "Switching to automatic certificate request."
+  fi
+  OUI_MODE=acme
   while :; do
     ask host "面板域名或公网IP（证书将签发给它）" "Panel domain or public IP (the certificate is issued for it)" "$OUI_HOST"
     host=$(printf '%s' "$host" | tr 'A-Z' 'a-z')
@@ -488,17 +607,6 @@ ask_access() {
     if is_ip "$host" || printf '%s' "$host" | grep -Eq '^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,63}$'; then break; fi
   done
   OUI_HOST=$host
-  if [ "$OUI_MODE" = file ]; then
-    while :; do
-      ask CERT_SRC_CERT "证书文件路径（含完整链的PEM）" "Certificate file path (PEM with full chain)"
-      ask CERT_SRC_KEY "私钥文件路径（PEM）" "Private key file path (PEM)"
-      [ -f "$CERT_SRC_CERT" ] && [ -f "$CERT_SRC_KEY" ] && [ "$CERT_SRC_CERT" != "$CERT_SRC_KEY" ] && break
-      warn "文件不存在或两者相同" "files missing or identical"
-    done
-    OUI_CHALLENGE=; OUI_RENEW=
-    info "已有证书不会自动续期；更换证书后请再运行 o-ui cert。" "Existing certificates are not renewed automatically; run o-ui cert again after replacing them."
-    return 0
-  fi
   if is_ip "$OUI_HOST"; then
     info "IP证书为Let's Encrypt短期证书（约6天），只能用HTTP-01（需80端口），约每3天续期并重启面板。" "IP certificates are Let's Encrypt short-lived (~6 days), HTTP-01 only (port 80), renewed about every 3 days with a panel restart."
     OUI_CHALLENGE=http
@@ -511,7 +619,7 @@ ask_access() {
     if [ "$n" = 2 ]; then OUI_CHALLENGE=cf; fi
   fi
   if [ "$OUI_CHALLENGE" = http ] && port_in_use 80; then
-    warn "80端口已被占用，HTTP-01无法使用；请改用Cloudflare DNS、已有证书或仅本机" "port 80 is in use, HTTP-01 cannot work; use Cloudflare DNS, existing files or local only"
+    warn "80端口已被占用，HTTP-01无法使用；请改用Cloudflare DNS或已有证书" "port 80 is in use, HTTP-01 cannot work; use Cloudflare DNS or an existing certificate"
     ask_access
     return 0
   fi
@@ -648,7 +756,7 @@ bbr_disable() {
 # ---------- 防火墙：只处理面板端口 ----------
 
 fw_offer() {
-  if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi '^status: active'; then
+  if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -i '^status: active' >/dev/null; then
     if ask_yes "检测到UFW已启用，是否仅放行面板端口 $OUI_PORT/tcp？" "UFW is active; allow only the panel port $OUI_PORT/tcp?" y; then
       ufw allow "$OUI_PORT/tcp" comment 'o-ui panel' >/dev/null && OUI_FW=ufw
     fi
@@ -665,11 +773,129 @@ fw_offer() {
 }
 
 fw_remove() {
+  local port=${1:-$OUI_PORT}
   case $OUI_FW in
-    ufw) ufw delete allow "$OUI_PORT/tcp" >/dev/null || true ;;
-    firewalld) firewall-cmd --remove-port="$OUI_PORT/tcp" >/dev/null 2>&1 || true; firewall-cmd --permanent --remove-port="$OUI_PORT/tcp" >/dev/null || true ;;
+    ufw) ufw delete allow "$port/tcp" >/dev/null || true ;;
+    firewalld) firewall-cmd --remove-port="$port/tcp" >/dev/null 2>&1 || true; firewall-cmd --permanent --remove-port="$port/tcp" >/dev/null || true ;;
   esac
   OUI_FW=
+}
+
+# ---------- 入站端口防火墙助手（root拥有，面板经sudo调用） ----------
+
+write_firewall_helper() {
+  local path=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin tmp
+  # 测试根目录下才沿用当前PATH以便命令桩生效；正式安装固定系统PATH，助手不读取任何环境路径
+  [ -z "$R" ] || path=$PATH
+  mkdir -p "$(dirname "$F_HELPER")"
+  tmp=$F_HELPER.tmp
+  cat >"$tmp" <<EOF
+#!/bin/sh
+# o-ui防火墙助手：只供o-ui服务经sudo调用，放行或撤销单个入站端口；只删除自己记录过的规则。
+set -eu
+PATH='$path'
+export PATH
+RULES='$F_FWRULES'
+EOF
+  cat >>"$tmp" <<'EOF'
+usage() { echo "用法：o-ui-firewall allow|delete <1024-65535> tcp|udp / usage: o-ui-firewall allow|delete <1024-65535> tcp|udp" >&2; exit 2; }
+[ $# -eq 3 ] || usage
+action=$1 port=$2 proto=$3
+case $action in allow|delete) ;; *) usage ;; esac
+case $port in ''|*[!0-9]*|0*) usage ;; esac
+[ ${#port} -le 5 ] && [ "$port" -ge 1024 ] && [ "$port" -le 65535 ] || usage
+case $proto in tcp|udp) ;; *) usage ;; esac
+rule=$port/$proto
+if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -i '^status: active' >/dev/null; then
+  backend=ufw
+elif command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
+  backend=firewalld
+else
+  echo "无防火墙，未改动 / no firewall, nothing changed"
+  exit 0
+fi
+exists() {
+  if [ "$backend" = ufw ]; then
+    ufw status 2>/dev/null | awk -v r="$rule" -v p="$port" '($1 == r || $1 == p) && $2 == "ALLOW" { f = 1 } END { exit !f }'
+  else
+    firewall-cmd --permanent --query-port="$rule" >/dev/null 2>&1
+  fi
+}
+umask 077
+mkdir -p "${RULES%/*}"
+touch "$RULES"
+exec 9>>"$RULES"
+if command -v flock >/dev/null 2>&1; then flock 9; fi
+record="$backend $rule"
+recorded=''
+if grep -qxF "$record" "$RULES"; then recorded=1; fi
+if [ "$action" = allow ]; then
+  if exists; then
+    if [ -n "$recorded" ]; then echo "$rule 已放行（$backend） / $rule already allowed ($backend)"; else echo "$rule 已有其他规则放行，未改动 / $rule is already allowed by another rule; unchanged"; fi
+    exit 0
+  fi
+  if [ "$backend" = ufw ]; then
+    ufw allow "$rule" comment 'o-ui inbound' >/dev/null || { echo "放行$rule失败（ufw） / failed to allow $rule (ufw)"; exit 1; }
+  else
+    { firewall-cmd --permanent --add-port="$rule" >/dev/null && firewall-cmd --reload >/dev/null; } || { echo "放行$rule失败（firewalld） / failed to allow $rule (firewalld)"; exit 1; }
+  fi
+  [ -n "$recorded" ] || printf '%s\n' "$record" >>"$RULES"
+  echo "已放行 $rule（$backend） / allowed $rule ($backend)"
+  exit 0
+fi
+if [ -z "$recorded" ]; then
+  echo "$rule 不是o-ui添加的规则，未改动 / $rule was not added by o-ui; unchanged"
+  exit 0
+fi
+if exists; then
+  if [ "$backend" = ufw ]; then
+    ufw delete allow "$rule" >/dev/null || { echo "撤销$rule失败（ufw） / failed to remove $rule (ufw)"; exit 1; }
+  else
+    { firewall-cmd --permanent --remove-port="$rule" >/dev/null && firewall-cmd --reload >/dev/null; } || { echo "撤销$rule失败（firewalld） / failed to remove $rule (firewalld)"; exit 1; }
+  fi
+fi
+grep -vxF "$record" "$RULES" >"$RULES.tmp" || true
+mv "$RULES.tmp" "$RULES"
+echo "已撤销 $rule（$backend） / removed $rule ($backend)"
+EOF
+  chown root:root "$tmp"
+  chmod 0755 "$tmp"
+  mv "$tmp" "$F_HELPER"
+}
+
+# sudoers只允许o-ui以root运行助手；先用visudo校验临时文件（含点的文件名不被sudo读取）
+deploy_firewall_access() {
+  local tmp
+  write_firewall_helper
+  if ! command -v sudo >/dev/null 2>&1 || ! command -v visudo >/dev/null 2>&1; then
+    if [ "${1-}" != ask ] || ! ask_yes "未找到sudo；面板创建入站时要用它放行防火墙端口。是否用系统包管理器安装sudo？" "sudo was not found; the panel uses it to open firewall ports for new inbounds. Install sudo with the system package manager?" y || ! pkg_install sudo || ! command -v visudo >/dev/null 2>&1; then
+      warn "未安装sudo：面板创建或删除入站时不能自动放行或撤销防火墙端口，请手动处理" "sudo is not installed: the panel cannot open or close firewall ports for inbounds; manage them manually"
+      return 0
+    fi
+  fi
+  mkdir -p "$(dirname "$F_SUDOERS")"
+  tmp=$(mktemp "$(dirname "$F_SUDOERS")/.o-ui.XXXXXX")
+  printf '%s\n' '# o-ui: allow the panel to run its firewall helper as root (the helper validates every argument)' "$SERVICE_USER ALL=(root) NOPASSWD: $P_HELPER" >"$tmp"
+  chown root:root "$tmp"
+  chmod 0440 "$tmp"
+  if visudo -cf "$tmp" >/dev/null 2>&1; then
+    mv "$tmp" "$F_SUDOERS"
+  else
+    rm -f "$tmp"
+    warn "sudoers校验未通过，未安装；面板不能自动放行防火墙端口" "the sudoers entry failed validation and was not installed; the panel cannot open firewall ports"
+  fi
+}
+
+# 卸载时删除助手与sudoers；purge时按记录撤销o-ui加过的入站规则
+remove_firewall_access() {
+  local backend rule
+  if [ -n "${1-}" ] && [ -x "$F_HELPER" ] && [ -f "$F_FWRULES" ]; then
+    while read -r backend rule; do
+      case $rule in */tcp|*/udp) "$F_HELPER" delete "${rule%/*}" "${rule#*/}" || true ;; esac
+    done <"$F_FWRULES"
+    rm -rf "$(dirname "$F_FWRULES")"
+  fi
+  rm -f "$F_SUDOERS" "$F_HELPER"
 }
 
 # ---------- 命令 ----------
@@ -687,16 +913,29 @@ ask_port() {
   done
 }
 
+# 访问路径以/开头和结尾，默认随机18位（参照OUI）；/表示根路径
+ask_path() {
+  local p
+  while :; do
+    ask p "访问路径（字母数字_-，/为根路径）" "Access path (letters, digits, _ -; / for root)" "/$(random_alnum 18)/"
+    p=/${p#/}
+    case $p in */) ;; *) p=$p/ ;; esac
+    case $p in /) break ;; //*|*[!A-Za-z0-9_/-]*|/*/*/) continue ;; esac
+    [ ${#p} -le 66 ] && break
+  done
+  OUI_PATH=$p
+}
+
 ADMIN_USER= ADMIN_PASS= ADMIN_GENERATED=
 ask_admin() {
   local again
   while :; do
-    ask ADMIN_USER "管理员用户名（3–64位字母数字._-）" "Administrator username (3–64 of letters, digits, . _ -)" "admin-$(random_alnum 6 | tr 'A-Z' 'a-z')"
+    ask ADMIN_USER "管理员用户名（3–64位字母数字._-）" "Administrator username (3–64 of letters, digits, . _ -)" "${1:-$(random_alnum 10)}"
     printf '%s' "$ADMIN_USER" | grep -Eq '^[A-Za-z0-9_.-]{3,64}$' && break
   done
   while :; do
     ask_secret ADMIN_PASS "管理员密码（6–72字节；直接回车随机生成）" "Administrator password (6–72 bytes; press Enter to generate)"
-    if [ -z "$ADMIN_PASS" ]; then ADMIN_PASS=$(random_alnum 24); ADMIN_GENERATED=1; break; fi
+    if [ -z "$ADMIN_PASS" ]; then ADMIN_PASS=$(random_alnum 18); ADMIN_GENERATED=1; break; fi
     [ "$(printf '%s' "$ADMIN_PASS" | wc -c)" -ge 6 ] && [ "$(printf '%s' "$ADMIN_PASS" | wc -c)" -le 72 ] || { warn "长度须为6–72字节" "length must be 6–72 bytes"; continue; }
     ask_secret again "再次输入密码" "Repeat the password"
     [ "$again" = "$ADMIN_PASS" ] && break
@@ -724,6 +963,53 @@ install_core() {
   fi
 }
 
+# 安装结束与“查看当前设置”共用；参数为仅显示一次的随机密码
+show_info() {
+  local json='' user=$ADMIN_USER path url='' public cert_type names expiry xray state enabled
+  if json=$(panel_show 2>/dev/null); then
+    user=$(json_field "$json" username)
+    path=$(json_field "$json" basePath)
+    [ -z "$path" ] || OUI_PATH=$path
+    url=$(json_field "$json" url)
+    public=$(json_field "$json" public)
+    [ "$public" != false ] || [ -z "$url" ] || OUI_MODE=local
+  fi
+  [ -n "$url" ] || url=$(panel_url)
+  printf '\n%s\n' "$(t '════════ o-ui 当前信息 ════════' '════════ o-ui details ════════')"
+  if [ "$OUI_MODE" = local ]; then
+    info "访问地址：$url（仅本机，经 ssh -L $OUI_PORT:127.0.0.1:$OUI_PORT root@服务器 访问）" "URL: $url (local only, reach it via ssh -L $OUI_PORT:127.0.0.1:$OUI_PORT root@server)"
+  else
+    info "访问地址：$url" "URL: $url"
+  fi
+  info "端口：$OUI_PORT    访问路径：${OUI_PATH:-/}" "Port: $OUI_PORT    Path: ${OUI_PATH:-/}"
+  info "用户名：${user:-$(t 未知 unknown)}" "Username: ${user:-unknown}"
+  if [ -n "${1-}" ]; then
+    info "密码：$1（随机生成，只显示这一次，不会保存到磁盘）" "Password: $1 (generated, shown only once and never written to disk)"
+  else
+    info "密码：已加密保存，无法查看；忘记时用菜单“重置用户名和密码”" "Password: stored hashed and cannot be shown; use “Reset username and password” if forgotten"
+  fi
+  case $OUI_MODE in
+    acme) if [ "$OUI_RENEW" = timer ]; then cert_type=$(t "Let's Encrypt（自动续期）" "Let's Encrypt (auto renewal)"); else cert_type=$(t "Let's Encrypt（手动续期）" "Let's Encrypt (manual renewal)"); fi ;;
+    file) cert_type=$(t 已有证书 'existing certificate') ;;
+    *) cert_type=$(t 未启用HTTPS 'HTTPS not enabled') ;;
+  esac
+  if [ "$OUI_MODE" != local ] && [ -f "$F_TLS/fullchain.pem" ] && command -v openssl >/dev/null 2>&1; then
+    names=$(cert_names "$F_TLS/fullchain.pem")
+    expiry=$(cert_end "$F_TLS/fullchain.pem")
+    info "证书：$cert_type；域名/IP：${names:-?}；到期：${expiry:-?}" "Certificate: $cert_type; names: ${names:-?}; expires: ${expiry:-?}"
+  else
+    info "证书：$cert_type" "Certificate: $cert_type"
+  fi
+  xray=''
+  [ ! -f "$F_DATA/core/selection.json" ] || xray=$(sed -n 's/.*"selected": *"\([^"]*\)".*/\1/p' "$F_DATA/core/selection.json" | head -n 1)
+  info "Xray：${xray:-$(t 未安装（可在面板中安装） 'not installed (install it in the panel)')}" "Xray: ${xray:-not installed (install it in the panel)}"
+  if systemctl is-active --quiet o-ui; then state=$(t 运行中 running); else state=$(t 已停止 stopped); fi
+  if systemctl is-enabled --quiet o-ui; then enabled=$(t 已启用 enabled); else enabled=$(t 未启用 disabled); fi
+  info "服务：$state；开机自启：$enabled" "Service: $state; start at boot: $enabled"
+  info "BBR（队列/拥塞控制）：$(bbr_current)" "BBR (qdisc/congestion): $(bbr_current)"
+  info "程序版本：${OUI_VERSION:-unknown}；管理：运行 o-ui 打开菜单，o-ui help 查看子命令" "Version: ${OUI_VERSION:-unknown}; manage: run o-ui for the menu, o-ui help for subcommands"
+}
+
 cmd_install() {
   parse_pkg_opts "$@"
   need_root
@@ -737,6 +1023,7 @@ cmd_install() {
   prepare_package
   local reuse='' bbr=''
   ask_port
+  ask_path
   if [ -f "$F_DATA/panel/panel.sqlite" ]; then
     reuse=1
     info "检测到已有数据目录 $P_DATA，将沿用其中的管理员和业务数据。" "Existing data found in $P_DATA; its administrator and data are kept."
@@ -750,21 +1037,25 @@ cmd_install() {
   mkdir -p "$F_ETC"
   chmod 0755 "$F_ETC"
   install_files
+  deploy_firewall_access ask
   OUI_VERSION=$(pkg_version "$F_INSTALL")
   write_unit
   systemctl daemon-reload
   [ -n "$reuse" ] || panel_init_admin "$ADMIN_USER" "$ADMIN_PASS" || die "初始化管理员失败" "failed to initialize the administrator"
   conf_save
-  if [ "$OUI_MODE" != local ]; then
-    if ! obtain_cert || ! panel_enable_https; then
-      warn "HTTPS未配置成功，面板暂以仅本机模式启动；排除问题后运行 o-ui cert" "HTTPS setup failed; the panel starts local-only for now. Fix the issue and run o-ui cert"
-      [ "$OUI_MODE" != acme ] || acme_forget "$OUI_HOST"
-      OUI_MODE=local OUI_CHALLENGE= OUI_RENEW=
+  # 证书失败不开放HTTP：可重新选择；放弃时面板只听127.0.0.1，之后在菜单“证书管理”配置
+  while ! obtain_cert || ! panel_enable_https; do
+    [ "$OUI_MODE" != acme ] || acme_forget "$OUI_HOST"
+    if ask_yes "HTTPS证书未配置成功，是否重新选择证书方式并重试？" "The HTTPS certificate was not set up; choose a certificate method and retry?" y; then
+      ask_access
+      continue
     fi
-  fi
-  if [ "$OUI_MODE" = local ] && [ -n "$reuse" ]; then
-    panel_local_only >/dev/null || warn "未能把已有访问设置恢复为仅本机" "could not reset the existing access settings to local only"
-  fi
+    warn "面板暂以仅本机（127.0.0.1）启动，不开放公网；之后运行 o-ui 在“证书管理”配置证书" "the panel starts local-only (127.0.0.1) with nothing exposed; run o-ui and set up the certificate under Certificates"
+    OUI_MODE=local OUI_CHALLENGE= OUI_RENEW=
+    panel_local_only >/dev/null || warn "未能写入仅本机访问设置" "could not write the local-only access settings"
+    break
+  done
+  panel_set_path || warn "访问路径未能写入面板，暂为原路径" "the access path could not be written to the panel; the previous path stays"
   conf_save
   [ -z "$bbr" ] || bbr_enable || true
   [ "$OUI_MODE" = local ] || fw_offer
@@ -774,28 +1065,11 @@ cmd_install() {
   systemctl enable o-ui >/dev/null
   systemctl start o-ui
   wait_active || die "o-ui启动失败，请查看 journalctl -u o-ui" "o-ui failed to start; see journalctl -u o-ui"
+  systemctl is-enabled --quiet o-ui || warn "o-ui未设为开机自启，请运行 systemctl enable o-ui" "o-ui is not enabled at boot; run systemctl enable o-ui"
   printf '\n%s\n' "$(t '==== o-ui 安装完成 ====' '==== o-ui installed ====')"
-  info "版本：$OUI_VERSION" "Version: $OUI_VERSION"
-  if [ "$OUI_MODE" = local ]; then
-    info "面板仅本机：先在本地电脑运行 ssh -L $OUI_PORT:127.0.0.1:$OUI_PORT root@服务器，再打开 $(panel_url)" \
-      "Panel is local only: run ssh -L $OUI_PORT:127.0.0.1:$OUI_PORT root@server on your computer, then open $(panel_url)"
-  else
-    info "登录地址（HTTPS）：$(panel_url)" "Sign-in URL (HTTPS): $(panel_url)"
-  fi
-  if [ -z "$reuse" ]; then
-    info "用户名：$ADMIN_USER" "Username: $ADMIN_USER"
-    if [ -n "$ADMIN_GENERATED" ]; then
-      info "密码：$ADMIN_PASS" "Password: $ADMIN_PASS"
-      info "（随机生成，只显示这一次，不会保存到磁盘；请立即妥善保存）" "(generated, shown only once and never written to disk; store it safely now)"
-    fi
-  fi
-  if systemctl is-enabled --quiet o-ui; then
-    info "o-ui服务已启动并设为开机自启。" "The o-ui service is running and enabled at boot."
-  else
-    warn "o-ui未设为开机自启，请运行 systemctl enable o-ui" "o-ui is not enabled at boot; run systemctl enable o-ui"
-  fi
-  [ "$CORE_STATE" != failed ] || info "Xray未安装：登录后在面板中选择版本安装。" "Xray is not installed: choose a version in the panel after signing in."
-  info "管理命令：o-ui help" "Management: o-ui help"
+  local shown=''
+  [ -z "$ADMIN_GENERATED" ] || shown=$ADMIN_PASS
+  show_info "$shown"
 }
 
 cmd_update() {
@@ -808,6 +1082,7 @@ cmd_update() {
   systemctl is-active --quiet o-ui && was_active=1
   systemctl stop o-ui || true
   install_files
+  deploy_firewall_access
   write_unit
   systemctl daemon-reload
   if [ -n "$was_active" ]; then
@@ -847,6 +1122,7 @@ cmd_uninstall() {
   systemctl daemon-reload
   if [ -n "$OUI_FW" ] && ask_yes "移除安装时放行的面板端口 $OUI_PORT/tcp 规则？" "Remove the panel port $OUI_PORT/tcp rule added during install?" y; then fw_remove; fi
   if [ -f "$F_SYSCTL" ] && ask_yes "回退o-ui开启的BBR设置？" "Revert the BBR setting enabled by o-ui?" n; then bbr_disable; fi
+  remove_firewall_access "$purge"
   rm -rf "$F_INSTALL" "$F_INSTALL.prev" "$F_INSTALL.new"
   if [ -n "$purge" ]; then
     rm -rf "$F_DATA" "$F_ETC"
@@ -880,19 +1156,13 @@ cmd_cert() {
   stdin_check
   local old_mode=$OUI_MODE old_host=$OUI_HOST
   ask_access
-  if [ "$OUI_MODE" != local ]; then
-    obtain_cert || die "证书未更新，面板设置保持不变" "certificate not updated; panel settings unchanged"
-  fi
+  obtain_cert || die "证书未更新，面板设置保持不变" "certificate not updated; panel settings unchanged"
   if [ "$old_mode" = acme ] && { [ "$OUI_MODE" != acme ] || [ "$old_host" != "$OUI_HOST" ]; }; then acme_forget "$old_host"; fi
   systemctl stop o-ui
-  if [ "$OUI_MODE" = local ]; then
-    panel_local_only || { systemctl start o-ui || true; die "切换为仅本机失败" "switching to local only failed"; }
-  else
-    panel_enable_https || { systemctl start o-ui || true; die "写入面板HTTPS设置失败，原设置保持" "writing panel HTTPS settings failed; previous settings kept"; }
-  fi
+  panel_enable_https || { systemctl start o-ui || true; die "写入面板HTTPS设置失败，原设置保持" "writing panel HTTPS settings failed; previous settings kept"; }
   if [ "$OUI_RENEW" = timer ]; then renew_timer_enable; else renew_timer_disable; fi
   conf_save
-  [ "$OUI_MODE" = local ] || [ "$old_mode" != local ] || fw_offer
+  [ "$old_mode" != local ] || fw_offer
   conf_save
   systemctl start o-ui
   wait_active || die "o-ui启动失败，请查看 journalctl -u o-ui" "o-ui failed to start; see journalctl -u o-ui"
@@ -924,13 +1194,141 @@ cmd_status() {
   systemctl status o-ui --no-pager || true
 }
 
+# 修改端口：面板停止后改写监听与HTTPS来源及服务单元，防火墙规则随之询问
+cmd_port() {
+  require_installed
+  stdin_check
+  local old=$OUI_PORT
+  if [ -n "${1-}" ]; then
+    case $1 in *[!0-9]*) die "端口须为1024–65535的数字" "port must be a number 1024–65535" ;; esac
+    [ "$1" -ge 1024 ] && [ "$1" -le 65535 ] || die "端口须为1024–65535的数字" "port must be a number 1024–65535"
+    ! port_in_use "$1" || die "端口$1已被占用" "port $1 is in use"
+    OUI_PORT=$1
+  else
+    ask_port
+  fi
+  [ "$OUI_PORT" != "$old" ] || { info "端口未变化。" "Port unchanged."; return 0; }
+  systemctl stop o-ui
+  if [ "$OUI_MODE" = local ]; then
+    panel_local_only >/dev/null || { OUI_PORT=$old; systemctl start o-ui || true; die "修改端口失败，原设置保持" "changing the port failed; previous settings kept"; }
+    panel_set_path >/dev/null || warn "访问路径未能写入，暂为根路径" "the access path could not be written; it is / for now"
+  else
+    panel_enable_https || { OUI_PORT=$old; systemctl start o-ui || true; die "修改端口失败，原设置保持" "changing the port failed; previous settings kept"; }
+  fi
+  write_unit
+  systemctl daemon-reload
+  if [ -n "$OUI_FW" ] && ask_yes "移除旧端口 $old/tcp 的放行规则？" "Remove the rule for the old port $old/tcp?" y; then fw_remove "$old"; fi
+  conf_save
+  [ "$OUI_MODE" = local ] || fw_offer
+  conf_save
+  systemctl start o-ui
+  wait_active || die "o-ui启动失败，请查看 journalctl -u o-ui" "o-ui failed to start; see journalctl -u o-ui"
+  info "端口已改为 $OUI_PORT：$(panel_url)" "Port changed to $OUI_PORT: $(panel_url)"
+}
+
+cmd_path() {
+  require_installed
+  stdin_check
+  ask_path
+  systemctl stop o-ui
+  panel_set_path || { systemctl start o-ui || true; die "修改访问路径失败，原设置保持" "changing the access path failed; previous settings kept"; }
+  conf_save
+  systemctl start o-ui
+  wait_active || die "o-ui启动失败，请查看 journalctl -u o-ui" "o-ui failed to start; see journalctl -u o-ui"
+  info "访问路径已改为 $OUI_PATH：$(panel_url)" "Access path changed to $OUI_PATH: $(panel_url)"
+}
+
+cmd_reset_admin() {
+  require_installed
+  stdin_check
+  local json current=''
+  if json=$(panel_show 2>/dev/null); then current=$(json_field "$json" username); fi
+  ask_admin "$current"
+  systemctl stop o-ui
+  panel_reset_admin "$ADMIN_USER" "$ADMIN_PASS" || { systemctl start o-ui || true; die "重置管理员失败，原账号保持" "resetting the administrator failed; the previous account stays"; }
+  systemctl start o-ui
+  wait_active || die "o-ui启动失败，请查看 journalctl -u o-ui" "o-ui failed to start; see journalctl -u o-ui"
+  info "管理员已重置，用户名：$ADMIN_USER；原有登录需重新登录。" "Administrator reset, username: $ADMIN_USER; existing sessions must sign in again."
+  [ -z "$ADMIN_GENERATED" ] || info "密码：$ADMIN_PASS（随机生成，只显示这一次）" "Password: $ADMIN_PASS (generated, shown only once)"
+}
+
+cmd_cert_menu() {
+  local n
+  while :; do
+    info "证书管理：" "Certificates:"
+    info "  1) 申请新证书或改用已有证书" "  1) Request a new certificate or use an existing one"
+    info "  2) 立即续期（ACME）" "  2) Renew now (ACME)"
+    info "  3) 查看当前证书" "  3) Show the current certificate"
+    info "  0) 返回" "  0) Back"
+    choose n 0 3 0
+    case $n in
+      0) return 0 ;;
+      1) (cmd_cert) || true ;;
+      2) (cmd_cert renew --force) || true ;;
+      3) if [ -f "$F_TLS/fullchain.pem" ] && command -v openssl >/dev/null 2>&1; then
+           info "域名/IP：$(cert_names "$F_TLS/fullchain.pem")；到期：$(cert_end "$F_TLS/fullchain.pem")；文件：$P_TLS/fullchain.pem" "Names: $(cert_names "$F_TLS/fullchain.pem"); expires: $(cert_end "$F_TLS/fullchain.pem"); file: $P_TLS/fullchain.pem"
+         else
+           info "未配置面板证书。" "No panel certificate is configured."
+         fi ;;
+    esac
+    conf_load
+  done
+}
+
+cmd_bbr_menu() {
+  local n
+  info "BBR：1) 查看  2) 开启  3) 回退  0) 返回" "BBR: 1) status  2) enable  3) revert  0) back"
+  choose n 1 3 0
+  case $n in 1) cmd_bbr status ;; 2) cmd_bbr on ;; 3) cmd_bbr off ;; esac
+}
+
+# 已安装时不带参数运行o-ui进入的编号菜单；每项在子shell中执行，出错只结束该项
+cmd_menu() {
+  require_installed
+  stdin_check
+  local n
+  while :; do
+    printf '\n%s\n' "$(t '════════ o-ui 管理菜单 ════════' '════════ o-ui menu ════════')"
+    info "  1) 查看当前设置      2) 修改端口" "  1) Show current settings   2) Change port"
+    info "  3) 修改访问路径      4) 重置用户名和密码" "  3) Change access path      4) Reset username and password"
+    info "  5) 证书管理" "  5) Certificates"
+    info "  6) 启动  7) 停止  8) 重启  9) 状态  10) 日志" "  6) Start  7) Stop  8) Restart  9) Status  10) Logs"
+    info " 11) 更新  12) 卸载  13) BBR" " 11) Update  12) Uninstall  13) BBR"
+    info "  0) 退出" "  0) Exit"
+    choose n 0 13 0
+    case $n in
+      0) return 0 ;;
+      1) (show_info) || true ;;
+      2) (cmd_port) || true ;;
+      3) (cmd_path) || true ;;
+      4) (cmd_reset_admin) || true ;;
+      5) (cmd_cert_menu) || true ;;
+      6) systemctl start o-ui || true ;;
+      7) systemctl stop o-ui || true ;;
+      8) systemctl restart o-ui || true ;;
+      9) (cmd_status) || true ;;
+      10) journalctl -u o-ui --no-pager -n 100 || true ;;
+      11) (cmd_update) || true ;;
+      12) (cmd_uninstall) || true ;;
+      13) (cmd_bbr_menu) || true ;;
+    esac
+    installed || return 0
+    conf_load
+  done
+}
+
 usage() {
   info "o-ui 管理命令：
   install [--version vX.Y.Z | --package 文件 [--sums SHA256SUMS]]  安装
   update  [同上]          升级程序（保留数据，失败自动回退）
   uninstall [--purge]     卸载（默认保留数据；--purge删除全部）
   start|stop|restart|status|log
-  cert                    重新配置HTTPS证书或切换仅本机
+  （不带参数）            已安装时打开编号管理菜单
+  info                    查看当前设置
+  port [端口]             修改面板端口
+  path                    修改访问路径
+  reset-admin             重置用户名和密码
+  cert                    重新申请证书或改用已有证书
   cert renew [--force]    手动续期ACME证书
   bbr [status|on|off]     查看/开启/回退BBR
   version" "o-ui management:
@@ -938,7 +1336,12 @@ usage() {
   update  [same options]  upgrade the program (data kept, automatic rollback on failure)
   uninstall [--purge]     uninstall (data kept by default; --purge deletes everything)
   start|stop|restart|status|log
-  cert                    reconfigure the HTTPS certificate or switch to local only
+  (no arguments)          open the numbered menu when installed
+  info                    show current settings
+  port [PORT]             change the panel port
+  path                    change the access path
+  reset-admin             reset username and password
+  cert                    request a new certificate or use an existing one
   cert renew [--force]    renew the ACME certificate manually
   bbr [status|on|off]     show/enable/revert BBR
   version"
@@ -949,7 +1352,11 @@ main() {
   [ $# -eq 0 ] || shift
   conf_load
   case $cmd in
-    '') if installed; then usage; else cmd_install; fi ;;
+    '') if installed; then cmd_menu; else cmd_install; fi ;;
+    info) require_installed; show_info ;;
+    port) cmd_port "$@" ;;
+    path) cmd_path ;;
+    reset-admin) cmd_reset_admin ;;
     install) cmd_install "$@" ;;
     update|upgrade) cmd_update "$@" ;;
     uninstall) cmd_uninstall "$@" ;;
