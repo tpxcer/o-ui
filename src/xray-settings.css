@@ -1,0 +1,61 @@
+.xray-settings-actions { display: flex; flex-wrap: wrap; gap: 12px; padding: 22px 24px; margin-bottom: 16px; }
+.xray-settings-actions button:disabled { opacity: .5; cursor: not-allowed; }
+.xray-settings-card { min-width: 0; padding: 22px 24px 26px; }
+#panel-view > .xray-settings-card { margin-top: 16px; }
+.xray-settings-tabs { display: flex; gap: 16px; border-bottom: 1px solid var(--border); margin-bottom: 18px; overflow-x: auto; }
+.xray-settings-tabs button { display: flex; align-items: center; justify-content: center; gap: 9px; white-space: nowrap; min-height: 50px; padding: 10px 2px; background: none; color: var(--muted); border: 0; border-bottom: 2px solid transparent; font-size: 13px; }
+.xray-settings-tabs button[aria-selected="true"] { color: var(--blue); border-bottom-color: var(--blue); }
+.xray-settings-tabs button:hover { color: var(--text); }
+.xray-settings-tabs svg { width: 16px; height: 16px; }
+.xray-setting-section { border: 1px solid var(--border); border-bottom: 0; overflow: hidden; }
+.xray-setting-section:first-child { border-radius: 8px 8px 0 0; }
+.xray-setting-section:last-child { border-bottom: 1px solid var(--border); border-radius: 0 0 8px 8px; }
+.xray-setting-section summary { min-height: 48px; padding: 15px 18px; background: var(--raised); cursor: pointer; font-size: 13px; }
+.xray-setting-section[open] summary { border-bottom: 1px solid var(--border); }
+.xray-setting-content { padding: 16px 18px; min-width: 0; }
+.xray-setting-content > .core-warning { margin: 0 0 10px; }
+.xray-setting-row { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(180px, 42%); align-items: center; gap: 16px; padding: 15px 0; border-bottom: 1px solid var(--border); }
+.xray-setting-row:last-child { border-bottom: 0; }
+.xray-setting-row strong { display: block; font-size: 13px; font-weight: 500; }
+.xray-setting-row small { display: block; margin-top: 7px; color: var(--muted); font-size: 12px; line-height: 1.7; }
+.xray-setting-content .check-field { margin: 12px 0; }
+.xray-editor-title { margin: 0 0 12px; font-size: 16px; font-weight: 500; }
+.xray-setting-content textarea { width: 100%; min-width: 0; min-height: 300px; resize: vertical; background: var(--background); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 14px; font: 13px/1.8 ui-monospace, SFMono-Regular, Consolas, monospace; tab-size: 2; }
+.xray-setting-content textarea:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.xray-settings-preview { padding: 20px 24px; margin-top: 16px; min-width: 0; }
+.xray-settings-preview h2 { margin: 0; font-size: 15px; }
+.xray-settings-preview pre { max-height: 500px; overflow: auto; padding: 16px; background: var(--background); border-radius: 6px; font: 12px/1.8 ui-monospace, SFMono-Regular, Consolas, monospace; }
+@media (max-width: 700px) {
+  .xray-settings-actions, .xray-settings-card { padding: 16px; }
+  .xray-settings-actions { gap: 8px; }
+  .xray-settings-actions button { font-size: 12px; padding: 10px 12px; }
+  .xray-settings-tabs { gap: 18px; }
+  .xray-setting-row { grid-template-columns: 1fr; gap: 10px; }
+  .xray-setting-content { padding: 14px 12px; }
+  .xray-settings-preview { padding: 16px; }
+}
+.xray-edit-fields { border: 0; margin: 0; padding: 0; min-width: 0; }
+.routing-toolbar, .routing-row-actions, .dns-toolbar, .dns-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.routing-toolbar, .dns-toolbar { justify-content: space-between; margin-bottom: 14px; }
+.routing-toolbar h2, .dns-toolbar h2 { margin: 0; }
+.routing-rules { margin: 18px 0; padding: 0; list-style: none; }
+.routing-rule { border: 1px solid var(--border); border-radius: 6px; padding: 14px; margin-bottom: 10px; min-width: 0; }
+.routing-rule strong { font-size: 13px; font-weight: 500; overflow-wrap: anywhere; }
+.routing-rule p, .routing-delete p { font-size: 12px; line-height: 1.8; overflow-wrap: anywhere; }
+.routing-row-actions { margin-top: 12px; }
+.routing-row-actions button { min-height: 44px; font-size: 12px; }
+.routing-empty { padding: 24px 12px; color: var(--muted); font-size: 13px; text-align: center; }
+.routing-rule-form, .routing-delete { margin-top: 18px; border: 1px solid var(--border); border-radius: 6px; padding: 16px; background: var(--raised); }
+.routing-rule-form h3, .routing-delete h3 { font-size: 14px; margin: 0 0 12px; font-weight: 500; }
+.routing-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 18px; margin-top: 16px; }
+.routing-form-grid textarea { min-height: 100px; font: inherit; line-height: 1.7; padding: 10px 12px; }
+.routing-form-grid input, .routing-form-grid select { width: 100%; min-width: 0; }
+.routing-delete { border-color: var(--danger); }
+.dns-form-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
+.dns-form-grid select { width: 100%; min-width: 0; }
+.xray-setting-content .dns-servers { min-height: 150px; }
+.dns-actions button { min-height: 44px; }
+@media (max-width: 700px) {
+  .routing-form-grid, .dns-form-grid { grid-template-columns: 1fr; }
+  .routing-rule-form, .routing-delete { padding: 12px; }
+}

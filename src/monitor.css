@@ -1,0 +1,6 @@
+.monitor-status { margin: 8px 0 0; color: var(--muted); font-size: 11px; line-height: 1.55; overflow-wrap: anywhere; }
+.monitor-stale .traffic-chart svg { opacity: .4; }
+.resource-copy { flex: 1; }
+.resource-copy span { white-space: normal; overflow-wrap: anywhere; }
+.resource-percent { margin-left: auto; }
+.statistics dd { overflow-wrap: anywhere; }

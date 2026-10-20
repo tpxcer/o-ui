@@ -1,0 +1,26 @@
+{
+  "name": "o-ui",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev:core": "go run ./cmd/o-ui",
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc --noEmit && vite build && node scripts/export-preview.mjs",
+    "build:local": "node scripts/build-local.mjs",
+    "build:release": "node scripts/build-release.mjs",
+    "preview": "vite preview --host 127.0.0.1",
+    "test": "node --experimental-strip-types --test tests/*.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "@types/qrcode": "^1.5.6",
+    "jsqr": "^1.4.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4"
+  },
+  "dependencies": {
+    "lucide": "^1.59.0",
+    "qrcode": "^1.5.4"
+  }
+}

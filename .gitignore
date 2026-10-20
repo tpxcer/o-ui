@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.DS_Store
+.runtime/
+artifacts/local-build/
+# 内部工作记录、验收证据与截图（含服务器/本机信息），不随源码发布
+progress.md
+task_plan.md
+findings.md
+验收记录.md
+首版方案.md
+可用版实施计划.md
+artifacts/
+screenshots/

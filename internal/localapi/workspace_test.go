@@ -1,0 +1,78 @@
+package localapi
+
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
+
+func validWorkspace() json.RawMessage {
+	return json.RawMessage(`{"inbounds":[{"id":"in-one","name":"测试入站","preset":"reality","port":18443,"enabled":true,"sniffing":{"enabled":true,"http":true,"tls":true,"quic":true,"routeOnly":true,"fakeDns":false,"metadataOnly":false}}],"clients":[{"id":"client-one","inboundId":"in-one","name":"client","enabled":true,"quotaGB":0,"usedGB":0,"expiresAt":null,"ipLimit":0,"subscription":false}]}`)
+}
+
+func TestValidateWorkspaceDraft(t *testing.T) {
+	valid := validWorkspace()
+	if err := validateWorkspaceDraft(valid, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct{ name, old, new string }{
+		{"privileged-port", `18443`, `443`},
+		{"unknown-preset", `"reality"`, `"shadowsocks"`},
+		{"ip-limit", `"ipLimit":0`, `"ipLimit":2`},
+		{"fake-usage", `"usedGB":0`, `"usedGB":3`},
+		{"negative-quota", `"quotaGB":0`, `"quotaGB":-1`},
+		{"broken-link", `"inboundId":"in-one"`, `"inboundId":"missing"`},
+		{"null-list", `"clients":[`, `"clients":null,"extra":[`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if validateWorkspaceDraft(json.RawMessage(strings.ReplaceAll(string(valid), test.old, test.new)), nil) == nil {
+				t.Fatal("invalid workspace accepted")
+			}
+		})
+	}
+	if validateWorkspaceDraft(json.RawMessage(`{"inbounds":[],"clients":[]}`), valid) == nil {
+		t.Fatal("batch delete accepted")
+	}
+	var state workspaceDraft
+	if err := json.Unmarshal(valid, &state); err != nil {
+		t.Fatal(err)
+	}
+	state.Clients = []clientDraft{}
+	withoutClients, _ := json.Marshal(state)
+	if err := validateWorkspaceDraft(withoutClients, valid); err != nil {
+		t.Fatal("single client delete rejected", err)
+	}
+	if err := validateWorkspaceDraft(json.RawMessage(`{"inbounds":[],"clients":[]}`), withoutClients); err != nil {
+		t.Fatal("single inbound delete rejected", err)
+	}
+	state.Inbounds = append(state.Inbounds, state.Inbounds[0])
+	duplicate, _ := json.Marshal(state)
+	if validateWorkspaceDraft(duplicate, nil) == nil {
+		t.Fatal("duplicate IDs accepted")
+	}
+	state.Inbounds[1].ID = "in-two"
+	duplicate, _ = json.Marshal(state)
+	if validateWorkspaceDraft(duplicate, nil) == nil {
+		t.Fatal("duplicate port accepted")
+	}
+}
+
+func TestMihomoCompatibilityDraftValidation(t *testing.T) {
+	for _, preset := range []string{"reality", "xhttp-reality", "hy2", "xhttp-tls"} {
+		var draft workspaceDraft
+		_ = json.Unmarshal(validWorkspace(), &draft)
+		draft.Inbounds[0].Preset = preset
+		draft.Inbounds[0].Connection = &connectionDraft{MihomoCompatibility: true}
+		data, _ := json.Marshal(draft)
+		err := validateWorkspaceDraft(data, nil)
+		if (err == nil) != strings.Contains(preset, "reality") {
+			t.Fatal("compatibility accepted for wrong security layer")
+		}
+	}
+	for _, value := range []string{`"true"`, `1`, `{}`} {
+		data := strings.Replace(string(validWorkspace()), `"sniffing":`, `"connection":{"mihomoCompatibility":`+value+`},"sniffing":`, 1)
+		if validateWorkspaceDraft(json.RawMessage(data), nil) == nil {
+			t.Fatal("non-boolean compatibility flag accepted")
+		}
+	}
+}

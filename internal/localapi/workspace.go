@@ -1,0 +1,152 @@
+package localapi
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"independent-panel/internal/i18n"
+	"io"
+	"math"
+	"regexp"
+	"strings"
+
+	"independent-panel/internal/config"
+)
+
+type inboundDraft struct {
+	ID         string           `json:"id"`
+	Name       string           `json:"name"`
+	Preset     string           `json:"preset"`
+	Port       int              `json:"port"`
+	Listen     string           `json:"listen,omitempty"`
+	ShareHost  string           `json:"shareHost,omitempty"`
+	Enabled    bool             `json:"enabled"`
+	Connection *connectionDraft `json:"connection,omitempty"`
+	Sniffing   struct {
+		Enabled         bool     `json:"enabled"`
+		HTTP            bool     `json:"http"`
+		TLS             bool     `json:"tls"`
+		QUIC            bool     `json:"quic"`
+		RouteOnly       bool     `json:"routeOnly"`
+		FakeDNS         bool     `json:"fakeDns"`
+		MetadataOnly    bool     `json:"metadataOnly"`
+		IPsExcluded     []string `json:"ipsExcluded,omitempty"`
+		DomainsExcluded []string `json:"domainsExcluded,omitempty"`
+	} `json:"sniffing"`
+}
+type connectionDraft struct {
+	CertificateFile     string `json:"certificateFile"`
+	KeyFile             string `json:"keyFile"`
+	Target              string `json:"target"`
+	ServerName          string `json:"serverName"`
+	Path                string `json:"path"`
+	Mode                string `json:"mode"`
+	UsePanelCertificate bool   `json:"usePanelCertificate,omitempty"`
+	MihomoCompatibility bool   `json:"mihomoCompatibility,omitempty"`
+}
+type clientDraft struct {
+	ID           string  `json:"id"`
+	InboundID    string  `json:"inboundId"`
+	Name         string  `json:"name"`
+	Enabled      bool    `json:"enabled"`
+	QuotaGB      float64 `json:"quotaGB"`
+	UsedGB       float64 `json:"usedGB"`
+	ExpiresAt    *int64  `json:"expiresAt"`
+	IPLimit      int     `json:"ipLimit"`
+	Subscription bool    `json:"subscription"`
+}
+type workspaceDraft struct {
+	Inbounds []inboundDraft `json:"inbounds"`
+	Clients  []clientDraft  `json:"clients"`
+}
+
+var draftID = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
+
+func validateWorkspaceDraft(data, previous json.RawMessage) error {
+	var draft, old workspaceDraft
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&draft) != nil || decoder.Decode(&struct{}{}) != io.EOF || draft.Inbounds == nil || draft.Clients == nil {
+		return i18n.New("入站和客户端草稿格式无效", "Invalid inbound and client draft format")
+	}
+	if len(draft.Inbounds) > 500 || len(draft.Clients) > 5000 {
+		return i18n.New("本机测试草稿超出数量上限", "Draft exceeds the item limit")
+	}
+	ids, ports, names := map[string]bool{}, map[string]bool{}, map[string]bool{}
+	for _, in := range draft.Inbounds {
+		if !draftID.MatchString(in.ID) || ids[in.ID] || strings.TrimSpace(in.Name) == "" || len([]rune(in.Name)) > 128 || in.Port < 1024 || in.Port > 65535 {
+			return i18n.New("入站标识、名称或测试端口无效（仅1024至65535）", "Invalid inbound ID, name or port (1024–65535 only)")
+		}
+		if in.Preset != "reality" && in.Preset != "hy2" && in.Preset != "xhttp-tls" && in.Preset != "xhttp-reality" {
+			return i18n.New("入站预设无效", "Invalid inbound preset")
+		}
+		if _, _, err := config.ProxyEndpoint(in.Listen, in.ShareHost); err != nil {
+			return err
+		}
+		if in.Connection != nil {
+			if in.Connection.MihomoCompatibility && in.Preset != "reality" && in.Preset != "xhttp-reality" {
+				return i18n.New("Mihomo兼容模式仅用于REALITY", "Mihomo compatibility mode applies to REALITY only")
+			}
+			if in.Connection.UsePanelCertificate && in.Preset != "hy2" && in.Preset != "xhttp-tls" {
+				return i18n.New("REALITY不使用面板TLS证书", "REALITY does not use the panel TLS certificate")
+			}
+			for _, value := range []string{in.Connection.CertificateFile, in.Connection.KeyFile, in.Connection.Target, in.Connection.ServerName, in.Connection.Path, in.Connection.Mode} {
+				if len(value) > 4096 || strings.ContainsAny(value, "\x00\r\n") {
+					return i18n.New("连接参数过长或包含控制字符", "Connection parameters too long or contain control characters")
+				}
+			}
+		}
+		if err := config.ValidateSniffing(config.Sniffing{IPsExcluded: in.Sniffing.IPsExcluded, DomainsExcluded: in.Sniffing.DomainsExcluded}); err != nil {
+			return err
+		}
+		transport := "tcp"
+		if in.Preset == "hy2" {
+			transport = "udp"
+		}
+		port := fmt.Sprintf("%s:%d", transport, in.Port)
+		if ports[port] {
+			return i18n.New("草稿监听端口重复", "Duplicate listen port in draft")
+		}
+		ports[port] = true
+		ids[in.ID] = true
+	}
+	clientIDs := map[string]bool{}
+	for _, client := range draft.Clients {
+		if !draftID.MatchString(client.ID) || clientIDs[client.ID] || !ids[client.InboundID] || strings.TrimSpace(client.Name) == "" || len([]rune(client.Name)) > 64 || names[client.Name] {
+			return i18n.New("客户端标识、名称或关联入站无效", "Invalid client ID, name or linked inbound")
+		}
+		if math.IsNaN(client.QuotaGB) || math.IsInf(client.QuotaGB, 0) || client.QuotaGB < 0 || client.QuotaGB > 1_000_000 || (client.QuotaGB > 0 && client.QuotaGB*1e9 < 1) || client.UsedGB != 0 || client.IPLimit != 0 {
+			return i18n.New("流量草稿无效，或设置了尚未实现的IP限制/用量", "Invalid traffic draft, or an unsupported IP limit/usage was set")
+		}
+		if client.ExpiresAt != nil && (*client.ExpiresAt < 0 || *client.ExpiresAt > 8640000000000000) {
+			return i18n.New("客户端到期时间无效", "Invalid client expiry time")
+		}
+		clientIDs[client.ID] = true
+		names[client.Name] = true
+	}
+	if len(previous) > 0 && string(previous) != "null" {
+		if json.Unmarshal(previous, &old) != nil {
+			return i18n.New("已有草稿损坏，拒绝覆盖", "Existing draft is corrupted; refusing to overwrite")
+		}
+		removed := 0
+		for _, in := range old.Inbounds {
+			if !ids[in.ID] {
+				removed++
+				for _, client := range old.Clients {
+					if client.InboundID == in.ID {
+						return i18n.New("请先逐个删除关联客户端，再删除入站", "Delete the linked clients one by one before deleting the inbound")
+					}
+				}
+			}
+		}
+		for _, client := range old.Clients {
+			if !clientIDs[client.ID] {
+				removed++
+			}
+		}
+		if removed > 1 {
+			return i18n.New("不支持批量删除，请逐项处理", "Bulk deletion is not supported; handle items one by one")
+		}
+	}
+	return nil
+}

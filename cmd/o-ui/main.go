@@ -1,0 +1,193 @@
+package main
+
+import (
+	"bufio"
+	"context"
+	"flag"
+	"fmt"
+	"io"
+	"log"
+	"net"
+	"net/http"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"time"
+
+	"independent-panel/internal/core"
+	"independent-panel/internal/engine"
+	"independent-panel/internal/i18n"
+	"independent-panel/internal/localapi"
+	"independent-panel/internal/store"
+)
+
+func main() {
+	if code, handled := engine.Supervisor(); handled {
+		os.Exit(code)
+	}
+	os.Exit(run())
+}
+
+func run() int {
+	// 命令行按LC_ALL/LC_MESSAGES/LANG选择简体中文或英文；内部错误按已登记文案翻译。
+	lang := i18n.EnvLang()
+	say := func(zh, en string) string { return i18n.Pick(lang, zh, en) }
+	text := func(err error) string { return i18n.Translate(err.Error(), lang) }
+	listen := flag.String("listen", "127.0.0.1:5180", say("无已保存访问设置时的本机初始监听，127.0.0.1非特权端口", "Initial local listen address when no access settings are saved (127.0.0.1, unprivileged port)"))
+	data := flag.String("data", ".runtime/core", say("核心数据目录", "Core data directory"))
+	stateDir := flag.String("state", ".runtime/panel", say("o-ui 数据库目录，不导入旧数据", "o-ui database directory (old data is never imported)"))
+	dist := flag.String("dist", "dist", say("前端构建目录", "Frontend build directory"))
+	recoverAccess := flag.Bool("recover-panel-access", false, say("停面板后离线恢复本机HTTP访问，不重置账号或业务，不启动服务", "Offline restore of local HTTP access after stopping the panel; does not reset accounts or data and starts nothing"))
+	confirmation := flag.String("confirm-recovery", "", say("离线恢复须精确填写：恢复面板本机访问", "Offline recovery requires exactly: 恢复面板本机访问"))
+	initAdmin := flag.Bool("init-panel-admin", false, say("安装器离线设置管理员（密码从标准输入读一行），面板须已停止，不启动服务", "Installer: set the administrator offline (password read as one line from stdin); the panel must be stopped; starts nothing"))
+	username := flag.String("username", "", say("与-init-panel-admin一起使用的管理员用户名", "Administrator username for -init-panel-admin"))
+	enableHTTPS := flag.Bool("enable-panel-https", false, say("安装器离线写入面板HTTPS证书与固定访问来源，面板须已停止，下次启动生效", "Installer: write the panel HTTPS certificate and fixed origin offline; the panel must be stopped; applies on next start"))
+	panelCert := flag.String("panel-cert", "", say("面板证书（含链）PEM的绝对路径", "Absolute path of the panel certificate PEM (with chain)"))
+	panelKey := flag.String("panel-key", "", say("面板私钥PEM的绝对路径", "Absolute path of the panel private key PEM"))
+	panelListen := flag.String("panel-listen", "", say("HTTPS直接监听，如0.0.0.0:23456", "HTTPS listen address, e.g. 0.0.0.0:23456"))
+	panelOrigin := flag.String("panel-origin", "", say("固定HTTPS访问来源，如https://panel.example.com:23456", "Fixed HTTPS origin, e.g. https://panel.example.com:23456"))
+	confirmHTTPS := flag.String("confirm-https", "", say("须精确填写：确认启用HTTPS非本机访问", "Requires exactly: 确认启用HTTPS非本机访问"))
+	flag.Parse()
+	host, port, err := net.SplitHostPort(*listen)
+	if err != nil || host != "127.0.0.1" {
+		log.Fatal(say("初始监听必须绑定127.0.0.1；非本机HTTPS须初始化后在面板设置中显式启用", "Initial listen must bind 127.0.0.1; remote HTTPS must be enabled in Panel settings after setup"))
+	}
+	portNumber, err := net.LookupPort("tcp", port)
+	if err != nil || portNumber < 1024 {
+		log.Fatal(say("仅允许非特权端口", "Only unprivileged ports are allowed"))
+	}
+	explicitState := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "state" {
+			explicitState = true
+		}
+	})
+	if (*recoverAccess && *initAdmin) || (*recoverAccess && *enableHTTPS) || (*initAdmin && *enableHTTPS) {
+		log.Print(say("离线命令一次只能执行一个", "Run one offline command at a time"))
+		return 1
+	}
+	if *initAdmin || *enableHTTPS {
+		if !explicitState {
+			log.Print(say("离线设置必须用-state明确指定状态目录的绝对路径", "Offline setup requires -state with the absolute path of the state directory"))
+			return 1
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if *initAdmin {
+			// 密码只从标准输入读取，避免出现在进程参数中。
+			line, err := bufio.NewReader(io.LimitReader(os.Stdin, 128)).ReadString('\n')
+			if err == nil || err == io.EOF {
+				err = localapi.InitPanelAdmin(ctx, *stateDir, *username, strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r"))
+			}
+			if err != nil {
+				log.Print(text(err))
+				return 1
+			}
+			fmt.Println(say("管理员已离线设置；尚未启动服务。", "Administrator set offline; nothing was started."))
+			return 0
+		}
+		if err := localapi.EnablePanelHTTPS(ctx, *stateDir, *panelCert, *panelKey, *panelListen, *panelOrigin, *confirmHTTPS); err != nil {
+			log.Print(text(err))
+			return 1
+		}
+		fmt.Printf(say("已写入面板HTTPS设置：%s/；下次启动生效，尚未启动服务。\n", "Panel HTTPS settings saved: %s/; applies on next start, nothing was started.\n"), *panelOrigin)
+		return 0
+	}
+	if *username != "" || *panelCert != "" || *panelKey != "" || *panelListen != "" || *panelOrigin != "" || *confirmHTTPS != "" {
+		log.Print(say("这些参数只与对应的离线设置命令一起使用，不启动服务", "These options are only used with their offline setup command and start nothing"))
+		return 1
+	}
+	if *recoverAccess {
+		if !explicitState {
+			log.Print(say("离线恢复必须用-state明确指定现有状态目录的绝对路径", "Offline recovery requires -state with the absolute path of an existing state directory"))
+			return 1
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		backup, err := localapi.RecoverPanelAccess(ctx, *stateDir, *listen, *confirmation)
+		if backup != "" {
+			fmt.Printf(say("原访问/证书路径设置备份：%s\n", "Backup of the previous access/certificate path settings: %s\n"), backup)
+		}
+		if err != nil {
+			log.Print(text(err))
+			return 1
+		}
+		fmt.Printf(say("已恢复本机HTTP访问设置：http://%s/；面板HTTPS已停用，账号/业务/节点/核心未重置。尚未启动服务，请手动正常启动后登录。\n", "Local HTTP access restored: http://%s/; panel HTTPS is disabled and accounts/data/nodes/cores are unchanged. Nothing was started; start the panel normally and sign in.\n"), *listen)
+		return 0
+	}
+	if *confirmation != "" {
+		log.Print(say("confirm-recovery仅与recover-panel-access一起使用，不启动服务", "confirm-recovery is only used with recover-panel-access and starts nothing"))
+		return 1
+	}
+	root, err := filepath.Abs(*data)
+	if err != nil {
+		log.Fatal(err)
+	}
+	manager, err := core.NewManager(root)
+	if err != nil {
+		log.Fatal(text(err))
+	}
+	defer manager.Close()
+	state, err := store.Open(*stateDir)
+	if err != nil {
+		log.Fatal(text(err))
+	}
+	defer state.Close()
+	panelTLS, err := localapi.LoadPanelTLS(context.Background(), state)
+	if err != nil {
+		log.Fatal(text(err))
+	}
+	access, err := localapi.LoadPanelAccess(context.Background(), state, *listen, panelTLS)
+	if err != nil {
+		log.Print(text(err))
+		return 1
+	}
+	runtime, err := localapi.NewRuntime(manager, state, filepath.Join(*stateDir, "runtime"), panelTLS)
+	if err != nil {
+		log.Fatal(text(err))
+	}
+	defer runtime.Close()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	go func() {
+		if started, err := runtime.ResumeOnStart(ctx); err != nil {
+			log.Print(say("自动恢复上次应用失败，核心保持停止：", "Auto-resume of the last applied configuration failed; the core stays stopped: "), text(err))
+		} else if started {
+			fmt.Println(say("已按上次退出时运行的已应用配置自动恢复核心", "Core auto-resumed with the configuration that was running at last exit"))
+		}
+	}()
+	server := &http.Server{Addr: access.Data.Listen,
+		Handler:           localapi.PanelHandler(manager, state, *dist, access, runtime),
+		BaseContext:       func(net.Listener) context.Context { return ctx },
+		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 4 * time.Minute, IdleTimeout: time.Minute}
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		<-ctx.Done()
+		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = server.Shutdown(shutdown)
+	}()
+	scheme := "http"
+	if panelTLS != nil {
+		scheme = "https"
+		server.TLSConfig = panelTLS.Config()
+	}
+	if access.Data.Public {
+		fmt.Printf(say("o-ui HTTPS：%s（已显式允许非本机访问；请自行保护网络和订阅链接）\n", "o-ui HTTPS: %s (remote access explicitly allowed; protect your network and subscription links)\n"), access.Data.Origin)
+	} else {
+		fmt.Printf(say("o-ui 本机面板：%s://%s（首次使用请设置管理员；当前仅限本机）\n", "o-ui local panel: %s://%s (set up the administrator on first use; local access only)\n"), scheme, access.Data.Listen)
+	}
+	serve := server.ListenAndServe
+	if panelTLS != nil {
+		serve = func() error { return server.ListenAndServeTLS("", "") }
+	}
+	if err := serve(); err != nil && err != http.ErrServerClosed {
+		log.Print(err)
+		return 1
+	}
+	<-stopped
+	return 0
+}

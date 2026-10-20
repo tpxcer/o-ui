@@ -1,0 +1,352 @@
+import { addClient, chineseDate, clientStatus, createQuick, defaultConnection, defaultSniffing, deleteInbound, editClient,
+  editInbound, escapeHtml as esc, inboundName, presets, randomName, seedWorkspace } from './workspace.ts';
+import type { Client, ClientInput, Connection, Inbound, Preset, Workspace } from './workspace.ts';
+import { api, APIError, jsonBody } from './api.ts';
+import { initCalendar } from './calendar.ts';
+import { initConnections } from './connections.ts';
+import { formatTrafficGB, trafficStatus, usedBytes } from './traffic.ts';
+import type { TrafficSnapshot } from './traffic.ts';
+import { newRealityConnection, nextRealityTarget, realityServerName, realityTargets, readSniffing, sniffingLabels } from './inbound-options.ts';
+import type { PanelTLSStatus } from './panel-settings.ts';
+import { readProxyEndpoint } from './proxy-endpoint.ts';
+import type { RuntimeStatus } from './runtime.ts';
+import { workspaceStatusText } from './workspace-status.ts';
+import { regionLabel, type PublicInfo } from './server-plan-model.ts';
+import './management.css';
+import { t } from './i18n.ts';
+
+const icon = (name: string) => `<i data-lucide="${name}" aria-hidden="true"></i>`;
+const input = (label: string, name: string, value: string | number, attrs = '', hint = '') => `<label class="form-field">${label}<input name="${name}" value="${esc(String(value))}" ${attrs}>${hint ? `<small class="form-hint">${hint}</small>` : ''}</label>`;
+const check = (label: string, name: string, checked: boolean) => `<label class="check-field"><input type="checkbox" name="${name}"${checked ? ' checked' : ''}><span>${label}</span></label>`;
+const badge = (text: string, ok: boolean) => `<span class="status-badge ${ok ? 'is-good' : 'is-muted'}"><b></b>${esc(text)}</span>`;
+
+export function initManagement(root: HTMLElement, refreshIcons: () => void, navigate: (page: string) => void, showDetail: (title: string, text: string) => void, persistent = false, onApply: () => void = () => {}): { render: (page: 'inbounds' | 'clients') => void; setRuntime: (status: RuntimeStatus | null, at: number) => void } {
+  let state: Workspace = persistent ? { inbounds: [], clients: [] } : seedWorkspace();
+  let revision = 0, loaded = !persistent, loading = false, loadError = '', submitting = false, pendingNotice = '', reloadRequired = false;
+  let page: 'inbounds' | 'clients' = 'inbounds';
+  let search = '', filter = 'all', inboundFilter = '';
+  let traffic: TrafficSnapshot | null = null, trafficError = '', trafficLoading = false;
+  let runtime: RuntimeStatus | null = null, runtimeAt = 0;
+  let region = t('未知地区', 'Unknown region');
+  const viewClient = (client: Client): Client => persistent ? { ...client, usedGB: Number(usedBytes(traffic, client.id) ?? 0n) / 1e9 } : client;
+  let returnFocus: HTMLElement | null = null;
+  const showConnection = persistent ? initConnections(refreshIcons) : null;
+  const modal = document.createElement('dialog');
+  modal.className = 'edit-dialog'; modal.id = 'edit-dialog'; modal.setAttribute('aria-labelledby', 'edit-title');
+  document.body.append(modal);
+  const notice = document.createElement('div');
+  notice.className = 'save-notice'; notice.setAttribute('role', 'status');
+  document.body.append(notice);
+  let noticeTimer: ReturnType<typeof setTimeout>;
+  function announce(text: string): void {
+    if (submitting) { pendingNotice = text; return; }
+    if (persistent) text = t('草稿已保存到独立数据库 · 未应用 Xray', 'Draft saved to the database · Xray not applied');
+    notice.textContent = text; clearTimeout(noticeTimer);
+    noticeTimer = setTimeout(() => { notice.textContent = ''; }, 5000);
+  }
+  function openModal(title: string, body: string, submitLabel: string, submit: (form: HTMLFormElement) => void): HTMLFormElement {
+    returnFocus = document.activeElement as HTMLElement;
+    modal.innerHTML = `<form novalidate><header class="dialog-heading"><h2 id="edit-title">${esc(title)}</h2><button type="button" class="icon-button" data-close aria-label="${t('关闭弹窗', 'Close dialog')}">${icon('x')}</button></header>
+      <div class="edit-body">${body}<p id="edit-error" class="form-error" role="alert" tabindex="-1" hidden></p></div>
+      <footer><button type="button" class="secondary-button" data-close>${t('取消', 'Cancel')}</button>${persistent ? t('<button type="button" class="secondary-button" data-reload>重新读取草稿…</button>', '<button type="button" class="secondary-button" data-reload>Reload draft…</button>') : ''}<button class="primary-button" type="submit">${esc(submitLabel)}</button></footer></form>`;
+    const form = modal.querySelector('form')!;
+    modal.querySelectorAll('[data-close]').forEach(button => button.addEventListener('click', () => { if (!submitting && !loading) modal.close(); }));
+    modal.querySelector('[data-reload]')?.addEventListener('click', () => { void load(true); });
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      if (submitting || loading || !loaded || reloadRequired) return;
+      const error = modal.querySelector<HTMLElement>('.form-error')!;
+      error.hidden = true;
+      form.querySelectorAll('[aria-invalid]').forEach(element => { element.removeAttribute('aria-invalid'); element.removeAttribute('aria-describedby'); });
+      const invalid = [...form.elements].find(element => element instanceof HTMLInputElement && !element.validity.valid) as HTMLInputElement | undefined;
+      if (invalid) {
+        const label = invalid.closest('label')?.childNodes[0]?.textContent?.trim() ?? t('此项', 'This field');
+        error.textContent = `${label}${t('输入有误，请按字段要求填写', ': invalid input; check the field requirements')}${invalid.min ? `${t('（最小', ' (min')} ${invalid.min}${invalid.max ? `${t('，最大', ', max')} ${invalid.max}` : ''}${t('）', ')')}` : ''}${t('。', '. ')}`;
+        error.hidden = false; invalid.setAttribute('aria-invalid', 'true'); invalid.setAttribute('aria-describedby', 'edit-error'); invalid.focus(); return;
+      }
+      const previous = structuredClone(state);
+      const controls = [...form.querySelectorAll<HTMLInputElement | HTMLButtonElement | HTMLSelectElement | HTMLTextAreaElement>('input,button,select,textarea')];
+      const disabled = controls.map(control => control.disabled);
+      submitting = true; pendingNotice = ''; updateApplicationStatus(); let writing = false;
+      try {
+        submit(form);
+        controls.forEach(control => { control.disabled = true; });
+        form.querySelector<HTMLButtonElement>('[type="submit"]')!.textContent = persistent ? t('正在保存草稿…', 'Saving draft…') : t('正在处理…', 'Working…');
+        if (persistent) {
+          writing = true;
+          const document = await api<{ revision: number; data: Workspace }>('workspace', jsonBody('PUT', { revision, data: state }));
+          revision = document.revision; state = document.data;
+        }
+        submitting = false; modal.close(); renderList(); announce(pendingNotice || t('演示数据已更改', 'Demo data changed'));
+      }
+      catch (reason) {
+        state = previous; submitting = false; pendingNotice = ''; if (writing && (!(reason instanceof APIError) || reason.status === 409 || reason.status >= 500)) reloadRequired = true;
+        controls.forEach((control, index) => { control.disabled = disabled[index]; });
+        form.querySelector<HTMLButtonElement>('[type="submit"]')!.disabled = reloadRequired;
+        form.querySelector<HTMLButtonElement>('[type="submit"]')!.textContent = submitLabel;
+        error.textContent = (reason instanceof Error ? reason.message : t('未保存，请检查输入后重试。', 'Not saved; check the input and retry.')) + (reloadRequired ? t(' 上次保存失败或结果未确认，输入已保留。请先复制需要保留的修改，再重新读取草稿；不会自动合并或覆盖其它页面的数据。', ' The last save failed or was not confirmed; your input is kept. Copy any changes you need, then reload the draft. Data from other pages is never merged or overwritten automatically.') : ''); error.hidden = false; error.focus();
+        updateApplicationStatus();
+      }
+    });
+    refreshIcons(); modal.showModal(); updateApplicationStatus();
+    return form;
+  }
+  modal.addEventListener('cancel', event => { if (submitting || loading) event.preventDefault(); });
+  modal.addEventListener('close', () => {
+    if (reloadRequired) renderList();
+    updateApplicationStatus();
+    if (returnFocus?.isConnected && returnFocus.getClientRects().length) returnFocus.focus();
+    else root.querySelector<HTMLElement>('.page-title')?.focus();
+  });
+  const clientFields = (client: ClientInput) => `<div class="form-grid">${input(t('客户端名称', 'Client name'), 'name', client.name, 'required maxlength="64" autocomplete="off"')}
+    ${input(t('流量上限（GB）', 'Traffic quota (GB)'), 'quotaGB', client.quotaGB, 'type="number" min="0" max="1000000" step="any" required', persistent ? t('0 表示不限；非零最小1字节。保存不生效，应用后按累计双向流量执行，需开启统计。', '0 means unlimited; non-zero is at least 1 byte. Takes effect after applying, using total two-way traffic; statistics must be on.') : t('0 表示不限；用量为演示数值。', '0 means unlimited; usage is demo data.'))}
+    ${input(t('IP 上限', 'IP limit'), 'ipLimit', client.ipLimit, `type="number" min="0" max="10000" step="1" required ${persistent ? 'disabled' : ''}`, t('0 表示不限；不是设备数，尚未执行限制。', '0 means unlimited; not a device count, and not enforced yet.'))}</div>
+    <div class="form-field expiry-field"><span id="expiry-label">${t('到期时间', 'Expiry')}</span><div id="expiry-picker" role="group" aria-labelledby="expiry-label"></div></div>
+    ${check(persistent ? t('允许订阅（保存后在客户端连接信息中单独生成链接）', 'Allow subscription (generate the link in connection info after saving)') : t('开启订阅（仅保存演示选项，不生成订阅地址）', 'Enable subscription (demo option only; no link is generated)'), 'subscription', client.subscription)}`;
+  const readClient = (form: HTMLFormElement, expiresAt: number | null): ClientInput => {
+    const data = new FormData(form);
+    return { name: String(data.get('name') ?? ''), quotaGB: Number(data.get('quotaGB')), ipLimit: Number(data.get('ipLimit')), subscription: data.has('subscription'), expiresAt };
+  };
+  const refreshField = (label: string, name: string, value: string, action: string, title: string, attrs = '') => `<div class="form-field"><label for="connection-${name}">${label}</label><div class="input-action"><input id="connection-${name}" name="${name}" value="${esc(value)}" maxlength="4096" autocomplete="off" ${attrs}><button type="button" class="icon-button" data-connection="${action}" title="${title}" aria-label="${title}">${icon('refresh-cw')}</button></div></div>`;
+  const endpointFields = (inbound?: Inbound) => `<fieldset class="sniffing-field"><legend>${t('代理监听与分享地址', 'Proxy listen and share address')}</legend>${input(t('代理监听 IP', 'Proxy listen IP'), 'listen', inbound?.listen || '127.0.0.1', 'required maxlength="45" list="proxy-listens" autocomplete="off"', t('默认仅本机。0.0.0.0 为所有 IPv4，:: 为所有 IPv6（是否同时接收 IPv4 由系统决定）；非回环应用时需额外确认。仅代理入站，不改变管理面板。', 'Local only by default. 0.0.0.0 means all IPv4 and :: all IPv6 (whether it also accepts IPv4 depends on the system); applying a non-loopback address needs extra confirmation. Affects proxy inbounds only, not the panel.'))}<datalist id="proxy-listens"><option value="127.0.0.1"></option><option value="::1"></option><option value="0.0.0.0"></option><option value="::"></option></datalist>${input(t('分享主机（域名或 IP）', 'Share host (domain or IP)'), 'shareHost', inbound?.shareHost || '', 'maxlength="253" autocomplete="off"', t('非回环时必填；不含协议、端口、路径或 IPv6 方括号。仅写入节点链接，不修改 DNS，不探测公网 IP。留空时仅回环入站使用监听 IP。SNI 在下方单独填写。', 'Required for non-loopback listeners; no scheme, port, path or IPv6 brackets. Only written into node links; DNS is not changed and the public IP is not probed. When empty, only loopback inbounds use the listen IP. SNI is set separately below.'))}<p class="form-hint">${t('保存仅修改草稿，不开放端口、不改防火墙；端口仍限 1024–65535。外部可达性和域名解析需另行部署验证，订阅访问范围单独在面板设置中配置。', 'Saving only changes the draft; no ports are opened and the firewall is unchanged. Ports are limited to 1024–65535. External reachability and DNS must be verified after deployment; subscription access is set in Panel settings.')}</p></fieldset>`;
+  const connectionFields = (preset: Preset, connection: Connection = preset === 'hy2' || preset === 'xhttp-tls' ? { ...defaultConnection(), usePanelCertificate: true } : newRealityConnection()) => `<fieldset class="sniffing-field"><legend>${t('连接参数', 'Connection parameters')}</legend><p class="form-hint">${t('UUID／认证值由服务端首次预检生成并保存。REALITY 必须使用公私钥：私钥保留服务端，客户端公钥随连接信息自动提供，无需手填；刷新目标不会更换密钥。', 'The UUID/auth value is generated and saved at the first server preflight. REALITY uses a key pair: the private key stays on the server and the public key is included in the connection info automatically. Changing the target does not change the keys.')}</p>
+    ${preset === 'hy2' || preset === 'xhttp-tls' ? check(t('自动复用已生效的面板 HTTPS 证书', 'Reuse the active panel HTTPS certificate'), 'usePanelCertificate', !!connection.usePanelCertificate) + t('<p class="form-hint" data-panel-cert-status role="status">正在读取面板证书状态…</p>', '<p class="form-hint" data-panel-cert-status role="status">Reading panel certificate status…</p>') + `<div data-manual-cert ${connection.usePanelCertificate ? 'hidden' : ''}>` + input(t('证书绝对路径', 'Certificate absolute path'), 'certificateFile', connection.certificateFile, 'maxlength="4096" autocomplete="off"', t('读取本机PEM证书，不上传到远端。', 'Reads a local PEM certificate; nothing is uploaded.')) + input(t('私钥绝对路径', 'Private key absolute path'), 'keyFile', connection.keyFile, 'maxlength="4096" autocomplete="off"') + '</div>' + input(t('TLS 服务域名（SNI）', 'TLS server name (SNI)'), 'serverName', connection.serverName, 'maxlength="253" autocomplete="off"', t('复用时自动填写证书首个域名，可手动修改但必须匹配证书。', 'When reusing, the first certificate domain is filled in; you can change it, but it must match the certificate.')) : refreshField(t('REALITY 目标', 'REALITY target'), 'target', connection.target, 'target', t('换一个预设目标并同步 SNI', 'Pick another preset target and sync SNI'), t('placeholder="域名:443" list="reality-targets"', 'placeholder="domain:443" list="reality-targets"')) + `<datalist id="reality-targets">${realityTargets.map(host => `<option value="${host}:443"></option>`).join('')}</datalist>` + refreshField(t('REALITY 服务域名（SNI）', 'REALITY server name (SNI)'), 'serverName', connection.serverName, 'sni', t('从目标地址填入 SNI', 'Fill SNI from the target')) + t('<p class="form-hint">AMD、Microsoft、Apple、Amazon、特斯拉仅为常用填写候选，可手动修改；未探测外站，不保证在每台服务器可用。</p><p class="form-hint" data-connection-notice role="status"></p>', '<p class="form-hint">AMD, Microsoft, Apple, Amazon and Tesla are only common suggestions and can be changed; external sites are not probed and may not work from every server.</p><p class="form-hint" data-connection-notice role="status"></p>')}
+    ${preset === 'reality' || preset === 'xhttp-reality' ? check(t('Mihomo 兼容模式（降低最低客户端版本）', 'Mihomo compatibility (lower minimum client version)'), 'mihomoCompatibility', !!connection.mihomoCompatibility) + t('<p class="form-hint" id="mihomo-compatibility-hint">默认关闭，保留官方客户端限制。开启后最低版本设为 1.8.2；Xray 官方警告此举可能增加被识别、封锁的风险。只保存草稿，应用后才生效。</p>', '<p class="form-hint" id="mihomo-compatibility-hint">Off by default, keeping the official client limit. When on, the minimum version is 1.8.2; Xray warns this may increase the risk of detection and blocking. Saved as a draft; takes effect after applying.</p>') : ''}
+    ${preset.startsWith('xhttp-') ? input(t('XHTTP 路径', 'XHTTP path'), 'path', connection.path, 'maxlength="4096" autocomplete="off"') + `<label class="form-field">${t('XHTTP 模式', 'XHTTP mode')}<select name="mode">${['auto', 'packet-up', 'stream-up', 'stream-one'].map(mode => `<option ${connection.mode === mode ? 'selected' : ''}>${mode}</option>`).join('')}</select></label>` : ''}</fieldset>`;
+  const sniffingFields = (s = defaultSniffing()) => `<fieldset class="sniffing-field"><legend>${t('嗅探设置', 'Sniffing')}</legend><div class="sniffing-options">${sniffingLabels.map(([key, label]) => check(label, `sniff-${key}`, s[key])).join('')}</div><p class="form-hint">${t('HTTP / TLS / QUIC 从连接内容识别域名；仅路由只用于路由匹配，不替换实际目标。仅元数据不读取内容，普通 HTTP / TLS / QUIC 域名嗅探通常不生效。FakeDNS 需另配对应 DNS，勾选不会自动建立 FakeDNS。', 'HTTP / TLS / QUIC detect domains from connection content; Route only uses them for routing without replacing the destination. Metadata only reads no content, so normal HTTP / TLS / QUIC domain sniffing usually has no effect. FakeDNS needs a matching DNS setup; checking it does not create one.')}</p><label class="form-field" for="sniff-ips">${t('排除的 IP', 'Excluded IPs')}<textarea id="sniff-ips" name="sniff-ips" rows="2" placeholder="192.0.2.1&#10;2001:db8::/32">${esc((s.ipsExcluded ?? []).join('\n'))}</textarea><small class="form-hint">${t('每行一项，支持 IP / CIDR，最多64项；暂不支持外部 Geo 文件。', 'One per line, IP / CIDR, up to 64; external Geo files are not supported.')}</small></label><label class="form-field" for="sniff-domains">${t('排除的域名', 'Excluded domains')}<textarea id="sniff-domains" name="sniff-domains" rows="2" placeholder="domain:example.com&#10;full:example.org">${esc((s.domainsExcluded ?? []).join('\n'))}</textarea><small class="form-hint">${t('每行一项，支持域名、domain:域名、full:域名；跳过嗅探目标改写，不等于阻断访问。关闭嗅探会保留各项选择。', 'One per line: domain, domain:domain or full:domain. Skips destination override but does not block access. Turning sniffing off keeps these choices.')}</small></label></fieldset>`;
+  function wireConnection(form: HTMLFormElement): void {
+    form.querySelector('[name="mihomoCompatibility"]')?.setAttribute('aria-describedby', 'mihomo-compatibility-hint');
+    form.addEventListener('click', event => {
+      const button = (event.target as Element).closest<HTMLButtonElement>('[data-connection]');
+      if (!button) return;
+      const target = form.elements.namedItem('target') as HTMLInputElement | null;
+      const name = form.elements.namedItem('serverName') as HTMLInputElement | null;
+      if (!target || !name) return;
+      let filled = false;
+      if (button.dataset.connection === 'target') { const next = nextRealityTarget(target.value); target.value = next.target; name.value = next.serverName; filled = true; }
+      else { const next = realityServerName(target.value); if (next) { name.value = next; filled = true; } }
+      const notice = form.querySelector('[data-connection-notice]');
+      if (notice) notice.textContent = filled ? t('已填入目标对应的 SNI；未联网检测可用性。', 'Filled in the SNI for the target; availability was not checked online.') : t('请先填写域名:端口格式的目标，IP目标需手动指定证书域名；原 SNI 未改动。', 'Enter the target as domain:port first; for an IP target set the certificate domain manually. The SNI was not changed.');
+    });
+    form.addEventListener('change', event => {
+      const item = event.target as HTMLInputElement;
+      if (item.name === 'target') {
+        const name = form.elements.namedItem('serverName') as HTMLInputElement | null;
+        const host = realityServerName(item.value);
+        if (name && host) name.value = host;
+      }
+      if (item.name === 'usePanelCertificate') { const manual = form.querySelector<HTMLElement>('[data-manual-cert]'); if (manual) manual.hidden = item.checked; void updatePanelCertificate(form); }
+    });
+    void updatePanelCertificate(form);
+  }
+  async function updatePanelCertificate(form: HTMLFormElement): Promise<void> {
+    const label = form.querySelector<HTMLElement>('[data-panel-cert-status]'); if (!label) return;
+    try {
+      const status = await api<PanelTLSStatus>('panel/tls');
+      if (!label.isConnected) return;
+      label.textContent = status.active ? `${t('已生效证书：', 'Active certificate: ')}${status.serverNames.join(t('、', ', ')) || t('无可用域名', 'no usable names')}${t('。只在服务端复用，不返回私钥。', '. Reused on the server only; the private key is never returned.')}` : t('面板尚无已生效证书。请在“面板设置”配置并重启新面板，或取消复用后手填路径；当前可保存草稿，不能应用。', 'The panel has no active certificate. Configure one in “Panel settings” and restart the panel, or stop reusing it and enter paths manually; you can save the draft but not apply it.');
+      if (status.active && !status.serverNames.some(value => !value.includes('*'))) label.textContent += t(' 证书只有通配域名，请手动填写匹配的具体服务域名。', ' The certificate has only wildcard names; enter a matching specific server name.');
+      const usePanel = form.elements.namedItem('usePanelCertificate') as HTMLInputElement | null;
+      const name = form.elements.namedItem('serverName') as HTMLInputElement | null;
+      if (usePanel?.checked && name && !name.value && status.active) name.value = status.serverNames.find(value => !value.includes('*')) ?? '';
+    } catch (reason) { if (label.isConnected) label.textContent = (reason as Error).message; }
+  }
+  const readConnection = (form: HTMLFormElement): Connection => {
+    const data = new FormData(form), connection = defaultConnection();
+    for (const key of ['certificateFile', 'keyFile', 'target', 'serverName', 'path', 'mode'] as const) { if (data.has(key)) connection[key] = String(data.get(key)).trim(); }
+    connection.usePanelCertificate = data.has('usePanelCertificate');
+    connection.mihomoCompatibility = data.has('mihomoCompatibility');
+    return connection;
+  };
+  function suggestedPort(preset: Preset): number {
+    let port: number = persistent ? Math.max(1024, presets[preset].port) : presets[preset].port;
+    while (port < 65535 && state.inbounds.some(item => item.port === port && presets[item.preset].transport === presets[preset].transport)) port++;
+    return port;
+  }
+  function quickCreate(): void {
+    let preset: Preset = 'reality';
+    const demoClient = { name: randomName(), quotaGB: persistent ? 0 : 100, ipLimit: persistent ? 0 : 2, expiresAt: null, subscription: false };
+    let date: { value: () => number | null };
+    const form = openModal(t('一键创建', 'Quick create'), `<p class="form-intro">${persistent ? t('同时保存入站和客户端草稿；保存不会重启。补全连接参数后，可单独预检并应用到本机独立Xray。', 'Saves an inbound and a client draft together; saving does not restart anything. After completing the connection parameters, preflight and apply to o-ui\'s Xray separately.') : t('同时添加一条演示入站和一个客户端，不生成连接凭据，不应用到 Xray。', 'Adds a demo inbound and a client together; no credentials are generated and Xray is not applied.')}</p>
+      <fieldset class="preset-field"><legend>${t('创建类型', 'Type')}</legend><div class="preset-options">${(Object.keys(presets) as Preset[]).map(key => `<label><input type="radio" name="preset" value="${key}"${key === preset ? ' checked' : ''}><span>${presets[key].label}</span></label>`).join('')}</div></fieldset>
+      <div class="name-preview"><small>${t('入站名称预览', 'Inbound name preview')}</small><strong id="inbound-name-preview">${esc(persistent ? `${region}-${presets[preset].label}-${demoClient.name}` : inboundName(preset, demoClient.name))}</strong><small>${persistent ? region === t('未知地区', 'Unknown region') ? t('尚未查询到服务器国家，不用演示国家冒充实际归属地。', 'The server country is not known yet; no demo country is used in its place.') : t('国家来自首页公网信息查询，可在保存后编辑名称。', 'The country comes from the public IP lookup on the dashboard; you can edit the name after saving.') : t('国家固定为演示“美国”，未查询服务器归属地。', 'The country is the demo “United States”; the server location was not looked up.')}</small></div>
+      <div class="port-row">${input(t('监听端口', 'Listen port'), 'port', persistent ? Math.max(1024, suggestedPort(preset)) : suggestedPort(preset), `type="number" required min="${persistent ? 1024 : 1}" max="65535" step="1"`, t('仅检查草稿列表冲突，应用时还需检查系统端口。', 'Only conflicts within drafts are checked; system ports are checked when applying.'))}<button type="button" class="secondary-button" id="random-name">${icon('shuffle')}${t('重新生成名称', 'Regenerate name')}</button></div>
+      ${persistent ? endpointFields() : ''}<div id="connection-fields">${persistent ? connectionFields(preset) : ''}</div>${clientFields(demoClient)}${sniffingFields()}`, persistent ? t('保存入站草稿', 'Save inbound draft') : t('创建演示入站', 'Create demo inbound'), form => {
+      state = createQuick(state, { ...readClient(form, date.value()), preset, port: Number(new FormData(form).get('port')), sniffing: readSniffing(new FormData(form)) }, crypto.randomUUID());
+      if (persistent) { const inbound = state.inbounds.at(-1)!; inbound.name = `${region}-${presets[preset].label}-${state.clients.at(-1)!.name}`; inbound.connection = readConnection(form); Object.assign(inbound, readProxyEndpoint(new FormData(form))); }
+      search = ''; filter = 'all'; inboundFilter = '';
+      announce(t('已添加演示入站和客户端 · 未应用 Xray', 'Demo inbound and client added · Xray not applied'));
+    });
+    date = initCalendar(form.querySelector('#expiry-picker')!, null, refreshIcons);
+    wireConnection(form);
+    const connections: Partial<Record<Preset, Connection>> = {};
+    const nameInput = form.elements.namedItem('name') as HTMLInputElement;
+    const preview = () => { form.querySelector('#inbound-name-preview')!.textContent = persistent ? `${region}-${presets[preset].label}-${nameInput.value}` : inboundName(preset, nameInput.value); };
+    nameInput.addEventListener('input', preview);
+    if (persistent) void api<PublicInfo>('system/public').then(info => { region = regionLabel(info); if (form.isConnected) preview(); }).catch(() => {});
+    form.querySelector('#random-name')!.addEventListener('click', () => { nameInput.value = randomName(); preview(); });
+    form.querySelectorAll<HTMLInputElement>('[name="preset"]').forEach(radio => radio.addEventListener('change', () => {
+      if (persistent) connections[preset] = readConnection(form);
+      preset = radio.value as Preset;
+      if (persistent) { form.querySelector('#connection-fields')!.innerHTML = connectionFields(preset, connections[preset]); refreshIcons(); void updatePanelCertificate(form); }
+      (form.elements.namedItem('port') as HTMLInputElement).value = String(persistent ? Math.max(1024, suggestedPort(preset)) : suggestedPort(preset)); preview();
+    }));
+  }
+  function clientEditor(client?: Client): void {
+    if (!state.inbounds.length) { showDetail(t('先创建入站', 'Create an inbound first'), t('当前没有入站草稿。请先在入站列表使用一键创建，再为该入站添加客户端。', 'There are no inbound drafts. Use Quick create on the inbound list first, then add clients to it.')); return; }
+    const value = client ?? { name: randomName(), quotaGB: persistent ? 0 : 100, ipLimit: persistent ? 0 : 2, expiresAt: null, subscription: false };
+    let date: { value: () => number | null };
+    const form = openModal(client ? t('编辑客户端', 'Edit client') : t('添加客户端', 'Add client'), `<p class="form-intro">${persistent ? t('本次修改只保存独立数据库草稿，需另行应用；已运行策略不随草稿变化。IP限制尚未实现。', 'Changes are saved as a draft only and must be applied separately; the running policy does not change with drafts. IP limits are not implemented yet.') : t('仅修改本页演示数据，流量、到期和 IP 限制尚未由核心执行。', 'Changes only demo data on this page; traffic, expiry and IP limits are not enforced by the core.')}</p>
+      ${client ? `<div class="association">${t('关联入站：', 'Linked inbound: ')}${esc(state.inbounds.find(item => item.id === client.inboundId)!.name)}</div>` : `<label class="form-field">${t('关联入站', 'Linked inbound')}<select name="inboundId">${state.inbounds.map(item => `<option value="${esc(item.id)}"${item.id === inboundFilter ? ' selected' : ''}>${esc(item.name)}</option>`).join('')}</select></label>`}
+      ${clientFields(value)}${client ? check(t('启用客户端', 'Enable client'), 'enabled', client.enabled) : ''}`, persistent ? t('保存客户端草稿', 'Save client draft') : client ? t('保存演示更改', 'Save demo changes') : t('添加演示客户端', 'Add demo client'), form => {
+      const data = new FormData(form), input = readClient(form, date.value());
+      state = client ? editClient(state, client.id, { ...input, enabled: data.has('enabled') }) : addClient(state, String(data.get('inboundId')), input, crypto.randomUUID());
+      if (!client) { search = ''; filter = 'all'; }
+      announce(t('已保存演示客户端 · 未应用 Xray', 'Demo client saved · Xray not applied'));
+    });
+    date = initCalendar(form.querySelector('#expiry-picker')!, value.expiresAt, refreshIcons);
+  }
+  function inboundEditor(inbound: Inbound): void {
+    const form = openModal(t('编辑入站', 'Edit inbound'), `<p class="form-intro">${presets[inbound.preset].label} · ${presets[inbound.preset].protocol} · ${presets[inbound.preset].transport} · ${presets[inbound.preset].security}${t('，', ', ')}${persistent ? t('仅保存草稿，未应用核心', 'draft only, core not applied') : t('仅修改演示数据', 'demo data only')}${t('。', '. ')}</p>
+      ${input(t('入站名称', 'Inbound name'), 'name', inbound.name, 'required maxlength="128"')}${input(t('监听端口', 'Listen port'), 'port', inbound.port, `type="number" min="${persistent ? 1024 : 1}" max="65535" step="1" required`)}
+      ${persistent ? endpointFields(inbound) + connectionFields(inbound.preset, inbound.connection) : ''}
+      ${check(t('启用入站', 'Enable inbound'), 'enabled', inbound.enabled)}
+      ${sniffingFields(inbound.sniffing)}`, persistent ? t('保存入站草稿', 'Save inbound draft') : t('保存演示更改', 'Save demo changes'), form => {
+      const data = new FormData(form);
+      const sniffing = readSniffing(data);
+      state = editInbound(state, inbound.id, { name: String(data.get('name')), port: Number(data.get('port')), enabled: data.has('enabled'), sniffing });
+      if (persistent) Object.assign(state.inbounds.find(item => item.id === inbound.id)!, { connection: readConnection(form), ...readProxyEndpoint(data) });
+      announce(t('已保存演示入站 · 未应用 Xray', 'Demo inbound saved · Xray not applied'));
+    });
+    wireConnection(form);
+  }
+  function confirm(title: string, text: string, label: string, apply: () => void): void {
+    openModal(persistent ? title.replaceAll(t('演示', 'demo'), t('草稿', 'draft')) : title, `<p class="confirm-copy">${esc(persistent ? text.replaceAll(t('演示', 'demo'), t('草稿', 'draft')) : text)}</p><p class="form-hint">${persistent ? t('仅修改独立数据库草稿；不应用核心，不操作VPS。', 'Changes only the database draft; the core is not applied.') : t('仅影响当前内存中的演示数据，刷新恢复。不会操作 VPS。', 'Affects only in-memory demo data; refreshing restores it.')}</p>`, label, () => { apply(); announce(t('演示数据已更改 · 未应用 Xray', 'Demo data changed · Xray not applied')); });
+  }
+  function operate(action: string, id: string): void {
+    const inbound = state.inbounds.find(item => item.id === id), client = state.clients.find(item => item.id === id);
+    if (action === 'connection' && client) showConnection?.(client.id, client.name, revision);
+    if (action === 'edit-inbound' && inbound) inboundEditor(inbound);
+    if (action === 'edit-client' && client) clientEditor(client);
+    if (action === 'clients' && inbound) { inboundFilter = id; search = ''; filter = 'all'; navigate('clients'); }
+    if (action === 'toggle-inbound' && inbound) confirm(inbound.enabled ? t('停用演示入站', 'Disable demo inbound') : t('启用演示入站', 'Enable demo inbound'), `${t('入站：', 'Inbound: ')}${inbound.name}${t('。', '. ')}${inbound.enabled ? `${t('停用后，其', 'After disabling, its')} ${state.clients.filter(item => item.inboundId === id).length} ${t('个关联客户端会显示“入站已停用”。', 'linked clients will show “Inbound disabled”.')}` : t('启用后仍按客户端各自的启用、到期和流量条件显示演示状态。', 'After enabling, each client\'s demo status still follows its own enablement, expiry and traffic.')}`, inbound.enabled ? t('确认停用', 'Confirm disable') : t('确认启用', 'Confirm enable'), () => {
+      state = editInbound(state, id, { ...inbound, enabled: !inbound.enabled });
+    });
+    if (action === 'toggle-client' && client) confirm(client.enabled ? t('停用演示客户端', 'Disable demo client') : t('启用演示客户端', 'Enable demo client'), `${t('客户端：', 'Client: ')}${client.name}${t('。只切换手动启用状态，不会重置用量、到期时间或流量上限。', '. Only the manual enable state changes; usage, expiry and quota are not reset.')}`, client.enabled ? t('确认停用', 'Confirm disable') : t('确认启用', 'Confirm enable'), () => {
+      state = editClient(state, id, { ...client, enabled: !client.enabled });
+    });
+    if (action === 'delete-inbound' && inbound) {
+      if (state.clients.some(item => item.inboundId === id)) { showDetail(t('暂不能删除入站', 'Cannot delete inbound yet'), t('该入站仍有关联客户端。请逐个处理客户端后再删除入站，不会自动删除关联数据。', 'This inbound still has linked clients. Handle them one by one before deleting it; linked data is never deleted automatically.')); return; }
+      confirm(t('删除一个演示入站', 'Delete a demo inbound'), `${t('仅删除“', 'Deletes only “')}${inbound.name}${t('”。', '”.')}`, t('确认删除', 'Confirm delete'), () => { state = deleteInbound(state, id); });
+    }
+    if (action === 'delete-client' && client) confirm(t('删除一个演示客户端', 'Delete a demo client'), `${t('仅删除客户端“', 'Deletes only client “')}${client.name}${t('”，保留其关联入站及其他客户端。', '”; its linked inbound and other clients are kept.')}`, t('确认删除', 'Confirm delete'), () => {
+      state = { ...state, clients: state.clients.filter(item => item.id !== id) };
+    });
+  }
+  const rowActions = (item: Client | Inbound, type: 'inbound' | 'client') => `<div class="row-actions">${type === 'client' && persistent ? `<button class="icon-button" data-op="connection" data-id="${esc(item.id)}" aria-label="${t('连接信息', 'Connection info')} ${esc(item.name)}" title="${t('连接信息', 'Connection info')}" ${loading || reloadRequired ? 'disabled' : ''}>${icon('qr-code')}</button>` : ''}<button class="icon-button" data-op="edit-${type}" data-id="${esc(item.id)}" aria-label="${type === 'inbound' ? t('编辑入站', 'Edit inbound') : t('编辑客户端', 'Edit client')} ${esc(item.name)}" title="${t('编辑', 'Edit')}" ${loading || reloadRequired ? 'disabled' : ''}>${icon('pencil')}</button><button class="icon-button" data-op="toggle-${type}" data-id="${esc(item.id)}" aria-label="${item.enabled ? t('停用', 'Disable') : t('启用', 'Enable')} ${esc(item.name)}" title="${item.enabled ? t('停用', 'Disable') : t('启用', 'Enable')}" ${loading || reloadRequired ? 'disabled' : ''}>${icon('power')}</button><button class="icon-button danger-icon" data-op="delete-${type}" data-id="${esc(item.id)}" aria-label="${type === 'inbound' ? t('删除入站', 'Delete inbound') : t('删除客户端', 'Delete client')} ${esc(item.name)}" title="${t('删除', 'Delete')}" ${loading || reloadRequired ? 'disabled' : ''}>${icon('trash-2')}</button></div>`;
+  function listRows(): void {
+    const query = search.trim().toLocaleLowerCase();
+    const contains = (text: string) => text.toLocaleLowerCase().includes(query);
+    const inboundRows = state.inbounds.filter(item => contains(`${item.name} ${presets[item.preset].label} ${item.port}`) && (filter === 'all' || item.enabled === (filter === 'enabled')));
+    const now = Date.now();
+    const clientRows = state.clients.filter(item => {
+      const inbound = state.inbounds.find(record => record.id === item.inboundId);
+      return contains(`${item.name} ${inbound?.name ?? ''}`) && (!inboundFilter || item.inboundId === inboundFilter) && (filter === 'all' || (filter === 'available' ? clientStatus(viewClient(item), inbound, now) === t('可用', 'Available') : clientStatus(viewClient(item), inbound, now) !== t('可用', 'Available')));
+    });
+    const count = page === 'inbounds' ? inboundRows.length : clientRows.length;
+    root.querySelector('#result-count')!.textContent = `${t('显示', 'Showing')} ${count} / ${page === 'inbounds' ? state.inbounds.length : state.clients.length} ${t('条', '')}`;
+    root.querySelector('#list-content')!.innerHTML = count ? `<table class="data-table"><caption class="sr-only">${page === 'inbounds' ? persistent ? t('入站草稿列表', 'Inbound drafts') : t('入站演示列表', 'Demo inbounds') : persistent ? t('客户端草稿列表', 'Client drafts') : t('客户端演示列表', 'Demo clients')}</caption><thead><tr>${(page === 'inbounds' ? [t('入站名称', 'Inbound name'), t('类型 / 端口', 'Type / port'), t('草稿状态', 'Draft state'), t('客户端', 'Clients'), t('操作', 'Actions')] : [t('客户端 / 入站', 'Client / inbound'), persistent ? t('草稿条件', 'Draft conditions') : t('演示状态', 'Demo status'), t('流量（GB）', 'Traffic (GB)'), t('到期时间', 'Expiry'), t('IP / 订阅', 'IP / subscription'), t('操作', 'Actions')]).map(label => `<th scope="col">${label}</th>`).join('')}</tr></thead><tbody>${page === 'inbounds' ? inboundRows.map(item => `<tr>
+      <td data-label="${t('入站名称', 'Inbound name')}"><strong class="record-name">${esc(item.name)}</strong><small class="table-secondary">${presets[item.preset].protocol} · ${presets[item.preset].security}</small></td>
+      <td data-label="${t('类型 / 端口', 'Type / port')}"><span class="tag">${presets[item.preset].label}</span><small class="table-secondary">${presets[item.preset].transport} / ${item.port}</small></td>
+      <td data-label="${t('草稿状态', 'Draft state')}">${badge(persistent ? item.enabled ? t('草稿启用', 'Draft enabled') : t('草稿已停用', 'Draft disabled') : item.enabled ? t('已启用', 'Enabled') : t('已停用', 'Disabled'), item.enabled)}</td>
+      <td data-label="${t('客户端', 'Clients')}"><button class="text-button" data-op="clients" data-id="${esc(item.id)}">${state.clients.filter(client => client.inboundId === item.id).length} ${t('个客户端', 'clients')}</button></td><td data-label="${t('操作', 'Actions')}">${rowActions(item, 'inbound')}</td></tr>`).join('') : clientRows.map(item => {
+        const inbound = state.inbounds.find(record => record.id === item.inboundId)!;
+        const status = clientStatus(viewClient(item), inbound, now);
+        const bytes = persistent ? usedBytes(traffic, item.id) : null;
+        const percent = item.quotaGB > 0 ? Math.min(100, viewClient(item).usedGB / item.quotaGB * 100) : 0;
+        return `<tr data-client-row="${esc(item.id)}"><td data-label="${t('客户端 / 入站', 'Client / inbound')}"><strong class="record-name">${esc(item.name)}</strong><small class="table-secondary">${esc(inbound.name)}</small></td>
+          <td data-label="${persistent ? t('草稿条件', 'Draft conditions') : t('演示状态', 'Demo status')}" data-client-status>${badge(persistent && status === t('可用', 'Available') ? bytes === null ? t('用量未知 · 草稿启用', 'Usage unknown · draft enabled') : t('符合草稿条件', 'Meets draft conditions') : status, status === t('可用', 'Available'))}</td><td data-label="${t('流量（GB）', 'Traffic (GB)')}" data-client-traffic><span>${persistent ? formatTrafficGB(bytes) : item.usedGB} / ${item.quotaGB || t('不限', 'Unlimited')}</span>${item.quotaGB && (!persistent || bytes !== null) ? `<div class="mini-meter" aria-hidden="true"><span style="width:${percent}%"></span></div>` : ''}</td>
+          <td data-label="${t('到期时间', 'Expiry')}"><span class="date-value">${chineseDate(item.expiresAt)}</span></td><td data-label="${t('IP / 订阅', 'IP / subscription')}">${item.ipLimit ? `${item.ipLimit} ${t('个 IP', 'IPs')}` : t('IP 不限', 'Unlimited IPs')}<small class="table-secondary">${item.subscription ? t('订阅开启', 'Subscription on') : t('订阅关闭', 'Subscription off')}</small></td><td data-label="${t('操作', 'Actions')}">${rowActions(item, 'client')}</td></tr>`;
+      }).join('')}</tbody></table>` : `<div class="empty-state">${icon('search')}<h2>${page === 'inbounds' ? t('没有匹配的入站', 'No matching inbounds') : t('没有匹配的客户端', 'No matching clients')}</h2><p>${t('试试其他关键词或清除筛选。', 'Try other keywords or clear the filters.')}</p><button class="secondary-button" data-clear>${t('清除搜索与筛选', 'Clear search and filters')}</button></div>`;
+    refreshIcons();
+  }
+  function renderList(): void {
+    const available = state.clients.filter(item => clientStatus(viewClient(item), state.inbounds.find(record => record.id === item.inboundId)) === t('可用', 'Available')).length;
+    root.innerHTML = `<header class="page-heading"><div><h1 class="page-title" tabindex="-1">${page === 'inbounds' ? t('入站列表', 'Inbounds') : t('客户端', 'Clients')}</h1><p>${page === 'inbounds' ? t('创建常用入站草稿，管理监听与关联客户端。', 'Create common inbound drafts and manage listeners and linked clients.') : persistent ? t('管理客户端草稿，查看独立核心的累计双向流量。', 'Manage client drafts and view total two-way traffic from o-ui\'s core.') : t('管理客户端演示数据与到期时间。', 'Manage demo client data and expiry.')}</p></div><button class="primary-button create-button" data-create ${!loaded || loading || reloadRequired ? 'disabled' : ''}>${icon('plus')}${page === 'inbounds' ? t('一键创建', 'Quick create') : t('添加客户端', 'Add client')}</button></header>
+      ${loading ? t('<p class="core-message" role="status">正在读取独立数据库…</p>', '<p class="core-message" role="status">Reading the database…</p>') : loadError ? `<p class="form-error" role="alert">${esc(loadError)}</p>` : ''}
+      ${reloadRequired ? t('<p class="form-error" role="alert">保存失败或结果未确认，当前列表可能已过期；请重新读取草稿后再修改，不会自动覆盖最新数据。</p>', '<p class="form-error" role="alert">The save failed or was not confirmed, so this list may be stale. Reload the draft before editing; the latest data is never overwritten automatically.</p>') : ''}${persistent ? `<button class="secondary-button" data-reload ${loading || submitting ? 'disabled' : ''}>${t('重新读取已保存草稿', 'Reload saved draft')}</button>` : ''}
+      <div class="workspace-summary"><span>${t('入站', 'Inbounds')} <strong>${state.inbounds.length}</strong></span><span>${t('客户端', 'Clients')} <strong>${state.clients.length}</strong></span><span>${persistent ? t('符合草稿条件', 'Meets draft conditions') : t('演示可用', 'Demo available')} <strong>${available}</strong></span><small>${t('列表是草稿，不代表当前运行状态', 'The list shows drafts, not the running state')}</small>${persistent ? `<button class="secondary-button" data-apply ${!loaded || loading || submitting || reloadRequired ? 'disabled' : ''}>${t('预检／应用已保存配置', 'Preflight / apply saved configuration')}</button>` : ''}</div>
+      ${persistent ? t('<p class="form-hint" id="workspace-application-status" role="status"></p><p class="form-hint">仅核对已保存入站/客户端修订，不代表设置修订一致、每个客户端已启用或节点链接已连通；启停、到期和额度仍以实际运行策略为准。</p>', '<p class="form-hint" id="workspace-application-status" role="status"></p><p class="form-hint">Checks only the saved inbound/client revision, not the settings revision, per-client enablement or node connectivity; enablement, expiry and quotas follow the running policy.</p>') : ''}
+      ${persistent ? `<p class="form-hint" id="traffic-status">${esc(trafficStatus(traffic, trafficError))}</p><p class="form-hint">${t('约2秒采样，限额可能超额；到期/用尽时重载会短暂中断同核心其他用户。累计不按月自动清零，异常退出尾流可能未记录。草稿条件不等于运行状态。', 'Sampled about every 2 seconds, so quotas can be exceeded slightly; reloading on expiry or exhaustion briefly interrupts other users of the same core. Totals are not reset monthly, and traffic just before an unexpected exit may not be recorded. Draft conditions are not the running state.')}</p>` : ''}
+      <section class="card list-card" aria-label="${page === 'inbounds' ? t('入站管理', 'Inbound management') : t('客户端管理', 'Client management')}"><div class="list-toolbar"><label class="search-box">${icon('search')}<span class="sr-only">${page === 'inbounds' ? t('搜索入站', 'Search inbounds') : t('搜索客户端', 'Search clients')}</span><input type="search" id="workspace-search" value="${esc(search)}" placeholder="${page === 'inbounds' ? t('搜索名称、类型或端口', 'Search name, type or port') : t('搜索客户端或入站名称', 'Search client or inbound name')}" autocomplete="off"></label>
+        <label class="filter-control"><span class="sr-only">${t('筛选状态', 'Filter by status')}</span><select id="status-filter">${(page === 'inbounds' ? [['all', t('全部状态', 'All states')], ['enabled', t('草稿启用', 'Draft enabled')], ['disabled', t('草稿停用', 'Draft disabled')]] : [['all', t('全部状态', 'All states')], ['available', persistent ? t('符合草稿条件', 'Meets draft conditions') : t('演示可用', 'Demo available')], ['unavailable', persistent ? t('不符合草稿条件', 'Does not meet draft conditions') : t('演示不可用', 'Demo unavailable')]]).map(([value, label]) => `<option value="${value}"${value === filter ? ' selected' : ''}>${label}</option>`).join('')}</select></label>
+        ${page === 'clients' ? `<label class="filter-control inbound-filter"><span class="sr-only">${t('筛选关联入站', 'Filter by linked inbound')}</span><select id="inbound-filter"><option value="">${t('全部入站', 'All inbounds')}</option>${state.inbounds.map(item => `<option value="${esc(item.id)}"${item.id === inboundFilter ? ' selected' : ''}>${esc(item.name)}</option>`).join('')}</select></label>` : ''}<span id="result-count" class="result-count" aria-live="polite"></span></div><div id="list-content"></div>
+      <footer class="list-footer">${persistent ? t('草稿保存到独立SQLite。客户端连接信息中可按需显示已应用节点，并单独生成、重置或撤销订阅链接；访问范围单独设置。', 'Drafts are saved to o-ui\'s own SQLite. A client\'s connection info shows applied nodes on demand, and subscription links are generated, reset or revoked separately; access scope is set separately.') : t('所有更改仅保留在本页内存中，刷新即恢复。未生成可用连接或订阅链接。', 'All changes stay in this page\'s memory and are restored on refresh. No usable connections or subscription links are generated.')}</footer></section>`;
+    root.querySelector<HTMLInputElement>('#workspace-search')!.addEventListener('input', event => { search = (event.target as HTMLInputElement).value; listRows(); });
+    root.querySelector<HTMLSelectElement>('#status-filter')!.addEventListener('change', event => { filter = (event.target as HTMLSelectElement).value; listRows(); });
+    root.querySelector<HTMLSelectElement>('#inbound-filter')?.addEventListener('change', event => { inboundFilter = (event.target as HTMLSelectElement).value; listRows(); });
+    listRows();
+    updateApplicationStatus();
+  }
+  function updateApplicationStatus(): void {
+    const label = root.querySelector<HTMLElement>('#workspace-application-status');
+    if (!label) return;
+    const text = loading ? t('正在读取已保存入站和客户端草稿…', 'Reading saved inbound and client drafts…') : !loaded ? t('草稿尚未读取，无法核对应用状态。', 'The draft is not loaded; cannot check the apply status.') : submitting ? t('正在保存草稿，保存不会自动应用核心…', 'Saving the draft; saving does not apply the core…') : reloadRequired ? t('上次保存失败或结果未确认，当前列表可能已过期；请先重新读取草稿，暂不判断此修订已应用。', 'The last save failed or was not confirmed, so this list may be stale; reload the draft first. Whether this revision is applied is not determined.') : `${modal.open ? t('当前弹窗操作尚未提交；下方仅核对已保存草稿。 ', 'The dialog action is not submitted yet; below, only the saved draft is checked. ') : ''}${workspaceStatusText(persistent, revision, runtime, runtimeAt)}`;
+    if (label.textContent !== text) label.textContent = text;
+  }
+  root.addEventListener('click', event => {
+    const button = (event.target as Element).closest<HTMLButtonElement>('button');
+    if (!button) return;
+    if (button.hasAttribute('data-reload')) { void load(true); return; }
+    if (button.hasAttribute('data-apply')) { if (loaded && !loading && !submitting && !reloadRequired) onApply(); return; }
+    if (!loaded || loading || submitting || reloadRequired) return;
+    if (button.hasAttribute('data-create')) { if (page === 'inbounds') quickCreate(); else clientEditor(); }
+    if (button.hasAttribute('data-clear')) { search = ''; filter = 'all'; inboundFilter = ''; renderList(); root.querySelector<HTMLInputElement>('#workspace-search')!.focus(); }
+    if (button.dataset.op) operate(button.dataset.op, button.dataset.id!);
+  });
+  async function load(force = false): Promise<void> {
+    if ((!force && loaded) || loading || submitting) return;
+    if (force && loaded && !window.confirm(t('重新读取将丢弃当前入站或客户端弹窗中未保存的输入，并使用数据库最新列表。请先复制需要保留的内容。只读取，不保存、不应用核心。确认继续？', 'Reloading discards unsaved input in the inbound or client dialog and uses the latest list from the database. Copy anything you need first. It only reads; nothing is saved or applied. Continue?'))) return;
+    const controls = [...modal.querySelectorAll<HTMLInputElement | HTMLButtonElement | HTMLSelectElement | HTMLTextAreaElement>('input,button,select,textarea')];
+    const disabled = controls.map(control => control.disabled); controls.forEach(control => { control.disabled = true; });
+    loading = true; loadError = ''; renderList();
+    try {
+      const document = await api<{ revision: number; data: Workspace | null }>('workspace');
+      state = document.data ?? { inbounds: [], clients: [] }; revision = document.revision; loaded = true; reloadRequired = false;
+      if (inboundFilter && !state.inbounds.some(item => item.id === inboundFilter)) inboundFilter = '';
+      if (force && modal.open) modal.close();
+    } catch (reason) {
+      loadError = (reason as Error).message; if (force) reloadRequired = true;
+      if (modal.open) { const error = modal.querySelector<HTMLElement>('.form-error')!; error.textContent = `${loadError} ${t('原输入仍保留，请重试读取；尚未替换列表。', 'Your input is kept; retry loading. The list was not replaced.')}`; error.hidden = false; error.focus(); }
+    }
+    finally {
+      controls.forEach((control, index) => { control.disabled = disabled[index]; });
+      if (reloadRequired && modal.open) modal.querySelector<HTMLButtonElement>('[type="submit"]')!.disabled = true;
+      loading = false; renderList(); if (force && !modal.open) root.querySelector<HTMLElement>('[data-reload]')?.focus();
+    }
+  }
+  async function refreshTraffic(): Promise<void> {
+    if (trafficLoading || document.hidden || root.hidden) return;
+    trafficLoading = true;
+    try { traffic = await api<TrafficSnapshot>('runtime/traffic'); trafficError = ''; }
+    catch (reason) { trafficError = (reason as Error).message; }
+    finally {
+      trafficLoading = false;
+      const label = root.querySelector('#traffic-status'); if (label) label.textContent = trafficStatus(traffic, trafficError);
+      // 周期更新不替换操作按钮，避免用户的键盘焦点丢失。
+      if (!root.hidden && !root.contains(document.activeElement) && !document.querySelector('dialog[open]')) listRows();
+      else root.querySelectorAll<HTMLElement>('[data-client-row]').forEach(row => {
+        const item = state.clients.find(client => client.id === row.dataset.clientRow); if (!item) return;
+        const bytes = usedBytes(traffic, item.id);
+        row.querySelector('[data-client-traffic]')!.textContent = `${formatTrafficGB(bytes)} / ${item.quotaGB || t('不限', 'Unlimited')}`;
+        const status = clientStatus(viewClient(item), state.inbounds.find(inbound => inbound.id === item.inboundId));
+        row.querySelector('[data-client-status]')!.innerHTML = badge(status === t('可用', 'Available') ? bytes === null ? t('用量未知 · 草稿启用', 'Usage unknown · draft enabled') : t('符合草稿条件', 'Meets draft conditions') : status, status === t('可用', 'Available'));
+      });
+    }
+  }
+  if (persistent) {
+    window.setInterval(() => { void refreshTraffic(); }, 5000);
+    window.setInterval(() => { if (!root.hidden && !document.hidden) updateApplicationStatus(); }, 1000);
+  }
+  return { render(next) { if (page !== next) { search = ''; filter = 'all'; if (next === 'inbounds') inboundFilter = ''; } page = next; renderList(); if (!loaded) void load(); if (persistent) void refreshTraffic(); }, setRuntime(status, at) { runtime = status; runtimeAt = at; updateApplicationStatus(); } };
+}

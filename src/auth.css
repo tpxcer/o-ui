@@ -1,0 +1,12 @@
+.auth-screen { min-height: 100dvh; display: grid; place-items: center; padding: 24px 16px; }
+.auth-card { width: min(100%, 430px); padding: 28px; }
+.auth-heading { margin-bottom: 24px; position: relative; }
+.auth-heading .lang-toggle { position: absolute; top: -10px; right: -10px; }
+.auth-heading > span { color: var(--blue); font-weight: 600; }
+.auth-heading h1 { font-size: 25px; margin: 12px 0 8px; }
+.auth-heading p, .auth-boundary { color: var(--muted); font-size: 13px; }
+.auth-card form { display: grid; gap: 18px; }
+.auth-card .primary-button { width: 100%; min-height: 44px; }
+.auth-boundary { border-top: 1px solid var(--border); padding-top: 20px; margin-top: 24px; }
+.auth-card input:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+@media (max-width: 420px) { .auth-card { padding: 22px; } }
