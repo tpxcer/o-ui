@@ -5,7 +5,7 @@ import { createIcons, Gauge, LogIn, Users, Settings, Wrench, PanelLeftClose,
 import { demo, linePath, percent, resourceColor, samples } from './model.ts';
 import { initManagement } from './management.ts';
 import { initCore } from './core.ts';
-import { initRuntime, runtimeStatusText } from './runtime.ts';
+import { applySavedConfig, initRuntime, runtimeStatusText, stopCore } from './runtime.ts';
 import { initBackup } from './backup.ts';
 import { initMonitor } from './monitor.ts';
 import { initLogs } from './logs.ts';
@@ -247,6 +247,18 @@ async function checkUpdate(): Promise<void> {
   } catch (reason) { text = (reason as Error).message; }
   if (dialog.open) document.querySelector('#dialog-description')!.textContent = text;
 }
+async function quickRuntime(action: 'restart' | 'stop'): Promise<void> {
+  const stop = action === 'stop';
+  if (!window.confirm(stop ? t('确认停止 Xray？所有代理连接会断开。', 'Stop Xray? All proxy connections will drop.') : t('确认重启 Xray？现有连接会短暂中断。', 'Restart Xray? Existing connections will drop briefly.'))) return;
+  showDetail(stop ? t('停止 Xray', 'Stop Xray') : t('重启 Xray', 'Restart Xray'), t('正在处理…', 'Working…'));
+  let text: string;
+  try {
+    const status = stop ? await stopCore() : await applySavedConfig();
+    text = stop ? t('Xray 已停止。', 'Xray stopped.') : status.running ? `${t('Xray 已重启：', 'Xray restarted: ')}${runtimeStatusText(status)}` : t('没有已启用的入站，Xray 保持停止。', 'No enabled inbounds; Xray stays stopped.');
+  } catch (reason) { text = (reason as Error).message; }
+  if (dialog.open) document.querySelector('#dialog-description')!.textContent = text;
+  void runtime.refresh();
+}
 let detailReturnFocus: HTMLElement | null = null;
 function showDetail(title: string, description: string): void {
   detailReturnFocus = document.activeElement as HTMLElement;
@@ -259,7 +271,8 @@ document.querySelectorAll<HTMLButtonElement>('[data-action]').forEach(button => 
     if (['core-version', 'core-open'].includes(button.dataset.action!)) { closeMenu(); core.openPicker(); return; }
     if (authenticated && button.dataset.action === 'backup') { closeMenu(); backup.open(); return; }
     if (authenticated && ['xray-log', 'panel-log'].includes(button.dataset.action!)) { closeMenu(); logs.open(button.dataset.action === 'xray-log' ? 'xray' : 'panel'); return; }
-    if (authenticated && ['restart', 'stop', 'config'].includes(button.dataset.action!)) { closeMenu(); runtime.open(button.dataset.action === 'stop' ? 'stop' : button.dataset.action === 'restart' ? 'restart' : 'apply'); return; }
+    if (authenticated && ['restart', 'stop'].includes(button.dataset.action!)) { closeMenu(); void quickRuntime(button.dataset.action as 'restart' | 'stop'); return; }
+    if (authenticated && button.dataset.action === 'config') { closeMenu(); runtime.open('apply'); return; }
     if (authenticated && button.dataset.action === 'update') { closeMenu(); void checkUpdate(); return; }
     const [title, description] = descriptions[button.dataset.action!]!;
     closeMenu();
@@ -281,12 +294,12 @@ const logs = initLogs(refreshIcons);
 if (authenticated) initMonitor(document.querySelector<HTMLElement>('#home-view')!, () => latestRuntime);
 const serverInfo = authenticated ? initServerInfo(document.querySelector<HTMLElement>('#home-view')!, () => showPrivate) : null;
 if (authenticated) window.setInterval(() => { if (!document.hidden) void runtime.refresh(); }, 5000);
-management = initManagement(document.querySelector('#workspace-view')!, refreshIcons, navigate, showDetail, authenticated, () => runtime.open(), () => { void runtime.refresh(); });
+management = initManagement(document.querySelector('#workspace-view')!, refreshIcons, navigate, showDetail, authenticated, () => { void quickRuntime('restart'); }, () => { void runtime.refresh(); });
 const core = initCore(refreshIcons, status => {
   const label = document.querySelector('[data-action="core-version"] span');
   if (label) label.textContent = status ? `v${status.selected}` : t('版本管理', 'Version management');
 });
-xraySettings = initXraySettings(document.querySelector('#core-view')!, refreshIcons, authenticated, () => runtime.open(), () => { void runtime.refresh(); });
+xraySettings = initXraySettings(document.querySelector('#core-view')!, refreshIcons, authenticated, () => { void quickRuntime('restart'); }, () => { void runtime.refresh(); });
 const panelSettings = initPanelSettings(document.querySelector('#panel-view')!, authenticated);
 function navigate(page: string): void {
   logs.close();

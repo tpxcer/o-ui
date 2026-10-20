@@ -55,6 +55,7 @@ func handler(manager *core.Manager, state *store.Store, dist string, hosts []str
 	registerPanelVersion(mux)
 	registerSubscriptionSettings(mux, state)
 	registerPanelRestart(mux)
+	registerApplySaved(mux, rt)
 	registerFreePort(mux, state)
 	mux.HandleFunc("GET /api/logs", func(w http.ResponseWriter, r *http.Request) {
 		if rt == nil || rt.logs == nil {

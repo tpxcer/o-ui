@@ -10,6 +10,9 @@ export interface RuntimeStatus {
   running: boolean; version?: string; workspaceRevision: number; settingsRevision: number; inbounds: number; startedAt?: string;
   unexpectedExit?: boolean; exitedAt?: string;
 }
+// 参照OUI：一键按已保存配置重启（停止时即启动），或直接停止Xray。
+export async function applySavedConfig(): Promise<RuntimeStatus> { return api<RuntimeStatus>('runtime/apply-saved', jsonBody('POST', {})); }
+export async function stopCore(): Promise<RuntimeStatus> { return api<RuntimeStatus>('runtime/stop', jsonBody('POST', {})); }
 export function runtimeStatusText(status: RuntimeStatus | null): string {
   if (!status) return t('核心运行状态未连接', 'Core status unavailable');
   if (status.running) return `${t('运行中 v', 'Running v')}${status.version ?? ''} · ${status.inbounds} ${t('条代理入站', 'proxy inbounds')}`;
