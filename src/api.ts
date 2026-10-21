@@ -19,6 +19,22 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
   return result as T;
 }
 
+// 保存请求断线或报修订冲突时结果不确定：服务器可能已经保存（面板经本机代理访问时，保存会重启 Xray 切断连接，
+// 浏览器还可能自动重发同一请求而得到冲突）。连接恢复后读一次，修订号与内容都正好是本次提交才视为已保存。
+export const uncertainSave = (reason: unknown) => !(reason instanceof APIError) || reason.status === 409;
+export async function confirmSaved<T>(path: string, sent: T, expectedRevision: number, { wait = 30000, interval = 1500 } = {}): Promise<{ revision: number; data: T } | null> {
+  const deadline = Date.now() + wait, expected = JSON.stringify(sent);
+  for (;;) {
+    try {
+      const document = await api<{ revision: number; data: T | null }>(path);
+      return document.revision === expectedRevision && JSON.stringify(document.data) === expected ? { revision: document.revision, data: document.data as T } : null;
+    } catch (reason) {
+      if (reason instanceof APIError || Date.now() >= deadline) return null;
+      await new Promise(resolve => setTimeout(resolve, interval));
+    }
+  }
+}
+
 export function jsonBody(method: string, value: unknown): RequestInit {
   return { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) };
 }

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { api, apiURL, APIError, jsonBody } from '../src/api.ts';
+import { api, apiURL, APIError, confirmSaved, jsonBody, uncertainSave } from '../src/api.ts';
 
 test('管理请求携带同源会话和界面语言，JSON写入格式明确', async () => {
   const previous = globalThis.fetch;
@@ -56,4 +56,27 @@ test('面板部署在访问路径下时，接口地址随页面目录变化', ()
     Object.defineProperty(globalThis, 'location', { configurable: true, value: { protocol: 'https:', pathname: '/' } });
     assert.equal(apiURL('auth/status'), '/api/auth/status');
   } finally { if (previous) Object.defineProperty(globalThis, 'location', previous); else Reflect.deleteProperty(globalThis, 'location'); }
+});
+
+test('保存结果不确定时：连接恢复后读回内容与修订都等于本次提交才算已保存', async () => {
+  const previous = globalThis.fetch;
+  Object.assign(globalThis, { location: { protocol: 'http:' } });
+  const sent = { inbounds: [{ id: 'a', port: 57836 }], clients: [] };
+  let calls = 0, reply: () => Response = () => Response.json({ revision: 12, data: sent });
+  globalThis.fetch = async () => { calls++; if (calls <= 2) throw new TypeError('Failed to fetch'); return reply(); };
+  try {
+    assert.equal(uncertainSave(new Error('lost')), true);
+    assert.equal(uncertainSave(new APIError('冲突', 409)), true);
+    assert.equal(uncertainSave(new APIError('无效', 400)), false);
+    assert.deepEqual(await confirmSaved('workspace', sent, 12, { interval: 1 }), { revision: 12, data: sent });
+    assert.equal(calls, 3, '连接未恢复时重试');
+    calls = 2; reply = () => Response.json({ revision: 13, data: sent });
+    assert.equal(await confirmSaved('workspace', sent, 12, { interval: 1 }), null, '修订号不同：期间还有别的保存');
+    calls = 2; reply = () => Response.json({ revision: 12, data: { ...sent, clients: [{ id: 'x' }] } });
+    assert.equal(await confirmSaved('workspace', sent, 12, { interval: 1 }), null, '内容不同');
+    calls = 2; reply = () => Response.json({ error: '服务异常' }, { status: 500 });
+    assert.equal(await confirmSaved('workspace', sent, 12, { interval: 1 }), null);
+    calls = -1000;
+    assert.equal(await confirmSaved('workspace', sent, 12, { wait: 20, interval: 5 }), null, '一直连不上时按时放弃');
+  } finally { globalThis.fetch = previous; }
 });

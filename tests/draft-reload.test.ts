@@ -103,17 +103,19 @@ test('客户端保存冲突后不重复写，确认重读失败时保留弹窗�
       assert.equal(value.revision, 9); assert.equal(value.data.clients[0].name, 'newer-client');
       return Response.json({ revision: 10, data: value.data });
     }
-    if (++reads === 2) throw new Error('offline');
+    // 第2次读取是冲突后的确认读取（服务器上是别处改过的修订9，与本次提交不同）；第3次重读失败。
+    if (++reads === 3) throw new Error('offline');
     return Response.json({ revision: reads === 1 ? 1 : 9, data: reads === 1 ? initial : latest });
   }, async (root, dialogs, confirmation) => {
     initManagement(root as unknown as HTMLElement, () => {}, () => {}, () => {}, true).render('clients'); await settle();
     clickWorkspace(root, 'data-op', 'toggle-client', initial.clients[0].id);
     const dialog = dialogs.at(-1)!, form = dialog.querySelector('form');
     form.fire('submit'); await settle();
+    assert.equal(reads, 2, '冲突后先向服务器确认是否其实已保存');
     assert.match(dialog.querySelector('.form-error').textContent, /输入已保留/);
     assert.equal(form.querySelector('[type="submit"]').disabled, true);
     form.fire('submit'); await settle(); assert.equal(writes, 1);
-    confirmation.answer = false; dialog.querySelector('[data-reload]').fire(); await settle(); assert.equal(reads, 1); assert.equal(dialog.open, true);
+    confirmation.answer = false; dialog.querySelector('[data-reload]').fire(); await settle(); assert.equal(reads, 2); assert.equal(dialog.open, true);
     confirmation.answer = true; dialog.querySelector('[data-reload]').fire(); await settle();
     assert.equal(dialog.open, true); assert.match(dialog.querySelector('.form-error').textContent, /原输入仍保留/);
     assert.equal(form.querySelector('[type="submit"]').disabled, true);

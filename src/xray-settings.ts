@@ -1,7 +1,7 @@
 import { escapeHtml as esc, type Workspace } from './workspace.ts';
 import { buildSettings, defaultSettings, freedomStrategies, routingStrategies } from './xray-settings-model.ts';
 import type { SettingsDraft } from './xray-settings-model.ts';
-import { api, APIError, jsonBody } from './api.ts';
+import { api, APIError, confirmSaved, jsonBody, uncertainSave } from './api.ts';
 import type { RuntimeStatus } from './runtime.ts';
 import { settingsStatusText } from './settings-status.ts';
 import { settingRow, settingSection, settingsToolbar, selectControl, textControl, toggle } from './settings-ui.ts';
@@ -390,9 +390,20 @@ export function initXraySettings(root: HTMLElement, icons: () => void, persisten
       buildSettings(draft, reverseTags());
       if (persistent) {
         saving = true; paint();
-        const document = await api<{ revision: number; data: SettingsDraft; applied?: boolean; applyError?: string }>('settings', jsonBody('PUT', { revision, data: draft })).catch(reason => { if (!(reason instanceof APIError) || reason.status === 409 || reason.status >= 500) reloadRequired = true; throw reason; });
+        const sent = structuredClone(draft), before = revision;
+        let interrupted = false;
+        type Saved = { revision: number; data: SettingsDraft; applied?: boolean; applyError?: string };
+        const document = await api<Saved>('settings', jsonBody('PUT', { revision, data: sent })).catch(async (reason): Promise<Saved> => {
+          if (uncertainSave(reason)) {
+            feedback = t('连接中断，正在确认是否已保存…', 'Connection lost; confirming the save…'); paint();
+            const confirmed = await confirmSaved('settings', sent, before + 1);
+            if (confirmed) { interrupted = true; return { revision: confirmed.revision, data: confirmed.data }; }
+          }
+          if (!(reason instanceof APIError) || reason.status === 409 || reason.status >= 500) reloadRequired = true;
+          throw reason;
+        });
         revision = document.revision;
-        feedback = document.applied ? t('已保存并生效。', 'Saved and applied.') : `${t('已保存，但未生效：', 'Saved, but not applied: ')}${document.applyError ?? ''}`;
+        feedback = interrupted ? t('已保存（连接曾中断，已向服务器确认；生效由服务器完成）。', 'Saved (the connection dropped, but the server confirmed it; applying was finished by the server).') : document.applied ? t('已保存并生效。', 'Saved and applied.') : `${t('已保存，但未生效：', 'Saved, but not applied: ')}${document.applyError ?? ''}`;
         onSaved();
       } else feedback = t('已保存当前会话草稿；刷新会恢复默认，不应用核心。', 'Session draft saved; refreshing restores defaults and nothing is applied.');
       saved = structuredClone(draft);

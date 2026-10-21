@@ -1,7 +1,7 @@
 import { addClient, chineseDate, clientStatus, createQuick, defaultConnection, defaultSniffing, deleteInbound, editClient,
   editInbound, escapeHtml as esc, inboundName, presets, randomName, seedWorkspace } from './workspace.ts';
 import type { Client, ClientInput, Connection, Inbound, Preset, Workspace } from './workspace.ts';
-import { api, APIError, jsonBody } from './api.ts';
+import { api, APIError, confirmSaved, jsonBody, uncertainSave } from './api.ts';
 import { initCalendar } from './calendar.ts';
 import { initConnections } from './connections.ts';
 import { formatTrafficGB, trafficStatus, usedBytes } from './traffic.ts';
@@ -70,13 +70,14 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
       const previous = structuredClone(state);
       const controls = [...form.querySelectorAll<HTMLInputElement | HTMLButtonElement | HTMLSelectElement | HTMLTextAreaElement>('input,button,select,textarea')];
       const disabled = controls.map(control => control.disabled);
-      submitting = true; pendingNotice = ''; updateApplicationStatus(); let writing = false;
+      submitting = true; pendingNotice = ''; updateApplicationStatus(); let writing = false, sent: Workspace = state;
+      const before = revision;
       try {
         submit(form);
         controls.forEach(control => { control.disabled = true; });
         form.querySelector<HTMLButtonElement>('[type="submit"]')!.textContent = persistent ? t('正在保存并生效…', 'Saving and applying…') : t('正在处理…', 'Working…');
         if (persistent) {
-          writing = true;
+          writing = true; sent = state;
           const document = await api<{ revision: number; data: Workspace; applied?: boolean; applyError?: string; firewall?: string }>('workspace', jsonBody('PUT', { revision, data: state }));
           revision = document.revision; state = document.data;
           pendingNotice = `${document.applied ? t('已保存并生效', 'Saved and applied') : `${t('已保存，但未生效：', 'Saved, but not applied: ')}${document.applyError ?? ''}`}${document.firewall ? `${t(' · 防火墙：', ' · firewall: ')}${document.firewall}` : ''}`;
@@ -85,6 +86,15 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
         submitting = false; modal.close(); renderList(); announce(pendingNotice || t('演示数据已更改', 'Demo data changed'));
       }
       catch (reason) {
+        if (writing && uncertainSave(reason)) {
+          form.querySelector<HTMLButtonElement>('[type="submit"]')!.textContent = t('连接中断，正在确认是否已保存…', 'Connection lost; confirming the save…');
+          const confirmed = await confirmSaved('workspace', sent, before + 1);
+          if (confirmed) {
+            revision = confirmed.revision; state = confirmed.data; submitting = false; onSaved(); modal.close(); renderList();
+            announce(t('已保存（连接曾中断，已向服务器确认；生效与防火墙由服务器完成）', 'Saved (the connection dropped, but the server confirmed it; applying and the firewall were finished by the server)'));
+            return;
+          }
+        }
         state = previous; submitting = false; pendingNotice = ''; if (writing && (!(reason instanceof APIError) || reason.status === 409 || reason.status >= 500)) reloadRequired = true;
         controls.forEach((control, index) => { control.disabled = disabled[index]; });
         form.querySelector<HTMLButtonElement>('[type="submit"]')!.disabled = reloadRequired;
@@ -184,7 +194,7 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
   async function quickCreateNow(preset: Preset): Promise<void> {
     if (submitting || loading || !loaded || reloadRequired) return;
     const previous = structuredClone(state), tls = preset === 'hy2' || preset === 'xhttp-tls', proto = preset === 'hy2' ? 'udp' : 'tcp';
-    submitting = true; let writing = false; renderList(); notice.textContent = t('正在一键创建…', 'Creating…');
+    submitting = true; let writing = false, sent: Workspace = state, created = ''; const before = revision; renderList(); notice.textContent = t('正在一键创建…', 'Creating…');
     try {
       const [free, info, cert] = await Promise.all([
         api<{ port: number }>(`system/free-port?transport=${proto}`),
@@ -199,11 +209,20 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
       state = createQuick(state, { ...client, preset, port: free.port, sniffing: defaultSniffing() }, crypto.randomUUID());
       const inbound = state.inbounds.at(-1)!;
       Object.assign(inbound, { name: `${regionLabel(info)}-${presets[preset].label}-${client.name}`, connection: tls ? { ...defaultConnection(), usePanelCertificate: true } : newRealityConnection(), listen: '0.0.0.0', shareHost });
-      writing = true;
+      writing = true; sent = state; created = inbound.name;
       const document = await api<{ revision: number; data: Workspace; applied?: boolean; applyError?: string; firewall?: string }>('workspace', jsonBody('PUT', { revision, data: state }));
       revision = document.revision; state = document.data; submitting = false; search = ''; filter = 'all'; renderList(); onSaved();
       announce(document.applied ? `${inbound.name} ${t('已创建并生效 · 端口', 'created and applied · port')} ${free.port}/${proto}${document.firewall ? `${t(' · 防火墙：', ' · firewall: ')}${document.firewall}` : ''}` : `${inbound.name} ${t('已创建，但未生效：', 'created, but not applied: ')}${document.applyError ?? ''}`);
     } catch (reason) {
+      if (writing && uncertainSave(reason)) {
+        notice.textContent = t('连接中断，正在确认是否已保存…', 'Connection lost; confirming the save…');
+        const confirmed = await confirmSaved('workspace', sent, before + 1);
+        if (confirmed) {
+          revision = confirmed.revision; state = confirmed.data; submitting = false; search = ''; filter = 'all'; renderList(); onSaved();
+          announce(`${created} ${t('已创建（连接曾中断，已向服务器确认；生效与防火墙由服务器完成）', 'created (the connection dropped, but the server confirmed it; applying and the firewall were finished by the server)')}`);
+          return;
+        }
+      }
       state = previous; submitting = false;
       if (writing && (!(reason instanceof APIError) || reason.status === 409 || reason.status >= 500)) reloadRequired = true;
       renderList(); announce((reason as Error).message);

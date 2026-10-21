@@ -95,3 +95,28 @@ test('Xray设置：读取在途不保存、不并发读取；校验失败可修�
     assert.equal(writes, 2, '明确校验失败不锁成需刷新');
   } finally { view.restore(); }
 });
+
+test('Xray设置：保存时连接中断或浏览器重发得到冲突，但服务器已保存本次内容时视为成功', async t => {
+  for (const mode of ['network', 'retried'] as const) await t.test(mode === 'network' ? '连接中断' : '重发冲突', async () => {
+    let stored = { revision: 1, data: defaultSettings() as any }, writes = 0;
+    const view = page(async (url, options) => {
+      if (options?.method === 'PUT') {
+        writes++;
+        const body = JSON.parse(String(options.body));
+        stored = { revision: stored.revision + 1, data: body.data };
+        if (mode === 'network') throw new Error('lost');
+        return Response.json({ error: '数据已被其他页面修改，请重新加载后重试' }, { status: 409 });
+      }
+      if (url.endsWith('/workspace')) return Response.json({ revision: 1, data: null });
+      return Response.json(stored);
+    });
+    try {
+      view.settings.render(); await settle();
+      view.change('probeURL', 'https://saved.test/'); view.click('xray-save'); await settle(); await settle();
+      assert.equal(writes, 1);
+      assert.match(view.root.innerHTML, /连接曾中断/); assert.doesNotMatch(view.root.innerHTML, /请先刷新|refresh before/);
+      view.change('logLevel', 'info'); view.click('xray-save'); await settle(); await settle();
+      assert.equal(writes, 2, '确认后可继续用新修订保存');
+    } finally { view.restore(); }
+  });
+});
