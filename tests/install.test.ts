@@ -452,6 +452,18 @@ test('acme.sh只按固定版本摘要安装到独立目录，摘要不符时拒�
   assert.equal(existsSync(join(box.state, 'active')), false);
 });
 
+test('升级时新包的安装脚本不同则交给新脚本完成（只交接一次），助手与服务单元随新版本部署', async () => {
+  const box = await sandbox();
+  assert.equal(box.run(['install', '--package', box.pkg], [...start(), ...acme(), 'n']).status, 0);
+  const dir = join(box.base, 'handoff'); await mkdir(dir);
+  const stub = '#!/bin/bash\necho "handoff O_UI_UPDATE_HANDOFF=$O_UI_UPDATE_HANDOFF $*" >>"$FAKE_STATE/calls.log"\n';
+  const pkg = await makePackage(dir, { version: 'v0.2.0', extra: { 'install.sh': stub } });
+  const result = box.run(['update', '--package', pkg], []);
+  assert.equal(result.status, 0, result.out);
+  assert.match(await box.log('calls.log'), /^handoff O_UI_UPDATE_HANDOFF=1 update --package \S+\/o-ui-linux-amd64\.tar\.gz --sums \S+\/SHA256SUMS$/m);
+  assert.equal(await box.read('opt/o-ui/VERSION'), 'v0.1.0\n', '交接后由新脚本安装，旧脚本不再继续');
+});
+
 test('升级保留数据并保留上一版本；新版本启动失败自动回退', async () => {
   const box = await sandbox();
   assert.equal(box.run(['install', '--package', box.pkg], [...start(), ...acme(), 'n']).status, 0);

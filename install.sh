@@ -1122,6 +1122,13 @@ cmd_update() {
   parse_pkg_opts "$@"
   require_installed
   prepare_package
+  # 新包自带的安装脚本与正在运行的不同：交给新脚本完成整个更新，使防火墙助手、服务单元等与新版本一致（只交接一次）。
+  if [ -z "${O_UI_UPDATE_HANDOFF:-}" ] && [ -f "$PKG_DIR/install.sh" ] && ! cmp -s "$PKG_DIR/install.sh" "$0"; then
+    local handoff=(update --package "$WORK/o-ui-linux-$(detect_arch).tar.gz")
+    [ ! -f "$WORK/SHA256SUMS" ] || handoff+=(--sums "$WORK/SHA256SUMS")
+    O_UI_UPDATE_HANDOFF=1 bash "$PKG_DIR/install.sh" "${handoff[@]}"
+    exit $?
+  fi
   local new was_active=''
   new=$(pkg_version "$PKG_DIR")
   info "当前版本 $OUI_VERSION，将更新为 $new；数据保留。" "Current $OUI_VERSION, updating to $new; data is kept."

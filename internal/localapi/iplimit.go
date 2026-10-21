@@ -70,13 +70,28 @@ func newIPLimiter() *ipLimiter {
 
 // 调用root防火墙助手的ban/unban/flush；测试中替换。
 var runIPBan = func(ctx context.Context, args ...string) (string, error) {
-	if _, err := os.Stat(firewallHelper); err != nil {
-		return "", errIPLimitHelper
+	if err := ipLimitHelperReady(); err != nil {
+		return "", err
 	}
 	return firewallCommand(ctx, args...)
 }
 
-var errIPLimitHelper = i18n.New("未安装防火墙助手（或缺少sudo），IP上限只能统计不能执行；请用新版安装脚本运行 o-ui update", "The firewall helper (or sudo) is missing, so IP limits are only counted, not enforced; run o-ui update with the new installer")
+var (
+	errIPLimitHelper    = i18n.New("未安装防火墙助手（或缺少sudo），IP上限只能统计不能执行；请用新版安装脚本运行 o-ui update", "The firewall helper (or sudo) is missing, so IP limits are only counted, not enforced; run o-ui update with the new installer")
+	errIPLimitHelperOld = i18n.New("防火墙助手是旧版本，不支持IP封禁；请在服务器上再运行一次 o-ui update", "The firewall helper is an old version without IP bans; run o-ui update once more on the server")
+)
+
+// ipLimitHelperReady检查助手存在且支持IP封禁（旧版安装脚本升级时会留下不含ban的旧助手）。
+func ipLimitHelperReady() error {
+	data, err := os.ReadFile(firewallHelper)
+	if err != nil {
+		return errIPLimitHelper
+	}
+	if !strings.Contains(string(data), "CHAIN=o-ui-iplimit") {
+		return errIPLimitHelperOld
+	}
+	return nil
+}
 
 // 读取Xray各用户在线IP；核心未运行时返回nil。测试中替换。
 var sampleOnlineIPs = func(ctx context.Context, rt *Runtime) (map[string][]onlineIP, error) {
@@ -209,7 +224,7 @@ func ipLimitTargets(data json.RawMessage) map[string]ipLimitTarget {
 func (rt *Runtime) ipBan(ctx context.Context, action string, ban ipBan) error {
 	output, err := runIPBan(ctx, action, ban.IP, strconv.Itoa(ban.Port), ban.Protocol)
 	if err != nil {
-		if errors.Is(err, errIPLimitHelper) {
+		if errors.Is(err, errIPLimitHelper) || errors.Is(err, errIPLimitHelperOld) {
 			return err
 		}
 		return i18n.Errorf("防火墙助手执行失败：%s", "The firewall helper failed: %s", output)
@@ -430,8 +445,11 @@ func registerIPLimit(mux *http.ServeMux, rt *Runtime) {
 				get(item.ClientID).Exempt = append(get(item.ClientID).Exempt, item)
 			}
 		}
-		_, helperErr := os.Stat(firewallHelper)
-		return map[string]any{"enforced": helperErr == nil, "issue": l.issue, "clients": clients}, nil
+		issue, helperErr := l.issue, ipLimitHelperReady()
+		if helperErr != nil && issue == "" {
+			issue = helperErr.Error()
+		}
+		return map[string]any{"enforced": helperErr == nil, "issue": issue, "clients": clients}, nil
 	}
 	mux.HandleFunc("GET /api/runtime/iplimit", func(w http.ResponseWriter, r *http.Request) {
 		if rt == nil {
