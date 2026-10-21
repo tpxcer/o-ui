@@ -1,7 +1,7 @@
 import { createIcons, Gauge, LogIn, Users, Settings, Wrench, PanelLeftClose,
   PanelLeftOpen, Moon, Sun, Eye, EyeOff, ArrowUp, ArrowDown, List, Power, RotateCw,
   RefreshCw, SlidersHorizontal, DatabaseBackup, ChartArea, ChartNoAxesCombined, Menu, X,
-  Info, Plus, Search, Pencil, Trash2, CalendarDays, Shuffle, QrCode, Zap } from 'lucide';
+  Info, Plus, Search, Pencil, Trash2, CalendarDays, Shuffle, QrCode, Zap, LogOut } from 'lucide';
 import { demo, linePath, percent, resourceColor, samples } from './model.ts';
 import { initManagement } from './management.ts';
 import { initCore } from './core.ts';
@@ -28,7 +28,7 @@ document.addEventListener('click', event => {
 const icons = { Gauge, LogIn, Users, Settings, Wrench, PanelLeftClose,
   PanelLeftOpen, Moon, Sun, Eye, EyeOff, ArrowUp, ArrowDown, List, Power, RotateCw,
   RefreshCw, SlidersHorizontal, DatabaseBackup, ChartArea, ChartNoAxesCombined, Menu, X,
-  Info, Plus, Search, Pencil, Trash2, CalendarDays, Shuffle, QrCode, Zap };
+  Info, Plus, Search, Pencil, Trash2, CalendarDays, Shuffle, QrCode, Zap, LogOut };
 const icon = (name: string) => `<i data-lucide="${name}" aria-hidden="true"></i>`;
 const action = (label: string, name: string, id: string) =>
   `<button class="action" data-action="${id}">${icon(name)}<span>${label}</span></button>`;
@@ -39,13 +39,13 @@ function chart(): string {
   return `<div class="traffic-chart" role="img" aria-label="${t('演示上传和下载历史趋势，非实时监控', 'Demo upload and download history, not live monitoring')}">
     <div class="axis-labels"><span>320 KB/s</span><span>240 KB/s</span><span>160 KB/s</span><span>80 KB/s</span></div>
     <svg viewBox="0 0 900 170" preserveAspectRatio="none" aria-hidden="true">
-      <defs><linearGradient id="upload-fill" x1="0" y1="0" x2="0" y2="1"><stop stop-color="var(--blue)" stop-opacity=".18"/><stop offset="1" stop-color="var(--blue)" stop-opacity=".02"/></linearGradient>
-      <linearGradient id="download-fill" x1="0" y1="0" x2="0" y2="1"><stop stop-color="var(--green)" stop-opacity=".15"/><stop offset="1" stop-color="var(--green)" stop-opacity=".01"/></linearGradient></defs>
+      <defs><linearGradient id="upload-fill" x1="0" y1="0" x2="0" y2="1"><stop stop-color="var(--series-1)" stop-opacity=".18"/><stop offset="1" stop-color="var(--series-1)" stop-opacity=".02"/></linearGradient>
+      <linearGradient id="download-fill" x1="0" y1="0" x2="0" y2="1"><stop stop-color="var(--series-2)" stop-opacity=".15"/><stop offset="1" stop-color="var(--series-2)" stop-opacity=".01"/></linearGradient></defs>
       ${[0, 42.5, 85, 127.5, 169].map(y => `<line x1="0" y1="${y}" x2="900" y2="${y}" class="grid-line"/>`).join('')}
       <path d="${upload} L900,170 L0,170 Z" fill="url(#upload-fill)"/>
       <path d="${download} L900,170 L0,170 Z" fill="url(#download-fill)"/>
-      <path d="${upload}" class="chart-line" stroke="var(--blue)"/>
-      <path d="${download}" class="chart-line" stroke="var(--green)"/>
+      <path d="${upload}" class="chart-line" stroke="var(--series-1)"/>
+      <path d="${download}" class="chart-line" stroke="var(--series-2)"/>
     </svg>
   </div>`;
 }
@@ -69,7 +69,7 @@ const app = document.querySelector<HTMLDivElement>('#app')!;
 async function start(): Promise<void> {
 const authenticated = await requireLogin();
 app.innerHTML = `
-  <div class="mobile-header"><button class="icon-button" id="mobile-menu" aria-label="${t('打开导航', 'Open navigation')}" aria-expanded="false" aria-controls="sidebar">${icon('menu')}</button><strong>o-ui</strong><span class="demo-label">${t('演示', 'Demo')}</span></div>
+  <div class="mobile-header"><button class="icon-button" id="mobile-menu" aria-label="${t('打开导航', 'Open navigation')}" aria-expanded="false" aria-controls="sidebar">${icon('menu')}</button><strong class="brand-name">o-ui</strong><span class="demo-label">${t('演示', 'Demo')}</span></div>
   <button class="menu-scrim" id="menu-scrim" aria-label="${t('关闭导航', 'Close navigation')}" hidden></button>
   <aside class="sidebar" id="sidebar" aria-label="${t('主导航', 'Main navigation')}">
     <div class="brand"><strong class="brand-name">o-ui</strong><div class="brand-actions">${languageButton()}<button class="icon-button" id="theme-toggle" aria-label="${t('切换到浅色主题', 'Switch to light theme')}">${icon('moon')}</button><button class="icon-button mobile-close" id="mobile-close" aria-label="${t('关闭导航菜单', 'Close navigation menu')}">${icon('x')}</button></div></div>
@@ -78,7 +78,7 @@ app.innerHTML = `
         `<button class="nav-item${id === 'home' ? ' active' : ''}" data-nav="${id}" aria-label="${label}"${id === 'home' ? ' aria-current="page"' : ''}>${icon(name)}<span>${label}</span></button>`).join('')}
     </nav>
     <div class="sidebar-bottom"><span class="prototype-version">${t('本地开发版 · 非生产面板', 'Local build · not a production panel')}</span>
-      ${authenticated ? t('<button class="nav-item" id="logout">退出登录</button>', '<button class="nav-item" id="logout">Sign out</button>') : ''}
+      ${authenticated ? `<button class="nav-item" id="logout">${icon('log-out')}<span>${t('退出登录', 'Sign out')}</span></button>` : ''}
       <button class="nav-item" data-action="update" aria-label="${t('检测更新', 'Check for updates')}">${icon('refresh-cw')}<span>${t('检测更新', 'Check for updates')}</span></button>
       <button class="collapse-button" id="collapse-sidebar" aria-label="${t('收起侧栏', 'Collapse sidebar')}" aria-expanded="true">${icon('panel-left-close')}</button></div>
   </aside>
@@ -93,9 +93,9 @@ app.innerHTML = `
       </div>
       <div class="resources">
         ${resource('CPU', '2.80 GHz', 7, 'var(--blue)', [5, 8, 6, 7, 6, 8, 7])}
-        ${resource(t('内存', 'Memory'), '757.76 MB / 2.00 GB', 37, 'var(--cyan)', [35, 36, 36, 37, 37, 36, 37])}
-        ${resource(t('交换分区', 'Swap'), '61.44 MB / 1.00 GB', 6, 'var(--orange)', [6, 6, 6, 6, 6, 6, 6])}
-        ${resource(t('存储', 'Storage'), '15.60 GB / 40.00 GB', 39, 'var(--purple)', [38, 38, 39, 39, 39, 39, 39])}
+        ${resource(t('内存', 'Memory'), '757.76 MB / 2.00 GB', 37, 'var(--blue)', [35, 36, 36, 37, 37, 36, 37])}
+        ${resource(t('交换分区', 'Swap'), '61.44 MB / 1.00 GB', 6, 'var(--blue)', [6, 6, 6, 6, 6, 6, 6])}
+        ${resource(t('存储', 'Storage'), '15.60 GB / 40.00 GB', 39, 'var(--blue)', [38, 38, 39, 39, 39, 39, 39])}
       </div>
     </section>
     <div class="two-columns server-row">

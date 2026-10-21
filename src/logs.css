@@ -2,19 +2,19 @@
 .logs-dialog[open] { display: flex; flex-direction: column; }
 .logs-dialog .dialog-heading, .logs-dialog footer { flex-shrink: 0; }
 .logs-dialog footer { border-top: 1px solid var(--border); gap: 10px; }
-.logs-body { padding: 18px 24px; overflow-y: auto; min-height: 0; }
+.logs-body { padding: 18px 22px; overflow-y: auto; min-height: 0; }
 .logs-body > .form-hint { margin: 0 0 14px; }
 .logs-tools { display: flex; gap: 12px; align-items: end; margin: 16px 0; }
 .logs-tools .form-field { flex: 1; margin: 0; min-width: 0; }
 .logs-tools button { flex-shrink: 0; }
 .logs-status { overflow-wrap: anywhere; }
-.logs-entries { max-height: 42dvh; min-height: 110px; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; }
+.logs-entries { max-height: 42dvh; min-height: 110px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--input); }
 .logs-entries:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
-.log-entry { padding: 12px; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+.log-entry { padding: 10px 12px; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
 .log-entry:last-child { border-bottom: 0; }
 .log-meta { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
-.log-entry p { font-size: 13px; line-height: 1.8; margin: 6px 0 0; }
-.log-level { border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; }
+.log-entry p { font: 12.5px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace; margin: 4px 0 0; }
+.log-level { border: 1px solid var(--border); border-radius: 999px; padding: 0 7px; }
 .log-warning { color: var(--orange); }
 .log-error { color: var(--text); border-style: dashed; font-weight: 600; }
 .logs-empty { padding: 12px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.8; }

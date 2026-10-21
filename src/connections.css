@@ -2,20 +2,18 @@
 .connection-dialog[open] { display: flex; flex-direction: column; }
 .connection-dialog .dialog-heading, .connection-dialog footer { flex-shrink: 0; }
 .connection-dialog footer { border-top: 1px solid var(--border); }
-.connection-body { overflow-y: auto; padding: 20px 24px; min-height: 0; }
-.connection-name { margin: 0 0 10px; font-weight: 500; overflow-wrap: anywhere; }
+.connection-body { overflow-y: auto; padding: 20px 22px; min-height: 0; }
+.connection-name { margin: 0 0 8px; font-weight: 600; font-size: 15px; overflow-wrap: anywhere; }
 .connection-body > .form-hint { margin-bottom: 18px; }
-.connection-body textarea { width: 100%; min-width: 0; resize: vertical; font: 12px/1.65 ui-monospace, monospace; color: var(--text); background: var(--background); border: 1px solid var(--border); border-radius: 6px; padding: 10px; }
-.connection-body textarea:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
-.connection-warning { color: var(--text); padding: 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--raised); font-size: 12px; line-height: 1.8; }
+.connection-body textarea { width: 100%; min-width: 0; resize: vertical; font: 12px/1.65 ui-monospace, SFMono-Regular, Menlo, monospace; padding: 10px 12px; }
+.connection-warning { color: var(--text); padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--raised); font-size: 12px; line-height: 1.75; }
 .connection-qr { margin: 20px 0; text-align: center; }
-.connection-qr img { display: block; width: 250px; max-width: 100%; height: auto; margin: 0 auto 8px; image-rendering: pixelated; }
+.connection-qr img { display: block; width: 236px; max-width: 100%; height: auto; margin: 0 auto 10px; padding: 10px; background: #fff; border-radius: 12px; box-shadow: var(--shadow); image-rendering: pixelated; }
 .connection-qr figcaption { font-size: 11px; line-height: 1.8; color: var(--muted); }
 .subscription-section { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--border); min-width: 0; }
-.subscription-section h3 { margin: 0 0 12px; font-size: 15px; font-weight: 500; }
+.subscription-section h3 { margin: 0 0 12px; font-size: 15px; font-weight: 600; }
 .subscription-section .check-field { align-items: flex-start; margin: 16px 0; }
 .subscription-section .check-field span { line-height: 1.8; }
 .subscription-actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 14px 0; }
-.subscription-actions button { min-height: 44px; }
 .subscription-section [data-sub-secret] { margin: 16px 0; }
 @media (max-width: 600px) { .connection-body { padding: 18px; } }

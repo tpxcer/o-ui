@@ -43,7 +43,7 @@ export function initMonitor(root: HTMLElement, runtime: () => RuntimeStatus | nu
     row.querySelector('.resource-copy span')!.textContent = detail;
     const valid = value !== null && Number.isFinite(value) && value >= 0 && value <= 100;
     row.querySelector('.resource-percent')!.textContent = valid ? `${value.toFixed(1)}%` : '—';
-    row.style.setProperty('--resource-color', resourceColor(valid ? value : 0, ['var(--blue)', 'var(--cyan)', 'var(--orange)', 'var(--purple)'][index]));
+    row.style.setProperty('--resource-color', resourceColor(valid ? value : 0, 'var(--blue)'));
     const meter = row.querySelector<HTMLElement>('.meter')!;
     meter.querySelector<HTMLElement>('span')!.style.width = `${valid ? value : 0}%`;
     meter.setAttribute('aria-label', `${row.querySelector('.resource-copy strong')!.textContent}${t('使用率', ' usage')}${valid ? '' : t('不可用', ' unavailable')}`);
@@ -52,6 +52,37 @@ export function initMonitor(root: HTMLElement, runtime: () => RuntimeStatus | nu
   function capacity(index: number, c: Capacity | null, active: boolean): void {
     const none = c?.total === '0';
     resource(index, !active || !c ? t('采集不可用', 'Sampling unavailable') : none ? t('未配置交换空间', 'No swap configured') : `${bytes(c.used)} / ${bytes(c.total)}${index === 3 ? t(' · 数据盘', ' · data disk') : ''}`, active ? c?.percent ?? null : null);
+  }
+  // 网速图悬停：竖线、两条线上的点与读数；图表每次采样重绘，所以记住指针位置并在重绘后补画。
+  let hover: number | null = null;
+  const chart = $('.traffic-chart');
+  chart.addEventListener('pointermove', event => {
+    const svg = chart.querySelector('svg');
+    if (!svg) return;
+    const box = svg.getBoundingClientRect();
+    hover = Math.min(1, Math.max(0, (event.clientX - box.left) / box.width));
+    drawHover();
+  });
+  chart.addEventListener('pointerleave', () => { hover = null; drawHover(); });
+  function drawHover(): void {
+    chart.querySelector('.chart-hover')?.remove();
+    const svg = chart.querySelector('svg'), points = last?.history ?? [], end = Date.parse(last?.at ?? '');
+    if (hover === null || !svg || !points.length || !Number.isFinite(end)) return;
+    const start = end - 180000, target = start + hover * 180000;
+    let best = points[0], gap = Infinity;
+    for (const point of points) { const distance = Math.abs(Date.parse(point.at) - target); if (distance < gap) { gap = distance; best = point; } }
+    if (gap > 6000 || (best.upload === null && best.download === null)) return;
+    const peak = Math.max(1024, ...points.flatMap(p => [p.upload ?? 0, p.download ?? 0]));
+    const box = svg.getBoundingClientRect(), host = chart.getBoundingClientRect();
+    const x = box.left - host.left + (Date.parse(best.at) - start) / 180000 * box.width, top = box.top - host.top;
+    const y = (value: number) => top + (1 - Math.min(value / peak, 1)) * box.height;
+    const dot = (value: number | null, color: string) => value === null ? '' : `<b class="chart-dot" style="left:${x}px;top:${y(value)}px;color:${color}"></b>`;
+    const row = (value: number | null, color: string, label: string) => `<span><b style="background:${color}"></b>${label}<strong>${value === null ? '—' : `${esc(bytes(value))}/s`}</strong></span>`;
+    const overlay = document.createElement('div');
+    overlay.className = 'chart-hover';
+    overlay.setAttribute('aria-hidden', 'true');
+    overlay.innerHTML = `<span class="chart-cursor" style="left:${x}px;top:${top}px;height:${box.height}px"></span>${dot(best.upload, 'var(--series-1)')}${dot(best.download, 'var(--series-2)')}<div class="chart-tip${(x - (box.left - host.left)) > box.width * .6 ? ' is-left' : ''}" style="left:${x}px;top:${top}px"><time>${new Date(best.at).toLocaleTimeString(locale, { hour12: false })}</time>${row(best.upload, 'var(--series-1)', t('上传', 'Upload'))}${row(best.download, 'var(--series-2)', t('下载', 'Download'))}</div>`;
+    chart.append(overlay);
   }
   function paint(): void {
     if (disposed || !root.isConnected) return;
@@ -73,7 +104,8 @@ export function initMonitor(root: HTMLElement, runtime: () => RuntimeStatus | nu
     const peak = Math.max(1024, ...points.flatMap(p => [p.upload ?? 0, p.download ?? 0]));
     const graph = $('.traffic-chart');
     graph.setAttribute('aria-label', t('最近三分钟面板业务速度', 'Proxy traffic speed over the last three minutes'));
-    graph.innerHTML = !points.length ? t('<p class="form-intro">等待采样</p>', '<p class="form-intro">Waiting for samples</p>') : `<div class="axis-labels">${[1, .75, .5, .25].map(n => `<span>${esc(bytes(peak * n))}/s</span>`).join('')}</div><svg viewBox="0 0 900 170" preserveAspectRatio="none" aria-hidden="true">${[0,42.5,85,127.5,169].map(y => `<line x1="0" y1="${y}" x2="900" y2="${y}" class="grid-line"/>`).join('')}<path d="${networkPath(points, 'upload', peak, end)}" class="chart-line" stroke="var(--blue)"/><path d="${networkPath(points, 'download', peak, end)}" class="chart-line" stroke="var(--green)"/></svg>`;
+    graph.innerHTML = !points.length ? t('<p class="form-intro">等待采样</p>', '<p class="form-intro">Waiting for samples</p>') : `<div class="axis-labels">${[1, .75, .5, .25].map(n => `<span>${esc(bytes(peak * n))}/s</span>`).join('')}</div><svg viewBox="0 0 900 170" preserveAspectRatio="none" aria-hidden="true">${[0,42.5,85,127.5,169].map(y => `<line x1="0" y1="${y}" x2="900" y2="${y}" class="grid-line"/>`).join('')}<path d="${networkPath(points, 'upload', peak, end)}" class="chart-line" stroke="var(--series-1)"/><path d="${networkPath(points, 'download', peak, end)}" class="chart-line" stroke="var(--series-2)"/></svg>`;
+    drawHover();
     const at = s && fresh(s.at) ? new Date(s.at).toLocaleTimeString(locale, {hour12:false}) : s && Date.parse(s.at) > 0 ? `${t('已过期', 'stale')} ${new Date(s.at).toLocaleTimeString(locale, {hour12:false})}` : t('尚无有效采样', 'No valid samples yet');
     status.textContent = `${error || (active ? s.issues.length ? `${t('部分不可用：', 'Partly unavailable: ')}${s.issues.join(t('；', '; '))}` : net?.upload == null ? t('正在建立速率基线', 'Building the rate baseline') : t('采集中', 'Sampling') : t('采样已过期或尚未就绪', 'Sample is stale or not ready'))} · ${at}${t('。只统计本面板客户端经 Xray 的流量，不含系统其他程序。', '. Counts only client traffic through o-ui\'s Xray, not other programs.')}`;
   }

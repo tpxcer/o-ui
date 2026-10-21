@@ -4,3 +4,13 @@
 .resource-copy span { white-space: normal; overflow-wrap: anywhere; }
 .resource-percent { margin-left: auto; }
 .statistics dd { overflow-wrap: anywhere; }
+.traffic-chart { position: relative; touch-action: pan-y; }
+.chart-hover { position: absolute; inset: 0; pointer-events: none; }
+.chart-cursor { position: absolute; width: 1px; background: var(--border-strong); }
+.chart-dot { position: absolute; width: 8px; height: 8px; border-radius: 50%; background: currentColor; transform: translate(-50%, -50%); box-shadow: 0 0 0 2px var(--surface); }
+.chart-tip { position: absolute; transform: translateX(12px); display: grid; gap: 3px; min-width: 150px; padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--surface) 94%, transparent); backdrop-filter: blur(8px); box-shadow: var(--shadow-pop); font-size: 12px; white-space: nowrap; }
+.chart-tip.is-left { transform: translateX(calc(-100% - 12px)); }
+.chart-tip time { color: var(--muted); font-variant-numeric: tabular-nums; }
+.chart-tip span { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+.chart-tip span b { width: 7px; height: 7px; border-radius: 50%; }
+.chart-tip strong { margin-left: auto; padding-left: 12px; color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
