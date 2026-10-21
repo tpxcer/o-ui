@@ -3,6 +3,7 @@ package localapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -243,8 +244,10 @@ func handler(manager *core.Manager, state *store.Store, dist string, hosts []str
 			respond(w, code, map[string]string{"error": message})
 			return
 		}
-		result := rt.saved(r.Context(), doc)
-		result.Firewall = syncFirewall(r.Context(), old.Data, doc.Data)
+		// 已提交：应用与放行防火墙不随浏览器断开取消（面板经本机代理访问时，保存重启Xray会切断这条连接）。
+		committed := context.WithoutCancel(r.Context())
+		result := rt.saved(committed, doc)
+		result.Firewall = syncFirewall(committed, old.Data, doc.Data)
 		respond(w, 200, result)
 	})
 	mux.HandleFunc("PUT /api/settings", func(w http.ResponseWriter, r *http.Request) {
@@ -269,7 +272,7 @@ func handler(manager *core.Manager, state *store.Store, dist string, hosts []str
 			respond(w, code, map[string]string{"error": message})
 			return
 		}
-		respond(w, 200, rt.saved(r.Context(), doc))
+		respond(w, 200, rt.saved(context.WithoutCancel(r.Context()), doc))
 	})
 	mux.HandleFunc("GET /api/core/status", func(w http.ResponseWriter, r *http.Request) {
 		status := manager.Status()
