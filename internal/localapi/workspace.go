@@ -14,15 +14,16 @@ import (
 )
 
 type inboundDraft struct {
-	ID         string           `json:"id"`
-	Name       string           `json:"name"`
-	Preset     string           `json:"preset"`
-	Port       int              `json:"port"`
-	Listen     string           `json:"listen,omitempty"`
-	ShareHost  string           `json:"shareHost,omitempty"`
-	Enabled    bool             `json:"enabled"`
-	Connection *connectionDraft `json:"connection,omitempty"`
-	Sniffing   struct {
+	ID          string           `json:"id"`
+	Name        string           `json:"name"`
+	Preset      string           `json:"preset"`
+	Port        int              `json:"port"`
+	Listen      string           `json:"listen,omitempty"`
+	ShareHost   string           `json:"shareHost,omitempty"`
+	PortHopping string           `json:"portHopping,omitempty"` // 仅HY2：该UDP端口范围由防火墙助手转发到监听端口（端口跳跃）
+	Enabled     bool             `json:"enabled"`
+	Connection  *connectionDraft `json:"connection,omitempty"`
+	Sniffing    struct {
 		Enabled         bool     `json:"enabled"`
 		HTTP            bool     `json:"http"`
 		TLS             bool     `json:"tls"`
@@ -62,6 +63,34 @@ type workspaceDraft struct {
 }
 
 var draftID = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
+
+// validatePortHopping：跳跃范围只用于HY2，不能包含任何UDP监听端口，也不能与其他入站的范围重叠，
+// 否则转发会抢走那些端口的流量。
+func validatePortHopping(inbounds []inboundDraft) error {
+	type span struct{ start, end int }
+	spans := []span{}
+	for _, in := range inbounds {
+		if in.PortHopping == "" {
+			continue
+		}
+		start, end, ok := config.ParsePortRange(in.PortHopping)
+		if in.Preset != "hy2" || !ok {
+			return i18n.New("端口跳跃只用于HY2，范围格式为“起始-结束”（1024至65535，起始小于结束），如48000-48199", "Port hopping applies to HY2 only; the range is start-end (1024–65535, start below end), e.g. 48000-48199")
+		}
+		for _, other := range inbounds {
+			if other.Preset == "hy2" && other.Port >= start && other.Port <= end {
+				return i18n.Errorf("端口跳跃范围%s包含UDP监听端口%d，请换一个范围", "Port hopping range %s includes UDP listen port %d; choose another range", in.PortHopping, other.Port)
+			}
+		}
+		for _, other := range spans {
+			if start <= other.end && other.start <= end {
+				return i18n.Errorf("端口跳跃范围%s与其他入站的范围重叠", "Port hopping range %s overlaps another inbound's range", in.PortHopping)
+			}
+		}
+		spans = append(spans, span{start, end})
+	}
+	return nil
+}
 
 func validateWorkspaceDraft(data, previous json.RawMessage) error {
 	var draft, old workspaceDraft
@@ -110,6 +139,9 @@ func validateWorkspaceDraft(data, previous json.RawMessage) error {
 		}
 		ports[port] = true
 		ids[in.ID] = true
+	}
+	if err := validatePortHopping(draft.Inbounds); err != nil {
+		return err
 	}
 	clientIDs, reverseTags, presets := map[string]bool{}, map[string]bool{}, map[string]string{}
 	for _, in := range draft.Inbounds {

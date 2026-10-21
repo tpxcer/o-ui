@@ -28,6 +28,13 @@ type clientOutbound struct {
 		HysteriaSettings struct {
 			Auth string `json:"auth"`
 		} `json:"hysteriaSettings"`
+		FinalMask struct {
+			QuicParams struct {
+				UdpHop struct {
+					Ports string `json:"ports"`
+				} `json:"udpHop"`
+			} `json:"quicParams"`
+		} `json:"finalmask"`
 		RealitySettings struct {
 			Fingerprint string `json:"fingerprint"`
 			ServerName  string `json:"serverName"`
@@ -70,6 +77,9 @@ func ClashProxy(outbound map[string]any, name string) ([]YAMLField, error) {
 	switch {
 	case out.Protocol == "hysteria" && stream.HysteriaSettings.Auth != "" && stream.Security == "tls":
 		proxy := []YAMLField{{"name", name}, {"type", "hysteria2"}, {"server", out.Settings.Address}, {"port", out.Settings.Port}, {"password", stream.HysteriaSettings.Auth}, {"udp", true}, {"sni", stream.TLSSettings.ServerName}}
+		if ports := stream.FinalMask.QuicParams.UdpHop.Ports; ports != "" {
+			proxy = append(proxy, YAMLField{"ports", ports})
+		}
 		if len(stream.TLSSettings.ALPN) > 0 {
 			proxy = append(proxy, YAMLField{"alpn", stream.TLSSettings.ALPN})
 		}

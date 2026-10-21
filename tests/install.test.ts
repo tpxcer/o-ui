@@ -15,10 +15,11 @@ const installer = fileURLToPath(new URL('../install.sh', import.meta.url));
 const startScript = fileURLToPath(new URL('../scripts/start-local.sh', import.meta.url));
 const sha = (data: Buffer | string) => createHash('sha256').update(data).digest('hex');
 
-// iptables/ip6tables命令桩：链与规则按“链 参数”记在状态目录，-C按整行匹配
+// iptables/ip6tables命令桩：链与规则按“链 参数”记在状态目录（-t nat另记一份），-C按整行匹配；FAKE_NO_NAT6模拟ip6tables没有nat表
 const IPTABLES_STUB = `s=$FAKE_STATE; t=$(basename "$0")
 echo "$t $*" >>"$s/calls.log"
 [ "$1" = -w ] && shift
+if [ "$1" = -t ]; then [ "$t" = ip6tables ] && [ -n "$FAKE_NO_NAT6" ] && exit 3; t=$t-$2; shift 2; fi
 op=$1; shift
 rules="$s/$t-rules"; touch "$rules" "$s/$t-chains"
 case $op in
@@ -713,6 +714,37 @@ test('防火墙助手IP上限：严格校验，独立链挂在INPUT最前，封�
   assert.equal(box.helper(['ban', '203.0.113.9', '50001', 'tcp']).status, 0);
   assert.equal(box.run(['uninstall'], ['y', 'y', 'n']).status, 0);
   assert.equal(await box.log('iptables-rules'), 'INPUT -j o-ui-iplimit\n', '卸载时清空IP上限封禁');
+});
+
+test('防火墙助手端口跳跃：严格校验，nat表独立链挂在PREROUTING，转发不重复，撤销与清空只动本链，卸载时清空', async () => {
+  const box = await sandbox();
+  assert.equal(box.run(['install', '--package', box.pkg], [...start(), ...acme(), 'n']).status, 0);
+  for (const args of [['redirect', 'add', '48000', '50000'], ['redirect', 'add', '48000-48199-1', '50000'], ['redirect', 'add', '48199-48000', '50000'], ['redirect', 'add', '48000-48000', '50000'], ['redirect', 'add', '1000-1199', '50000'], ['redirect', 'add', '048000-48199', '50000'], ['redirect', 'add', '48000-48199', '48100'], ['redirect', 'add', '48000-48199', '80'], ['redirect', 'add', '48000-48199;id', '50000'], ['redirect', 'add', '48000-48199'], ['redirect', 'move', '48000-48199', '50000'], ['redirect', 'flush', 'x'], ['redirect']]) {
+    const result = box.helper(args);
+    assert.equal(result.status, 2, args.join(' '));
+    assert.match(result.out, /redirect add\|delete/);
+  }
+  assert.doesNotMatch(await box.log('calls.log'), /^ip6?tables /m, '参数无效时不调用iptables');
+  assert.match(box.helper(['redirect', 'add', '48000-48199', '50000']).out, /已设置端口跳跃 48000-48199\/udp → 50000 \//);
+  assert.equal(box.helper(['redirect', 'add', '48000-48199', '50000']).status, 0);
+  const rule = 'o-ui-hop -p udp --dport 48000:48199 -j REDIRECT --to-ports 50000';
+  assert.equal(await box.log('iptables-nat-rules'), `PREROUTING -j o-ui-hop\n${rule}\n`, '重复设置不重复加规则');
+  assert.equal(await box.log('ip6tables-nat-rules'), `PREROUTING -j o-ui-hop\n${rule}\n`);
+  assert.equal(await box.log('iptables-rules'), '', '不改filter表');
+  assert.equal(box.helper(['redirect', 'add', '52000-52199', '51000']).status, 0);
+  assert.match(box.helper(['redirect', 'delete', '48000-48199', '50000']).out, /已撤销端口跳跃/);
+  assert.equal(box.helper(['redirect', 'delete', '48000-48199', '50000']).status, 0, '重复撤销无害');
+  assert.equal(await box.log('iptables-nat-rules'), 'PREROUTING -j o-ui-hop\no-ui-hop -p udp --dport 52000:52199 -j REDIRECT --to-ports 51000\n');
+  assert.equal(box.helper(['redirect', 'flush']).status, 0);
+  assert.equal(await box.log('iptables-nat-rules'), 'PREROUTING -j o-ui-hop\n', 'flush只清空本链');
+  const v4only = box.helper(['redirect', 'add', '48000-48199', '50000'], { FAKE_NO_NAT6: '1' });
+  assert.equal(v4only.status, 0); assert.match(v4only.out, /（仅IPv4）/);
+  await rename(join(box.bin, 'iptables'), join(box.bin, 'iptables.off'));
+  const missing = box.helper(['redirect', 'add', '52000-52199', '51000'], { FAKE_NO_NAT6: '1' });
+  await rename(join(box.bin, 'iptables.off'), join(box.bin, 'iptables'));
+  assert.equal(missing.status, 3); assert.match(missing.out, /未能设置端口跳跃转发/);
+  assert.equal(box.run(['uninstall'], ['y', 'y', 'n']).status, 0);
+  assert.equal(await box.log('iptables-nat-rules'), 'PREROUTING -j o-ui-hop\n', '卸载时清空端口跳跃转发');
 });
 
 test('防火墙助手：严格校验参数，只撤销自己加过的规则，ufw与firewalld及无防火墙', async () => {

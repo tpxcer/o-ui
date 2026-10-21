@@ -7,6 +7,7 @@ import (
 	"net"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -140,6 +141,20 @@ type CompiledInbound struct {
 	Settings ProtocolSettings `json:"settings"`
 	Stream   StreamSettings   `json:"streamSettings"`
 	Sniffing Sniffing         `json:"sniffing"`
+	// PortHopping是HY2端口跳跃范围（如48000-48199）：服务端由防火墙助手把该UDP范围转发到监听端口，
+	// 不写入Xray配置，只用于生成客户端连接参数。
+	PortHopping string `json:"-"`
+}
+
+// ParsePortRange解析“起始-结束”端口范围（1024至65535，起始小于结束，不带前导零，与防火墙助手的校验一致）。
+func ParsePortRange(value string) (start, end int, ok bool) {
+	a, b, found := strings.Cut(value, "-")
+	if !found || !validPortString(a) || !validPortString(b) {
+		return 0, 0, false
+	}
+	start, _ = strconv.Atoi(a)
+	end, _ = strconv.Atoi(b)
+	return start, end, start >= 1024 && start < end && strconv.Itoa(start)+"-"+strconv.Itoa(end) == value
 }
 
 var recordID = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)

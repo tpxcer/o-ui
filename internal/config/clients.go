@@ -30,6 +30,13 @@ func ClientConnection(in CompiledInbound, user User, serverName, name string, sh
 		out["settings"] = map[string]any{"version": 2, "address": address, "port": in.Port}
 		stream["hysteriaSettings"] = map[string]any{"version": 2, "auth": user.Auth}
 		u.Scheme, u.User, u.Path = "hysteria2", url.User(user.Auth), "/"
+		if in.PortHopping != "" {
+			if _, _, ok := ParsePortRange(in.PortHopping); !ok {
+				return nil, "", i18n.New("HY2端口跳跃范围无效", "Invalid HY2 port hopping range")
+			}
+			stream["finalmask"] = map[string]any{"quicParams": map[string]any{"udpHop": map[string]any{"ports": in.PortHopping}}}
+			query.Set("mport", in.PortHopping)
+		}
 	} else if in.Protocol == "vless" && uuidPattern.MatchString(user.ID) {
 		client := map[string]any{"id": user.ID, "encryption": "none"}
 		query.Set("encryption", "none")

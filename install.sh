@@ -849,7 +849,7 @@ export PATH
 RULES='$F_FWRULES'
 EOF
   cat >>"$tmp" <<'EOF'
-usage() { echo "用法：o-ui-firewall allow|delete <1024-65535> tcp|udp；ban|unban <IP> <1024-65535> tcp|udp；flush / usage: o-ui-firewall allow|delete <1024-65535> tcp|udp; ban|unban <IP> <1024-65535> tcp|udp; flush" >&2; exit 2; }
+usage() { echo "用法：o-ui-firewall allow|delete <1024-65535> tcp|udp；ban|unban <IP> <1024-65535> tcp|udp；flush；redirect add|delete <起始-结束> <端口>；redirect flush / usage: o-ui-firewall allow|delete <1024-65535> tcp|udp; ban|unban <IP> <1024-65535> tcp|udp; flush; redirect add|delete <start-end> <port>; redirect flush" >&2; exit 2; }
 valid_port() {
   case $1 in ''|*[!0-9]*|0*) return 1 ;; esac
   [ ${#1} -le 5 ] && [ "$1" -ge 1024 ] && [ "$1" -le 65535 ]
@@ -894,6 +894,51 @@ if [ "${1-}" = ban ] || [ "${1-}" = unban ]; then
     while "$table" -w -D "$CHAIN" "$@" 2>/dev/null; do :; done
     echo "已解封 $ip → $port/$proto / unbanned $ip on $port/$proto"
   fi
+  exit 0
+fi
+# HY2端口跳跃：在nat表独立链o-ui-hop里把一段UDP端口转发到监听端口（挂在PREROUTING）；
+# 规则只在内存，重启后清空，由面板按入站记录重建；flush只清空本链。
+HOP=o-ui-hop
+if [ "${1-}" = redirect ]; then
+  if [ "${2-}" = flush ] && [ $# -eq 2 ]; then
+    for table in iptables ip6tables; do
+      if command -v "$table" >/dev/null 2>&1; then "$table" -w -t nat -F "$HOP" 2>/dev/null || true; fi
+    done
+    echo "已清空端口跳跃转发 / port hopping forwards cleared"
+    exit 0
+  fi
+  [ $# -eq 4 ] || usage
+  action=$2 range=$3 port=$4
+  case $action in add|delete) ;; *) usage ;; esac
+  start=${range%-*} end=${range#*-}
+  [ "$range" = "$start-$end" ] || usage
+  valid_port "$start" && valid_port "$end" && valid_port "$port" || usage
+  [ "$start" -lt "$end" ] || usage
+  if [ "$port" -ge "$start" ] && [ "$port" -le "$end" ]; then usage; fi
+  set -- -p udp --dport "$start:$end" -j REDIRECT --to-ports "$port"
+  done=''
+  for table in iptables ip6tables; do
+    command -v "$table" >/dev/null 2>&1 || continue
+    if [ "$action" = add ]; then
+      "$table" -w -t nat -N "$HOP" 2>/dev/null || true
+      { "$table" -w -t nat -C PREROUTING -j "$HOP" 2>/dev/null || "$table" -w -t nat -A PREROUTING -j "$HOP" 2>/dev/null; } &&
+        { "$table" -w -t nat -C "$HOP" "$@" 2>/dev/null || "$table" -w -t nat -A "$HOP" "$@" 2>/dev/null; } && done="$done $table"
+    else
+      while "$table" -w -t nat -D "$HOP" "$@" 2>/dev/null; do :; done
+    fi
+  done
+  if [ "$action" = delete ]; then
+    echo "已撤销端口跳跃 $range/udp → $port / removed port hopping $range/udp → $port"
+    exit 0
+  fi
+  case $done in
+    *iptables*) ;;
+    *) echo "未能设置端口跳跃转发（需要iptables的nat表） / could not set up port hopping (needs the iptables nat table)"; exit 3 ;;
+  esac
+  case $done in
+    *ip6tables*) echo "已设置端口跳跃 $range/udp → $port / port hopping $range/udp → $port set" ;;
+    *) echo "已设置端口跳跃 $range/udp → $port（仅IPv4） / port hopping $range/udp → $port set (IPv4 only)" ;;
+  esac
   exit 0
 fi
 [ $# -eq 3 ] || usage
@@ -983,10 +1028,11 @@ deploy_firewall_access() {
   fi
 }
 
-# 卸载时清空IP上限封禁并删除助手与sudoers；purge时按记录撤销o-ui加过的入站规则
+# 卸载时清空IP上限封禁与端口跳跃转发并删除助手与sudoers；purge时按记录撤销o-ui加过的入站规则
 remove_firewall_access() {
   local backend rule
   [ ! -x "$F_HELPER" ] || "$F_HELPER" flush >/dev/null 2>&1 || true
+  [ ! -x "$F_HELPER" ] || "$F_HELPER" redirect flush >/dev/null 2>&1 || true
   if [ -n "${1-}" ] && [ -x "$F_HELPER" ] && [ -f "$F_FWRULES" ]; then
     while read -r backend rule; do
       case $rule in */tcp|*/udp) "$F_HELPER" delete "${rule%/*}" "${rule#*/}" || true ;; esac

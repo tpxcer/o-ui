@@ -235,6 +235,11 @@ func run() int {
 	go runtime.RunTelegram(ctx)
 	go runtime.RunIPLimit(ctx)
 	go func() {
+		if err := runtime.RestorePortHopping(ctx); err != nil {
+			log.Print(say("恢复HY2端口跳跃转发失败：", "Failed to restore HY2 port hopping: "), text(err))
+		}
+	}()
+	go func() {
 		if started, err := runtime.ResumeOnStart(ctx); err != nil {
 			log.Print(say("自动恢复上次应用失败，核心保持停止：", "Auto-resume of the last applied configuration failed; the core stays stopped: "), text(err))
 		} else if started {

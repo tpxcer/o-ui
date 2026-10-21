@@ -114,6 +114,7 @@ func (rt *Runtime) connection(ctx context.Context, request connectionRequest) (c
 				if entry.ID == client.InboundID {
 					shareHost = entry.ShareHost
 					preset = entry.Preset
+					in.PortHopping = entry.PortHopping
 					if entry.Connection != nil {
 						serverName = entry.Connection.ServerName
 					}
