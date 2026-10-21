@@ -7,6 +7,8 @@ export type SystemSnapshot = {
   load: [number, number, number] | null;
   network: { interfaces: string[]; sent: string; received: string; upload: number | null; download: number | null } | null;
   issues: string[]; history: NetworkPoint[];
+  // 物理网卡总速度（参照OUI，排除虚拟网卡）；旧版后端没有这两项。
+  hostNetwork?: { upload: number | null; download: number | null } | null; hostHistory?: NetworkPoint[];
 };
 export type CoreMetrics = {
   at: string; running: boolean; startedAt?: string;

@@ -23,3 +23,10 @@
 @keyframes chart-pulse { from { transform: scale(1); opacity: .55; } to { transform: scale(3); opacity: 0; } }
 .monitor-stale .chart-live { display: none; }
 @media (prefers-reduced-motion: reduce) { .chart-live::after { animation: none; } }
+.network-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px 12px; flex-wrap: wrap; margin-bottom: 6px; }
+.network-heading .section-label { margin: 0; }
+.speed-source { display: inline-flex; padding: 2px; gap: 2px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--raised); }
+.speed-source button { min-height: 26px; padding: 2px 10px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font-size: 12px; font-weight: 500; white-space: nowrap; }
+.speed-source button:hover { color: var(--text); }
+.speed-source button[aria-pressed="true"] { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
+@media (pointer: coarse) { .speed-source button { min-height: 36px; padding: 4px 12px; } }

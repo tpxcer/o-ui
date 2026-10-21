@@ -83,16 +83,20 @@ func handler(manager *core.Manager, state *store.Store, dist string, hosts []str
 			respond(w, 503, map[string]string{"error": i18n.T("系统采集尚未启动", "System sampling is not running")})
 			return
 		}
-		// 网速只算面板业务；网卡名单独给出，供服务器套餐选择计量网卡。
+		// network/history为面板业务（节点）流量；hostNetwork/hostHistory为物理网卡总速度（首页可切换）；
+		// 网卡名单独给出，供服务器套餐选择计量网卡。
 		snapshot, interfaces := rt.monitor.Snapshot(), []string{}
 		if snapshot.Network != nil {
 			interfaces = snapshot.Network.Interfaces
 		}
+		host, hostHistory := snapshot.Network, snapshot.History
 		snapshot.Network, snapshot.History = rt.business.network()
 		respond(w, 200, struct {
 			monitor.Snapshot
-			Interfaces []string `json:"interfaces"`
-		}{snapshot, interfaces})
+			Interfaces  []string         `json:"interfaces"`
+			HostNetwork *monitor.Network `json:"hostNetwork"`
+			HostHistory []monitor.Point  `json:"hostHistory"`
+		}{snapshot, interfaces, host, hostHistory})
 	})
 	mux.HandleFunc("GET /api/auth/status", func(w http.ResponseWriter, r *http.Request) {
 		initialized, err := state.Initialized(r.Context())

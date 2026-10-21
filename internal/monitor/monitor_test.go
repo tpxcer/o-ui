@@ -112,3 +112,25 @@ func TestLocalSource(t *testing.T) {
 		t.Fatal("缺失容量百分比")
 	}
 }
+
+// 网卡总速度参照OUI只算物理网卡；网卡名单仍列出全部，供服务器套餐选择。
+func TestNetworkSpeedSkipsVirtualInterfaces(t *testing.T) {
+	at := time.Now()
+	counters := func(eth, virtual uint64) []Counter {
+		list := []Counter{{Name: "eth0", ID: "eth0:2", Sent: eth, Received: eth}}
+		for i, name := range []string{"lo", "docker0", "br-1a2b", "veth9f", "tun0", "wg0", "tailscale0", "Virbr0"} {
+			list = append(list, Counter{Name: name, ID: name + ":" + string(rune('a'+i)), Sent: virtual, Received: virtual})
+		}
+		return list
+	}
+	m := &Monitor{}
+	m.update(sample(at, 100, 10, counters(1000, 1000)))
+	m.update(sample(at.Add(2*time.Second), 200, 20, counters(3000, 999000)))
+	s := m.Snapshot()
+	if s.Network.Upload == nil || *s.Network.Upload != 1000 || *s.Network.Download != 1000 {
+		t.Fatal("虚拟网卡流量不应计入网卡总速度", s.Network)
+	}
+	if len(s.Network.Interfaces) != 9 {
+		t.Fatal("网卡名单应保留全部网卡", s.Network.Interfaces)
+	}
+}

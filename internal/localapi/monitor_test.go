@@ -73,7 +73,10 @@ func TestSystemMonitorAPI(t *testing.T) {
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		var v monitor.Snapshot
+		var v struct {
+			monitor.Snapshot
+			HostHistory []monitor.Point `json:"hostHistory"`
+		}
 		r := httptest.NewRequest("GET", "/api/system/status", nil)
 		r.RemoteAddr = "127.0.0.1:1234"
 		r.Host = "127.0.0.1:5180"
@@ -84,8 +87,8 @@ func TestSystemMonitorAPI(t *testing.T) {
 			t.Fatal(err)
 		}
 		if !v.At.IsZero() {
-			if v.Host == nil || v.History == nil {
-				t.Fatal("无真实样本")
+			if v.Host == nil || v.History == nil || v.HostHistory == nil {
+				t.Fatal("无真实样本，或缺少网卡总速度历史")
 			}
 			break
 		}

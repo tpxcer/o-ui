@@ -53,6 +53,26 @@ export function initMonitor(root: HTMLElement, runtime: () => RuntimeStatus | nu
     const none = c?.total === '0';
     resource(index, !active || !c ? t('采集不可用', 'Sampling unavailable') : none ? t('未配置交换空间', 'No swap configured') : `${bytes(c.used)} / ${bytes(c.total)}${index === 3 ? t(' · 数据盘', ' · data disk') : ''}`, active ? c?.percent ?? null : null);
   }
+  // 网速图可在“节点流量”（Xray客户端流量，客户端角度）与“网卡总速度”（物理网卡，服务器角度，同OUI）之间切换，选择记在本浏览器。
+  type Source = 'node' | 'host';
+  let source: Source = 'node';
+  try { if (localStorage.getItem('independent-panel-speed-source') === 'host') source = 'host'; } catch { /* 禁用存储时用默认。 */ }
+  const sourceLabel = $('.network-panel .section-label'), heading = document.createElement('div'), toggle = document.createElement('div');
+  heading.className = 'network-heading';
+  toggle.className = 'speed-source';
+  toggle.setAttribute('role', 'group');
+  toggle.setAttribute('aria-label', t('网速统计范围', 'Speed source'));
+  toggle.innerHTML = ([['node', t('节点流量', 'Node traffic')], ['host', t('网卡总速度', 'NIC total')]] as const).map(([key, text]) => `<button type="button" data-speed-source="${key}">${text}</button>`).join('');
+  sourceLabel.replaceWith(heading);
+  heading.append(sourceLabel, toggle);
+  toggle.addEventListener('click', event => {
+    const key = (event.target as Element).closest<HTMLElement>('[data-speed-source]')?.dataset.speedSource;
+    if ((key !== 'node' && key !== 'host') || key === source) return;
+    source = key;
+    try { localStorage.setItem('independent-panel-speed-source', key); } catch { /* 同上。 */ }
+    paint();
+  });
+  const view = () => source === 'host' ? { speed: last?.hostNetwork ?? null, points: last?.hostHistory ?? [] } : { speed: last?.network ?? null, points: last?.history ?? [] };
   // 网速图悬停：竖线、两条线上的点与读数；图表每次采样重绘，所以记住指针位置并在重绘后补画。
   let hover: number | null = null;
   const chart = $('.traffic-chart');
@@ -66,7 +86,7 @@ export function initMonitor(root: HTMLElement, runtime: () => RuntimeStatus | nu
   chart.addEventListener('pointerleave', () => { hover = null; drawHover(); });
   function drawHover(): void {
     chart.querySelector('.chart-hover')?.remove();
-    const svg = chart.querySelector('svg'), points = last?.history ?? [], end = Date.parse(last?.at ?? '');
+    const svg = chart.querySelector('svg'), points = view().points, end = Date.parse(last?.at ?? '');
     if (hover === null || !svg || !points.length || !Number.isFinite(end)) return;
     const start = end - 180000, target = start + hover * 180000;
     let best = points[0], gap = Infinity;
@@ -88,8 +108,9 @@ export function initMonitor(root: HTMLElement, runtime: () => RuntimeStatus | nu
     if (disposed || !root.isConnected) return;
     const s = last, active = !!s && fresh(s.at) && !error;
     $('.status-card').classList.toggle('monitor-stale', !active);
-    const net = active ? s.network : null;
-    $('.speed-readings').innerHTML = `<div class="speed upload"><span class="speed-label"><b></b>${t('上传', 'Upload')}</span><strong>${net?.upload == null ? '—' : esc(bytes(net.upload))}<small>/s</small></strong></div><div class="speed download"><span class="speed-label"><b></b>${t('下载', 'Download')}</span><strong>${net?.download == null ? '—' : esc(bytes(net.download))}<small>/s</small></strong></div>`;
+    const net = active ? s.network : null, speed = active ? view().speed : null;
+    toggle.querySelectorAll<HTMLElement>('[data-speed-source]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.speedSource === source)));
+    $('.speed-readings').innerHTML = `<div class="speed upload"><span class="speed-label"><b></b>${t('上传', 'Upload')}</span><strong>${speed?.upload == null ? '—' : esc(bytes(speed.upload))}<small>/s</small></strong></div><div class="speed download"><span class="speed-label"><b></b>${t('下载', 'Download')}</span><strong>${speed?.download == null ? '—' : esc(bytes(speed.download))}<small>/s</small></strong></div>`;
     resource(0, active && s.host ? `${s.host.cpus} ${t('核 ·', 'cores ·')} ${s.host.cpuModel || s.host.architecture}` : t('采集不可用', 'Sampling unavailable'), active ? s.cpu : null);
     capacity(1, s?.memory ?? null, active); capacity(2, s?.swap ?? null, active); capacity(3, s?.disk ?? null, active);
     const server = [...root.querySelectorAll<HTMLElement>('.server-card dd')];
@@ -100,15 +121,15 @@ export function initMonitor(root: HTMLElement, runtime: () => RuntimeStatus | nu
     dd[0].textContent = rt ? rt.running && rt.startedAt ? duration(Math.max(0, (Date.now() - Date.parse(rt.startedAt)) / 1000)) : t('已停止', 'Stopped') : '—';
     dd[1].textContent = active && s.host ? duration(s.host.uptime) : '—';
     dd[4].textContent = bytes(net?.sent ?? null); dd[5].textContent = bytes(net?.received ?? null);
-    const points = s?.history ?? [], end = Date.parse(s?.at ?? '');
+    const points = view().points, end = Date.parse(s?.at ?? '');
     const peak = Math.max(1024, ...points.flatMap(p => [p.upload ?? 0, p.download ?? 0]));
     const graph = $('.traffic-chart');
     const series: ['upload' | 'download', string][] = [['upload', 'var(--series-1)'], ['download', 'var(--series-2)']];
-    graph.setAttribute('aria-label', t('最近三分钟面板业务速度', 'Proxy traffic speed over the last three minutes'));
+    graph.setAttribute('aria-label', source === 'host' ? t('最近三分钟服务器网卡总速度', 'Server NIC speed over the last three minutes') : t('最近三分钟面板业务速度', 'Proxy traffic speed over the last three minutes'));
     graph.innerHTML = !points.length ? t('<p class="form-intro">等待采样</p>', '<p class="form-intro">Waiting for samples</p>') : `<div class="axis-labels">${[1, .75, .5, .25].map(n => `<span>${esc(bytes(peak * n))}/s</span>`).join('')}</div><div class="chart-plot"><svg viewBox="0 0 900 170" preserveAspectRatio="none" aria-hidden="true"><defs>${series.map(([direction, color]) => `<linearGradient id="live-${direction}-fill" x1="0" y1="0" x2="0" y2="1"><stop stop-color="${color}" stop-opacity=".38"/><stop offset="1" stop-color="${color}" stop-opacity=".02"/></linearGradient>`).join('')}</defs>${[0,42.5,85,127.5,169].map(y => `<line x1="0" y1="${y}" x2="900" y2="${y}" class="grid-line"/>`).join('')}${series.map(([direction]) => `<path d="${networkArea(points, direction, peak, end)}" fill="url(#live-${direction}-fill)"/>`).join('')}${series.map(([direction, color]) => `<path d="${networkPath(points, direction, peak, end)}" class="chart-line" stroke="${color}"/>`).join('')}</svg>${series.map(([direction, color]) => { const tail = networkSegments(points, direction, peak, end).at(-1)?.at(-1); return tail && tail[0] > 880 ? `<span class="chart-live" style="left:${(tail[0] / 9).toFixed(2)}%;top:${(tail[1] / 1.7).toFixed(2)}%;color:${color}"></span>` : ''; }).join('')}</div>`;
     drawHover();
     const at = s && fresh(s.at) ? new Date(s.at).toLocaleTimeString(locale, {hour12:false}) : s && Date.parse(s.at) > 0 ? `${t('已过期', 'stale')} ${new Date(s.at).toLocaleTimeString(locale, {hour12:false})}` : t('尚无有效采样', 'No valid samples yet');
-    status.textContent = `${error || (active ? s.issues.length ? `${t('部分不可用：', 'Partly unavailable: ')}${s.issues.join(t('；', '; '))}` : net?.upload == null ? t('正在建立速率基线', 'Building the rate baseline') : t('采集中', 'Sampling') : t('采样已过期或尚未就绪', 'Sample is stale or not ready'))} · ${at}${t('。只统计本面板客户端经 Xray 的流量，不含系统其他程序。', '. Counts only client traffic through o-ui\'s Xray, not other programs.')}`;
+    status.textContent = `${error || (active ? s.issues.length ? `${t('部分不可用：', 'Partly unavailable: ')}${s.issues.join(t('；', '; '))}` : speed?.upload == null ? t('正在建立速率基线', 'Building the rate baseline') : t('采集中', 'Sampling') : t('采样已过期或尚未就绪', 'Sample is stale or not ready'))} · ${at}${source === 'host' ? t('。按服务器物理网卡统计（同 OUI，不含回环与 docker、tun 等虚拟网卡）：上传为服务器发出，下载为服务器收到，含网站、SSH 等全部流量；经节点的流量进出各计一次。', '. Measured on the server\'s physical NICs (like OUI; loopback and virtual NICs such as docker or tun excluded): upload is sent by the server, download is received, including all traffic such as websites and SSH; proxied traffic counts once in and once out.') : t('。只统计本面板客户端经 Xray 的流量（客户端角度），不含系统其他程序。', '. Counts only client traffic through o-ui\'s Xray (from the client\'s side), not other programs.')}`;
   }
   async function refresh(): Promise<void> {
     if (disposed || busy) return;

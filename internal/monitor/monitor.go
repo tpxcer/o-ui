@@ -130,7 +130,7 @@ func (m *Monitor) update(r raw) {
 		}
 	}
 	if s.Network != nil && continuous {
-		s.Network.Upload, s.Network.Download = rates(m.previous.counters, r.counters, gap.Seconds())
+		s.Network.Upload, s.Network.Download = rates(physical(m.previous.counters), physical(r.counters), gap.Seconds())
 	}
 	history := append([]Point{}, m.current.History...)
 	p := Point{At: s.At}
@@ -146,6 +146,25 @@ func (m *Monitor) update(r raw) {
 		s.Issues = []string{}
 	}
 	m.current, m.previous = s, r
+}
+
+// 网卡总速度参照OUI只算物理网卡：排除回环与docker、veth、tun、wg等虚拟网卡，避免容器/隧道流量重复计入。
+// 网卡名单与原始累计仍包含全部活动网卡，供服务器套餐选择计量网卡。
+var virtualPrefixes = []string{"loopback", "docker", "br-", "veth", "virbr", "tun", "tap", "wg", "tailscale", "zt"}
+
+func physical(counters []Counter) []Counter {
+	result := []Counter{}
+	for _, c := range counters {
+		name := strings.ToLower(c.Name)
+		virtual := name == "lo" || name == "lo0"
+		for _, prefix := range virtualPrefixes {
+			virtual = virtual || strings.HasPrefix(name, prefix)
+		}
+		if !virtual {
+			result = append(result, c)
+		}
+	}
+	return result
 }
 
 func number(n float64) *float64 {
