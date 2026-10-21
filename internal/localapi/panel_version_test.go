@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 func TestPanelVersionComparesReleasesOnly(t *testing.T) {
@@ -21,10 +22,11 @@ func TestPanelVersionComparesReleasesOnly(t *testing.T) {
 }
 
 func TestPanelVersionChecksOnlyOnRequestAndCaches(t *testing.T) {
-	calls := 0
-	p := &panelUpdates{current: "v0.1.0", fetch: func(context.Context) (string, string, error) {
+	calls, clock := 0, time.Unix(1_800_000_000, 0)
+	latest := "v0.2.0"
+	p := &panelUpdates{current: "v0.1.0", now: func() time.Time { return clock }, fetch: func(context.Context) (string, string, error) {
 		calls++
-		return "v0.2.0", "https://github.com/tpxcer/o-ui/releases/tag/v0.2.0", nil
+		return latest, "https://github.com/tpxcer/o-ui/releases/tag/" + latest, nil
 	}}
 	if v := p.get(context.Background(), false); calls != 0 || v.UpdateAvailable || v.Current != "v0.1.0" {
 		t.Fatal("loading the page must not contact GitHub", v)
@@ -32,8 +34,14 @@ func TestPanelVersionChecksOnlyOnRequestAndCaches(t *testing.T) {
 	if v := p.get(context.Background(), true); calls != 1 || !v.UpdateAvailable || v.Latest != "v0.2.0" {
 		t.Fatal("check must report the newer release", v)
 	}
+	clock = clock.Add(59 * time.Second)
 	if p.get(context.Background(), true); calls != 1 {
-		t.Fatal("repeated checks must be cached")
+		t.Fatal("repeated checks within a minute must be cached")
+	}
+	// 刚发布的新版本：距上次检查满1分钟后手动点击即可看到。
+	latest, clock = "2026-10-21-v1", clock.Add(time.Second)
+	if v := p.get(context.Background(), true); calls != 2 || v.Latest != "2026-10-21-v1" || !v.UpdateAvailable {
+		t.Fatal("a check after a minute must fetch again", v)
 	}
 	failing := &panelUpdates{current: "v0.1.0", fetch: func(context.Context) (string, string, error) { return "", "", errors.New("offline") }}
 	if v := failing.get(context.Background(), true); v.Issue == "" || v.UpdateAvailable {

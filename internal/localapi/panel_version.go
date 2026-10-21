@@ -63,7 +63,11 @@ type panelUpdates struct {
 	issue   string
 	checked time.Time
 	fetch   func(context.Context) (string, string, error)
+	now     func() time.Time
 }
+
+// 只有手动点“检测更新”才访问GitHub；1分钟内重复点击用上次结果，避免触发GitHub未登录每小时60次的限制。
+const updateCheckCache = time.Minute
 
 type panelVersion struct {
 	Current         string `json:"current"`
@@ -138,9 +142,13 @@ func fetchLatestRelease(ctx context.Context) (string, string, error) {
 func (p *panelUpdates) get(ctx context.Context, check bool) panelVersion {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if check && (p.checked.IsZero() || time.Since(p.checked) > 10*time.Minute) {
+	now := time.Now
+	if p.now != nil {
+		now = p.now
+	}
+	if check && (p.checked.IsZero() || now().Sub(p.checked) >= updateCheckCache) {
 		latest, url, err := p.fetch(ctx)
-		p.checked, p.issue = time.Now(), ""
+		p.checked, p.issue = now(), ""
 		if err != nil {
 			p.issue = i18n.T("无法连接 GitHub 检查更新", "Cannot reach GitHub to check for updates")
 		} else {
