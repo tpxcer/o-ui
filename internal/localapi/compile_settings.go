@@ -198,6 +198,6 @@ func compileSettings(data json.RawMessage, reverseTags ...string) (map[string]an
 	advanced["dns"] = dns
 	// 统计常开：流量额度与首页业务网速都依赖用户计数。
 	advanced["stats"] = map[string]any{}
-	advanced["policy"] = map[string]any{"levels": map[string]any{"0": map[string]bool{"statsUserUplink": true, "statsUserDownlink": true}}, "system": map[string]bool{"statsInboundUplink": true, "statsInboundDownlink": true, "statsOutboundUplink": true, "statsOutboundDownlink": true}}
+	advanced["policy"] = map[string]any{"levels": map[string]any{"0": map[string]bool{"statsUserUplink": true, "statsUserDownlink": true, "statsUserOnline": true}}, "system": map[string]bool{"statsInboundUplink": true, "statsInboundDownlink": true, "statsOutboundUplink": true, "statsOutboundDownlink": true}}
 	return advanced, nil
 }

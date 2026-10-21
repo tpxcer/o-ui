@@ -58,6 +58,7 @@ func handler(manager *core.Manager, state *store.Store, dist string, hosts []str
 	registerSubscriptionSettings(mux, state)
 	registerWarp(mux, state)
 	registerTelegram(mux, rt, state)
+	registerIPLimit(mux, rt)
 	registerPanelRestart(mux)
 	registerApplySaved(mux, rt)
 	registerOutboundTraffic(mux, rt)

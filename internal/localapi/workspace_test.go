@@ -18,7 +18,8 @@ func TestValidateWorkspaceDraft(t *testing.T) {
 	for _, test := range []struct{ name, old, new string }{
 		{"privileged-port", `18443`, `443`},
 		{"unknown-preset", `"reality"`, `"shadowsocks"`},
-		{"ip-limit", `"ipLimit":0`, `"ipLimit":2`},
+		{"ip-limit-negative", `"ipLimit":0`, `"ipLimit":-1`},
+		{"ip-limit-too-large", `"ipLimit":0`, `"ipLimit":10001`},
 		{"fake-usage", `"usedGB":0`, `"usedGB":3`},
 		{"negative-quota", `"quotaGB":0`, `"quotaGB":-1`},
 		{"broken-link", `"inboundId":"in-one"`, `"inboundId":"missing"`},
@@ -29,6 +30,9 @@ func TestValidateWorkspaceDraft(t *testing.T) {
 				t.Fatal("invalid workspace accepted")
 			}
 		})
+	}
+	if err := validateWorkspaceDraft(json.RawMessage(strings.Replace(string(valid), `"ipLimit":0`, `"ipLimit":2`, 1)), nil); err != nil {
+		t.Fatal("IP limit rejected", err)
 	}
 	if validateWorkspaceDraft(json.RawMessage(`{"inbounds":[],"clients":[]}`), valid) == nil {
 		t.Fatal("batch delete accepted")

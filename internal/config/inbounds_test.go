@@ -134,7 +134,6 @@ func TestIntegrityAndUnsupportedLimits(t *testing.T) {
 		{"port", func(i *Inbound, _ *Client) { i.Port = 65536 }},
 		{"UUID", func(_ *Inbound, c *Client) { c.UUID = "do-not-disclose-this-value" }},
 		{"nil UUID", func(_ *Inbound, c *Client) { c.UUID = "00000000-0000-0000-0000-000000000000" }},
-		{"IP limit", func(_ *Inbound, c *Client) { c.IPLimit = 1 }},
 		{"sniffing", func(i *Inbound, _ *Client) { i.Sniffing.DestOverride = []string{"invalid"} }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

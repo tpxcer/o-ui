@@ -119,8 +119,8 @@ func validateWorkspaceDraft(data, previous json.RawMessage) error {
 		if !draftID.MatchString(client.ID) || clientIDs[client.ID] || !ids[client.InboundID] || strings.TrimSpace(client.Name) == "" || len([]rune(client.Name)) > 64 || names[client.Name] {
 			return i18n.New("客户端标识、名称或关联入站无效", "Invalid client ID, name or linked inbound")
 		}
-		if math.IsNaN(client.QuotaGB) || math.IsInf(client.QuotaGB, 0) || client.QuotaGB < 0 || client.QuotaGB > 1_000_000 || (client.QuotaGB > 0 && client.QuotaGB*1e9 < 1) || client.UsedGB != 0 || client.IPLimit != 0 {
-			return i18n.New("流量草稿无效，或设置了尚未实现的IP限制/用量", "Invalid traffic draft, or an unsupported IP limit/usage was set")
+		if math.IsNaN(client.QuotaGB) || math.IsInf(client.QuotaGB, 0) || client.QuotaGB < 0 || client.QuotaGB > 1_000_000 || (client.QuotaGB > 0 && client.QuotaGB*1e9 < 1) || client.UsedGB != 0 || client.IPLimit < 0 || client.IPLimit > 10000 {
+			return i18n.New("流量草稿无效、IP上限超出0至10000，或设置了用量", "Invalid traffic draft, an IP limit outside 0–10000, or a usage value was set")
 		}
 		if client.ExpiresAt != nil && (*client.ExpiresAt < 0 || *client.ExpiresAt > 8640000000000000) {
 			return i18n.New("客户端到期时间无效", "Invalid client expiry time")

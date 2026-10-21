@@ -798,12 +798,57 @@ export PATH
 RULES='$F_FWRULES'
 EOF
   cat >>"$tmp" <<'EOF'
-usage() { echo "用法：o-ui-firewall allow|delete <1024-65535> tcp|udp / usage: o-ui-firewall allow|delete <1024-65535> tcp|udp" >&2; exit 2; }
+usage() { echo "用法：o-ui-firewall allow|delete <1024-65535> tcp|udp；ban|unban <IP> <1024-65535> tcp|udp；flush / usage: o-ui-firewall allow|delete <1024-65535> tcp|udp; ban|unban <IP> <1024-65535> tcp|udp; flush" >&2; exit 2; }
+valid_port() {
+  case $1 in ''|*[!0-9]*|0*) return 1 ;; esac
+  [ ${#1} -le 5 ] && [ "$1" -ge 1024 ] && [ "$1" -le 65535 ]
+}
+# IP上限：在独立链o-ui-iplimit里拒绝某个源IP访问某个入站端口（挂在INPUT最前）；
+# 规则只在内存，重启后清空，由面板按记录重建；flush只清空本链，不碰其他防火墙规则。
+CHAIN=o-ui-iplimit
+if [ "${1-}" = flush ]; then
+  [ $# -eq 1 ] || usage
+  for table in iptables ip6tables; do
+    if command -v "$table" >/dev/null 2>&1; then "$table" -w -F "$CHAIN" 2>/dev/null || true; fi
+  done
+  echo "已清空IP上限封禁 / IP limit bans cleared"
+  exit 0
+fi
+if [ "${1-}" = ban ] || [ "${1-}" = unban ]; then
+  [ $# -eq 4 ] || usage
+  action=$1 ip=$2 port=$3 proto=$4
+  valid_port "$port" || usage
+  case $proto in tcp|udp) ;; *) usage ;; esac
+  case $ip in
+    *:*)
+      case $ip in *[!0-9A-Fa-f:]*) usage ;; esac
+      [ ${#ip} -le 39 ] || usage
+      table=ip6tables ;;
+    *)
+      printf '%s\n' "$ip" | awk -F. 'NF != 4 { exit 1 } { for (i = 1; i <= 4; i++) if ($i !~ /^[0-9]+$/ || length($i) > 3 || $i > 255) exit 1 }' || usage
+      table=iptables ;;
+  esac
+  command -v "$table" >/dev/null 2>&1 || { echo "未找到$table，未封禁 / $table not found; nothing changed"; exit 3; }
+  if [ "$proto" = tcp ]; then
+    set -- -s "$ip" -p tcp --dport "$port" -j REJECT --reject-with tcp-reset
+  else
+    set -- -s "$ip" -p udp --dport "$port" -j DROP
+  fi
+  if [ "$action" = ban ]; then
+    "$table" -w -N "$CHAIN" 2>/dev/null || true
+    "$table" -w -C INPUT -j "$CHAIN" 2>/dev/null || "$table" -w -I INPUT 1 -j "$CHAIN" || { echo "挂接$CHAIN失败 / failed to attach $CHAIN"; exit 1; }
+    "$table" -w -C "$CHAIN" "$@" 2>/dev/null || "$table" -w -A "$CHAIN" "$@" || { echo "封禁$ip失败 / failed to ban $ip"; exit 1; }
+    echo "已封禁 $ip → $port/$proto / banned $ip on $port/$proto"
+  else
+    while "$table" -w -D "$CHAIN" "$@" 2>/dev/null; do :; done
+    echo "已解封 $ip → $port/$proto / unbanned $ip on $port/$proto"
+  fi
+  exit 0
+fi
 [ $# -eq 3 ] || usage
 action=$1 port=$2 proto=$3
 case $action in allow|delete) ;; *) usage ;; esac
-case $port in ''|*[!0-9]*|0*) usage ;; esac
-[ ${#port} -le 5 ] && [ "$port" -ge 1024 ] && [ "$port" -le 65535 ] || usage
+valid_port "$port" || usage
 case $proto in tcp|udp) ;; *) usage ;; esac
 rule=$port/$proto
 if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -i '^status: active' >/dev/null; then
@@ -886,9 +931,10 @@ deploy_firewall_access() {
   fi
 }
 
-# 卸载时删除助手与sudoers；purge时按记录撤销o-ui加过的入站规则
+# 卸载时清空IP上限封禁并删除助手与sudoers；purge时按记录撤销o-ui加过的入站规则
 remove_firewall_access() {
   local backend rule
+  [ ! -x "$F_HELPER" ] || "$F_HELPER" flush >/dev/null 2>&1 || true
   if [ -n "${1-}" ] && [ -x "$F_HELPER" ] && [ -f "$F_FWRULES" ]; then
     while read -r backend rule; do
       case $rule in */tcp|*/udp) "$F_HELPER" delete "${rule%/*}" "${rule#*/}" || true ;; esac

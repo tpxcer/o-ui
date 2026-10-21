@@ -35,6 +35,7 @@ type definition struct{ source, level, text string }
 
 var definitions = map[string]definition{
 	"panel.started":            {"panel", "info", i18n.T("o-ui 本轮已启动；诊断仅在内存保留，仅上次退出时核心在运行才自动恢复上次应用", "o-ui started; diagnostics stay in memory only, and the last applied config auto-resumes only if the core was running at last exit")},
+	"iplimit.ban":              {"xray", "warning", i18n.T("客户端同时在线IP超过上限，新来的IP已在该入站端口封禁10分钟", "A client exceeded its IP limit; the newcomer IPs were banned on that inbound port for 10 minutes")},
 	"xray.autoresume.ok":       {"xray", "info", i18n.T("已按上次退出时运行的已应用配置自动恢复；未使用较新草稿", "Auto-resumed the configuration running at last exit; newer drafts were not used")},
 	"xray.autoresume.failed":   {"xray", "error", i18n.T("面板启动时自动恢复上次应用失败，核心保持停止；请检查后手动处理", "Auto-resume at startup failed; the core stays stopped, please check and handle it manually")},
 	"xray.preflight":           {"xray", "info", i18n.T("开始官方核心预检；不会替换当前运行配置", "Official core preflight started; the running configuration is not replaced")},

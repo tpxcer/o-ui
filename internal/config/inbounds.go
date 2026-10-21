@@ -264,9 +264,6 @@ func CompileInbounds(inbounds []Inbound, clients []Client, now time.Time) ([]Com
 		if !client.Enabled || !in.Enabled || (client.ExpiresAt != nil && !client.ExpiresAt.After(now)) || (client.QuotaBytes > 0 && client.UsedBytes >= client.QuotaBytes) {
 			continue
 		}
-		if client.IPLimit > 0 {
-			return nil, i18n.New("IP上限尚无真实执行机制，拒绝生成貌似已限制的可用配置", "IP limits are not enforced yet; refusing to generate a config that only looks limited")
-		}
 		user := User{Email: "client-" + client.ID}
 		if in.Preset == "hy2" {
 			if len(client.Auth) < 16 || len(client.Auth) > 256 || strings.ContainsFunc(client.Auth, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) {

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmod, mkdir, mkdtemp, readdir, readFile, stat, writeFile, rm } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readdir, readFile, rename, stat, writeFile, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -14,6 +14,21 @@ import { packBundle } from '../scripts/build-release.mjs';
 const installer = fileURLToPath(new URL('../install.sh', import.meta.url));
 const startScript = fileURLToPath(new URL('../scripts/start-local.sh', import.meta.url));
 const sha = (data: Buffer | string) => createHash('sha256').update(data).digest('hex');
+
+// iptables/ip6tables命令桩：链与规则按“链 参数”记在状态目录，-C按整行匹配
+const IPTABLES_STUB = `s=$FAKE_STATE; t=$(basename "$0")
+echo "$t $*" >>"$s/calls.log"
+[ "$1" = -w ] && shift
+op=$1; shift
+rules="$s/$t-rules"; touch "$rules" "$s/$t-chains"
+case $op in
+  -N) grep -qx "$1" "$s/$t-chains" && exit 1; echo "$1" >>"$s/$t-chains" ;;
+  -F) grep -qx "$1" "$s/$t-chains" || exit 1; grep -v "^$1 " "$rules" >"$rules.tmp" || true; mv "$rules.tmp" "$rules" ;;
+  -C) c=$1; shift; grep -qxF "$c $*" "$rules" ;;
+  -I) c=$1; shift; [ "$1" = 1 ] && shift; echo "$c $*" >>"$rules" ;;
+  -A) c=$1; shift; echo "$c $*" >>"$rules" ;;
+  -D) c=$1; shift; grep -qxF "$c $*" "$rules" || exit 1; grep -vxF "$c $*" "$rules" >"$rules.tmp" || true; mv "$rules.tmp" "$rules" ;;
+esac`;
 
 const stubs: Record<string, string> = {
   id: `case "$*" in '-u') echo "\${FAKE_UID:-0}" ;; '-u o-ui') [ -f "$FAKE_STATE/user" ] && echo 990 || exit 1 ;; *) exit 1 ;; esac`,
@@ -71,6 +86,8 @@ case "$*" in
   "--permanent --add-port="*) echo "\${2#--add-port=}" >>"$s/firewalld-ports" ;;
   "--permanent --remove-port="*) grep -vx "\${2#--remove-port=}" "$s/firewalld-ports" >"$s/fw.tmp" || true; mv "$s/fw.tmp" "$s/firewalld-ports" ;;
 esac`,
+  iptables: IPTABLES_STUB,
+  ip6tables: IPTABLES_STUB,
   sudo: `echo "sudo $*" >>"$FAKE_STATE/calls.log"`,
   visudo: `echo "visudo $*" >>"$FAKE_STATE/calls.log"
 [ -z "\${FAKE_VISUDO_FAIL:-}" ] && grep -qx 'o-ui ALL=(root) NOPASSWD: /usr/local/libexec/o-ui-firewall' "$2"`,
@@ -623,6 +640,34 @@ test('非root、非Linux、不支持的架构、无systemd或已安装时拒绝'
   assert.equal(box.run(['install', '--package', box.pkg], [...start(), ...acme(), 'n']).status, 0);
   const again = box.run(['install', '--package', box.pkg], ['1']);
   assert.notEqual(again.status, 0); assert.match(again.out, /已安装/);
+});
+
+test('防火墙助手IP上限：严格校验，独立链挂在INPUT最前，封禁不重复，解封与清空只动本链', async () => {
+  const box = await sandbox();
+  assert.equal(box.run(['install', '--package', box.pkg], [...start(), ...acme(), 'n']).status, 0);
+  for (const args of [['ban', '1.2.3', '50001', 'tcp'], ['ban', '1.2.3.256', '50001', 'tcp'], ['ban', '1.2.3.4;id', '50001', 'tcp'], ['ban', 'a.b.c.d', '50001', 'tcp'], ['ban', '2001:db8::g', '50001', 'tcp'], ['ban', '', '50001', 'tcp'], ['ban', '1.2.3.4/24', '50001', 'tcp'], ['ban', '1.2.3.4', '80', 'tcp'], ['ban', '1.2.3.4', '50001', 'icmp'], ['ban', '1.2.3.4', '50001'], ['unban', '1.2.3.4', '50001', 'tcp', 'x'], ['flush', 'x']]) {
+    const result = box.helper(args);
+    assert.equal(result.status, 2, args.join(' '));
+    assert.match(result.out, /ban\|unban <IP>/);
+  }
+  assert.doesNotMatch(await box.log('calls.log'), /^ip6?tables /m, '参数无效时不调用iptables');
+  assert.match(box.helper(['ban', '203.0.113.7', '50001', 'tcp']).out, /已封禁 203\.0\.113\.7 → 50001\/tcp/);
+  assert.equal(box.helper(['ban', '203.0.113.7', '50001', 'tcp']).status, 0);
+  assert.equal(await box.log('iptables-rules'), 'INPUT -j o-ui-iplimit\no-ui-iplimit -s 203.0.113.7 -p tcp --dport 50001 -j REJECT --reject-with tcp-reset\n', '重复封禁不重复加规则');
+  assert.equal(box.helper(['ban', '2001:db8::1', '50002', 'udp']).status, 0);
+  assert.equal(await box.log('ip6tables-rules'), 'INPUT -j o-ui-iplimit\no-ui-iplimit -s 2001:db8::1 -p udp --dport 50002 -j DROP\n');
+  assert.match(box.helper(['unban', '203.0.113.7', '50001', 'tcp']).out, /已解封/);
+  assert.equal(box.helper(['unban', '203.0.113.7', '50001', 'tcp']).status, 0, '重复解封无害');
+  assert.equal(await box.log('iptables-rules'), 'INPUT -j o-ui-iplimit\n');
+  assert.equal(box.helper(['flush']).status, 0);
+  assert.equal(await box.log('ip6tables-rules'), 'INPUT -j o-ui-iplimit\n', 'flush只清空本链');
+  await rename(join(box.bin, 'iptables'), join(box.bin, 'iptables.off'));
+  const missing = box.helper(['ban', '203.0.113.8', '50001', 'tcp']);
+  await rename(join(box.bin, 'iptables.off'), join(box.bin, 'iptables'));
+  assert.equal(missing.status, 3); assert.match(missing.out, /未找到iptables，未封禁/);
+  assert.equal(box.helper(['ban', '203.0.113.9', '50001', 'tcp']).status, 0);
+  assert.equal(box.run(['uninstall'], ['y', 'y', 'n']).status, 0);
+  assert.equal(await box.log('iptables-rules'), 'INPUT -j o-ui-iplimit\n', '卸载时清空IP上限封禁');
 });
 
 test('防火墙助手：严格校验参数，只撤销自己加过的规则，ufw与firewalld及无防火墙', async () => {

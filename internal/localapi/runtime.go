@@ -62,6 +62,7 @@ type Runtime struct {
 	cancel      context.CancelFunc
 	done        chan struct{}
 	monitor     *monitor.Monitor
+	iplimit     *ipLimiter
 	metrics     *engine.MetricsProbe
 	logs        *diagnostics.Log
 	panelTLS    *PanelTLS
@@ -135,6 +136,7 @@ func NewRuntime(manager *core.Manager, state *store.Store, root string, panelTLS
 	ctx, cancel := context.WithCancel(context.Background())
 	rt.cancel = cancel
 	rt.monitor = monitor.New(root)
+	rt.iplimit = newIPLimiter()
 	rt.plan = openPlanAccount(state, rt.monitor.Counters)
 	rt.public = newPublicLookup()
 	rt.metrics = engine.NewMetricsProbe(&rt.engine)
