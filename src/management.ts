@@ -30,6 +30,7 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
   let traffic: TrafficSnapshot | null = null, trafficError = '', trafficLoading = false;
   type IPLimitView = { enforced: boolean; issue: string; clients: Record<string, { online: { ip: string; lastSeen: string }[]; banned: { ip: string; until: string }[]; exempt: { ip: string; until: string }[] }> };
   let ipView: IPLimitView | null = null;
+  let subscriptionService: boolean | null = null;
   let runtime: RuntimeStatus | null = null, runtimeAt = 0;
   let region = t('未知地区', 'Unknown region');
   const viewClient = (client: Client): Client => persistent ? { ...client, usedGB: Number(usedBytes(traffic, client.id) ?? 0n) / 1e9 } : client;
@@ -345,6 +346,8 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
       state = { ...state, clients: state.clients.filter(item => item.id !== id) };
     });
   }
+  // 面板设置里关闭了订阅服务时，所有订阅链接都不返回内容；此时不再按客户端各自的选项显示“订阅开启”。
+  const subscriptionLabel = (item: Client) => persistent && subscriptionService === false ? t('订阅已停用（全局）', 'Subscriptions off (global)') : item.subscription ? t('订阅开启', 'Subscription on') : t('订阅关闭', 'Subscription off');
   // 在线IP数/上限与封禁数（真实模式点开看明细与解封）；演示数据只显示上限。
   const ipCell = (item: Client) => {
     if (!persistent) return item.ipLimit ? `${item.ipLimit} ${t('个 IP', 'IPs')}` : t('IP 不限', 'Unlimited IPs');
@@ -374,7 +377,7 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
         const percent = item.quotaGB > 0 ? Math.min(100, viewClient(item).usedGB / item.quotaGB * 100) : 0;
         return `<tr data-client-row="${esc(item.id)}"><td data-label="${t('客户端 / 入站', 'Client / inbound')}"><strong class="record-name">${esc(item.name)}</strong><small class="table-secondary">${esc(inbound.name)}</small></td>
           <td data-label="${persistent ? t('状态', 'Status') : t('演示状态', 'Demo status')}" data-client-status>${badge(persistent && status === t('可用', 'Available') ? bytes === null ? t('可用 · 用量未知', 'Available · usage unknown') : t('可用', 'Available') : status, status === t('可用', 'Available'))}</td><td data-label="${t('流量（GB）', 'Traffic (GB)')}" data-client-traffic><span>${persistent ? formatTrafficGB(bytes) : item.usedGB} / ${item.quotaGB || t('不限', 'Unlimited')}</span>${item.quotaGB && (!persistent || bytes !== null) ? `<div class="mini-meter" aria-hidden="true"><span style="width:${percent}%"></span></div>` : ''}</td>
-          <td data-label="${t('到期时间', 'Expiry')}"><span class="date-value">${chineseDate(item.expiresAt)}</span></td><td data-label="${t('IP / 订阅', 'IP / subscription')}" data-client-ip>${ipCell(item)}<small class="table-secondary">${item.subscription ? t('订阅开启', 'Subscription on') : t('订阅关闭', 'Subscription off')}</small></td><td data-label="${t('操作', 'Actions')}">${rowActions(item, 'client')}</td></tr>`;
+          <td data-label="${t('到期时间', 'Expiry')}"><span class="date-value">${chineseDate(item.expiresAt)}</span></td><td data-label="${t('IP / 订阅', 'IP / subscription')}" data-client-ip>${ipCell(item)}<small class="table-secondary">${subscriptionLabel(item)}</small></td><td data-label="${t('操作', 'Actions')}">${rowActions(item, 'client')}</td></tr>`;
       }).join('')}</tbody></table>` : `<div class="empty-state">${icon('search')}<h2>${page === 'inbounds' ? t('没有匹配的入站', 'No matching inbounds') : t('没有匹配的客户端', 'No matching clients')}</h2><p>${t('试试其他关键词或清除筛选。', 'Try other keywords or clear the filters.')}</p><button class="secondary-button" data-clear>${t('清除搜索与筛选', 'Clear search and filters')}</button></div>`;
     refreshIcons();
   }
@@ -438,7 +441,7 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
   async function refreshTraffic(): Promise<void> {
     if (trafficLoading || document.hidden || root.hidden) return;
     trafficLoading = true;
-    try { traffic = await api<TrafficSnapshot>('runtime/traffic'); trafficError = ''; if (page === 'clients') ipView = await api<IPLimitView>('runtime/iplimit').catch(() => ipView); }
+    try { traffic = await api<TrafficSnapshot>('runtime/traffic'); trafficError = ''; if (page === 'clients') { ipView = await api<IPLimitView>('runtime/iplimit').catch(() => ipView); subscriptionService = await api<{ data: { enabled: boolean } }>('panel/subscription').then(s => s.data.enabled, () => subscriptionService); } }
     catch (reason) { trafficError = (reason as Error).message; }
     finally {
       trafficLoading = false;
@@ -450,7 +453,7 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
         const bytes = usedBytes(traffic, item.id);
         row.querySelector('[data-client-traffic]')!.textContent = `${formatTrafficGB(bytes)} / ${item.quotaGB || t('不限', 'Unlimited')}`;
         const ipTarget = row.querySelector<HTMLElement>('[data-client-ip]');
-        if (ipTarget && !ipTarget.contains(document.activeElement)) ipTarget.innerHTML = `${ipCell(item)}<small class="table-secondary">${item.subscription ? t('订阅开启', 'Subscription on') : t('订阅关闭', 'Subscription off')}</small>`;
+        if (ipTarget && !ipTarget.contains(document.activeElement)) ipTarget.innerHTML = `${ipCell(item)}<small class="table-secondary">${subscriptionLabel(item)}</small>`;
         const status = clientStatus(viewClient(item), state.inbounds.find(inbound => inbound.id === item.inboundId));
         row.querySelector('[data-client-status]')!.innerHTML = badge(status === t('可用', 'Available') ? bytes === null ? t('可用 · 用量未知', 'Available · usage unknown') : t('可用', 'Available') : status, status === t('可用', 'Available'));
       });
