@@ -24,6 +24,11 @@ var runFirewall = func(ctx context.Context, action, port, protocol string) (stri
 }
 
 func firewallCommand(ctx context.Context, args ...string) (string, error) {
+	return helperCommand(ctx, firewallHelper, args...)
+}
+
+// helperCommand经sudo -n运行安装器部署的root助手。
+func helperCommand(ctx context.Context, helper string, args ...string) (string, error) {
 	sudo, err := exec.LookPath("sudo")
 	if err != nil {
 		return "", err
@@ -32,7 +37,7 @@ func firewallCommand(ctx context.Context, args ...string) (string, error) {
 	defer cancel()
 	// 只把助手的标准输出给页面；sudo的主机名解析等警告走标准错误，仅在失败时显示。
 	var output, warnings bytes.Buffer
-	command := exec.CommandContext(ctx, sudo, append([]string{"-n", firewallHelper}, args...)...)
+	command := exec.CommandContext(ctx, sudo, append([]string{"-n", helper}, args...)...)
 	command.Stdout, command.Stderr = &output, &warnings
 	err = command.Run()
 	text := strings.TrimSpace(output.String())

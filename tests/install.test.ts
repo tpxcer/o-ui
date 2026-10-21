@@ -47,7 +47,7 @@ exec "$@"`,
 echo "systemctl $*" >>"$s/calls.log"
 unit="$O_UI_ROOT_PREFIX/etc/systemd/system/o-ui.service"
 case "$1" in
-  is-active) [ -f "$s/active" ]; exit ;;
+  is-active) for u; do :; done; if [ "$u" = o-ui-update ]; then [ -f "$s/update-active" ]; else [ -f "$s/active" ]; fi; exit ;;
   is-enabled) [ -f "$s/enabled" ]; exit ;;
   enable) [ "$2" = o-ui ] && : >"$s/enabled"; exit 0 ;;
   start|restart)
@@ -90,7 +90,8 @@ esac`,
   ip6tables: IPTABLES_STUB,
   sudo: `echo "sudo $*" >>"$FAKE_STATE/calls.log"`,
   visudo: `echo "visudo $*" >>"$FAKE_STATE/calls.log"
-[ -z "\${FAKE_VISUDO_FAIL:-}" ] && grep -qx 'o-ui ALL=(root) NOPASSWD: /usr/local/libexec/o-ui-firewall' "$2"`,
+[ -z "\${FAKE_VISUDO_FAIL:-}" ] && grep -qx 'o-ui ALL=(root) NOPASSWD: /usr/local/libexec/o-ui-firewall, /usr/local/libexec/o-ui-update ""' "$2"`,
+  'systemd-run': `echo "systemd-run $*" >>"$FAKE_STATE/calls.log"`,
   curl: `out=''; url=''
 while [ $# -gt 0 ]; do case $1 in -o) out=$2; shift ;; -*) ;; *) url=$1 ;; esac; shift; done
 echo "curl $url" >>"$FAKE_STATE/calls.log"
@@ -255,7 +256,7 @@ test('全新安装：中文、随机访问路径、HTTP-01域名证书自动续�
   const helperFile = join(box.root, 'usr/local/libexec/o-ui-firewall');
   assert.equal((await stat(helperFile)).mode & 0o777, 0o755);
   assert.match(await readFile(helperFile, 'utf8'), new RegExp(`^RULES='${box.root}/var/lib/o-ui-firewall/rules'$`, 'm'));
-  assert.equal(await box.read('etc/sudoers.d/o-ui'), '# o-ui: allow the panel to run its firewall helper as root (the helper validates every argument)\no-ui ALL=(root) NOPASSWD: /usr/local/libexec/o-ui-firewall\n');
+  assert.equal(await box.read('etc/sudoers.d/o-ui'), '# o-ui: allow the panel to run its firewall helper (validates every argument) and its update helper (no arguments) as root\no-ui ALL=(root) NOPASSWD: /usr/local/libexec/o-ui-firewall, /usr/local/libexec/o-ui-update ""\n');
   assert.equal((await stat(join(box.root, 'etc/sudoers.d/o-ui'))).mode & 0o777, 0o440);
   assert.match(await box.read('etc/systemd/system/o-ui-cert-renew.timer'), /OnCalendar=\*-\*-\* 00\/6:17:00/);
   // 管理员与密码：服务用户离线写入、密码只经标准输入
@@ -652,6 +653,38 @@ test('非root、非Linux、不支持的架构、无systemd或已安装时拒绝'
   assert.equal(box.run(['install', '--package', box.pkg], [...start(), ...acme(), 'n']).status, 0);
   const again = box.run(['install', '--package', box.pkg], ['1']);
   assert.notEqual(again.status, 0); assert.match(again.out, /已安装/);
+});
+
+test('网页升级助手：不接受参数，在固定名的临时服务里运行o-ui update，记录结果，防并发，卸载时删除', async () => {
+  const box = await sandbox();
+  assert.equal(box.run(['install', '--package', box.pkg], [...start(), ...acme(), 'n']).status, 0);
+  const helper = join(box.root, 'usr/local/libexec/o-ui-update');
+  assert.equal((await stat(helper)).mode & 0o777, 0o755);
+  const update = (args: string[]) => { const child = spawnSync(helper, args, { encoding: 'utf8', env: { PATH: `${box.bin}:/usr/bin:/bin`, FAKE_STATE: box.state } }); return { status: child.status, out: child.stdout + child.stderr }; };
+  for (const args of [['latest'], ['--run', 'x'], ['2026-10-21']]) {
+    const result = update(args);
+    assert.equal(result.status, 2, args.join(' ')); assert.match(result.out, /用法：o-ui-update/);
+  }
+  const started = update([]);
+  assert.equal(started.status, 0, started.out); assert.match(started.out, /已开始升级/);
+  assert.match(await box.log('calls.log'), new RegExp(`^systemd-run --unit=o-ui-update --collect --quiet --description=o-ui web update ${helper} --run$`, 'm'));
+  await writeFile(join(box.state, 'update-active'), '');
+  const busy = update([]);
+  assert.equal(busy.status, 4); assert.match(busy.out, /升级已在进行/);
+  await rm(join(box.state, 'update-active'));
+  // 临时服务里的--run：运行已安装的o-ui update并写入结果（用命令桩代替真实升级）
+  const cmd = join(box.root, 'usr/local/bin/o-ui');
+  await writeFile(cmd, `#!/bin/sh\necho "upgrade $*"\nprintf '2026-10-21-v2\\n' >"${join(box.root, 'opt/o-ui/VERSION')}"\nexit "\${FAKE_UPDATE_RC:-0}"\n`, { mode: 0o755 });
+  assert.equal(update(['--run']).status, 0);
+  const done = JSON.parse(await box.read('var/lib/o-ui-update/status.json'));
+  assert.equal(done.state, 'done'); assert.equal(done.from, 'v0.1.0'); assert.equal(done.to, '2026-10-21-v2'); assert.equal(done.code, 0);
+  assert.equal(await box.read('var/lib/o-ui-update/output.log'), 'upgrade update\n');
+  const failedRun = spawnSync(helper, ['--run'], { encoding: 'utf8', env: { PATH: `${box.bin}:/usr/bin:/bin`, FAKE_STATE: box.state, FAKE_UPDATE_RC: '3' } });
+  assert.equal(failedRun.status, 3);
+  const failed = JSON.parse(await box.read('var/lib/o-ui-update/status.json'));
+  assert.equal(failed.state, 'failed'); assert.equal(failed.code, 3);
+  assert.equal(box.run(['uninstall'], ['y', 'y', 'n'], { USE_SOURCE: '1' }).status, 0);
+  assert.equal(existsSync(helper), false); assert.equal(existsSync(join(box.root, 'var/lib/o-ui-update')), false);
 });
 
 test('防火墙助手IP上限：严格校验，独立链挂在INPUT最前，封禁不重复，解封与清空只动本链', async () => {

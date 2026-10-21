@@ -23,6 +23,8 @@ P_ACME=$P_ETC/acme
 P_CMD=/usr/local/bin/o-ui
 P_HELPER=/usr/local/libexec/o-ui-firewall
 P_FWRULES=/var/lib/o-ui-firewall/rules
+P_UPDATE=/usr/local/libexec/o-ui-update
+P_UPDATESTATE=/var/lib/o-ui-update
 F_INSTALL=$R$P_INSTALL
 F_DATA=$R$P_DATA
 F_ETC=$R$P_ETC
@@ -31,6 +33,8 @@ F_ACME=$R$P_ACME
 F_CMD=$R$P_CMD
 F_HELPER=$R$P_HELPER
 F_FWRULES=$R$P_FWRULES
+F_UPDATE=$R$P_UPDATE
+F_UPDATESTATE=$R$P_UPDATESTATE
 F_SUDOERS=$R/etc/sudoers.d/o-ui
 F_CONF=$F_ETC/o-ui.conf
 F_UNITS=$R/etc/systemd/system
@@ -781,6 +785,53 @@ fw_remove() {
   OUI_FW=
 }
 
+# ---------- 网页升级助手（root拥有，面板经sudo调用，不接受参数） ----------
+
+# 参照OUI的网页更新：在独立的systemd临时服务o-ui-update里运行已安装的“o-ui update”（升级到GitHub最新正式版），
+# 面板停止重启时不受影响；固定服务名防止并发；结果写入root拥有的状态目录，面板只读。
+write_update_helper() {
+  local path=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin tmp
+  [ -z "$R" ] || path=$PATH
+  mkdir -p "$(dirname "$F_UPDATE")"
+  tmp=$F_UPDATE.tmp
+  cat >"$tmp" <<EOF
+#!/bin/sh
+# o-ui网页升级助手：只供o-ui服务经sudo无参数调用，升级到GitHub最新正式版；下载、摘要校验与失败回退由o-ui update完成。
+set -eu
+PATH='$path'
+export PATH
+SELF='$F_UPDATE'
+CMD='$F_CMD'
+STATE='$F_UPDATESTATE'
+VERSION_FILE='$F_INSTALL/VERSION'
+EOF
+  cat >>"$tmp" <<'EOF'
+usage() { echo "用法：o-ui-update（升级到GitHub最新正式版，不接受参数） / usage: o-ui-update (upgrade to the latest GitHub release; no arguments)" >&2; exit 2; }
+status() { umask 022; mkdir -p "$STATE"; printf '%s
+' "$1" >"$STATE/status.json.tmp"; mv "$STATE/status.json.tmp" "$STATE/status.json"; }
+if [ "${1-}" = --run ]; then
+  [ $# -eq 1 ] || usage
+  from=$(tr -cd 'A-Za-z0-9.-' <"$VERSION_FILE" 2>/dev/null || true)
+  status "{\"state\":\"running\",\"from\":\"$from\",\"to\":\"\",\"code\":0,\"at\":$(date +%s)}"
+  code=0
+  "$CMD" update </dev/null >"$STATE/output.log" 2>&1 || code=$?
+  to=$(tr -cd 'A-Za-z0-9.-' <"$VERSION_FILE" 2>/dev/null || true)
+  state=done
+  [ "$code" -eq 0 ] || state=failed
+  status "{\"state\":\"$state\",\"from\":\"$from\",\"to\":\"$to\",\"code\":$code,\"at\":$(date +%s)}"
+  exit "$code"
+fi
+[ $# -eq 0 ] || usage
+command -v systemd-run >/dev/null 2>&1 || { echo "需要systemd-run，请在服务器上运行 o-ui update / systemd-run is required; run o-ui update on the server"; exit 3; }
+if systemctl is-active --quiet o-ui-update 2>/dev/null; then echo "升级已在进行 / an update is already running"; exit 4; fi
+systemd-run --unit=o-ui-update --collect --quiet --description='o-ui web update' "$SELF" --run
+echo "已开始升级 / update started"
+EOF
+  chown root:root "$tmp"
+  chmod 0755 "$tmp"
+  mv "$tmp" "$F_UPDATE"
+}
+
 # ---------- 入站端口防火墙助手（root拥有，面板经sudo调用） ----------
 
 write_firewall_helper() {
@@ -912,6 +963,7 @@ EOF
 deploy_firewall_access() {
   local tmp
   write_firewall_helper
+  write_update_helper
   if ! command -v sudo >/dev/null 2>&1 || ! command -v visudo >/dev/null 2>&1; then
     if [ "${1-}" != ask ] || ! ask_yes "未找到sudo；面板创建入站时要用它放行防火墙端口。是否用系统包管理器安装sudo？" "sudo was not found; the panel uses it to open firewall ports for new inbounds. Install sudo with the system package manager?" y || ! pkg_install sudo || ! command -v visudo >/dev/null 2>&1; then
       warn "未安装sudo：面板创建或删除入站时不能自动放行或撤销防火墙端口，请手动处理" "sudo is not installed: the panel cannot open or close firewall ports for inbounds; manage them manually"
@@ -920,7 +972,7 @@ deploy_firewall_access() {
   fi
   mkdir -p "$(dirname "$F_SUDOERS")"
   tmp=$(mktemp "$(dirname "$F_SUDOERS")/.o-ui.XXXXXX")
-  printf '%s\n' '# o-ui: allow the panel to run its firewall helper as root (the helper validates every argument)' "$SERVICE_USER ALL=(root) NOPASSWD: $P_HELPER" >"$tmp"
+  printf '%s\n' '# o-ui: allow the panel to run its firewall helper (validates every argument) and its update helper (no arguments) as root' "$SERVICE_USER ALL=(root) NOPASSWD: $P_HELPER, $P_UPDATE \"\"" >"$tmp"
   chown root:root "$tmp"
   chmod 0440 "$tmp"
   if visudo -cf "$tmp" >/dev/null 2>&1; then
@@ -941,7 +993,8 @@ remove_firewall_access() {
     done <"$F_FWRULES"
     rm -rf "$(dirname "$F_FWRULES")"
   fi
-  rm -f "$F_SUDOERS" "$F_HELPER"
+  rm -f "$F_SUDOERS" "$F_HELPER" "$F_UPDATE"
+  rm -rf "$F_UPDATESTATE"
 }
 
 # ---------- 命令 ----------

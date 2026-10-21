@@ -70,11 +70,40 @@ type panelUpdates struct {
 const updateCheckCache = time.Minute
 
 type panelVersion struct {
-	Current         string `json:"current"`
-	Latest          string `json:"latest,omitempty"`
-	URL             string `json:"url,omitempty"`
-	UpdateAvailable bool   `json:"updateAvailable"`
-	Issue           string `json:"issue,omitempty"`
+	Current         string         `json:"current"`
+	Latest          string         `json:"latest,omitempty"`
+	URL             string         `json:"url,omitempty"`
+	UpdateAvailable bool           `json:"updateAvailable"`
+	Issue           string         `json:"issue,omitempty"`
+	CanUpgrade      bool           `json:"canUpgrade"`
+	Update          *upgradeStatus `json:"update,omitempty"`
+}
+
+// 网页升级（参照OUI）：经sudo无参数调用root升级助手，由它在独立的systemd临时服务里运行“o-ui update”
+// （升级到GitHub最新正式版，下载校验与失败回退同命令行），面板停止重启时不受影响；结果写在root拥有的状态文件里。
+const upgradeHelper = "/usr/local/libexec/o-ui-update"
+
+var (
+	upgradeStatusFile = "/var/lib/o-ui-update/status.json"
+	upgradeReady      = func() bool { _, err := os.Stat(upgradeHelper); return err == nil }
+	runUpgrade        = func(ctx context.Context) (string, error) { return helperCommand(ctx, upgradeHelper) }
+)
+
+type upgradeStatus struct {
+	State string `json:"state"`
+	From  string `json:"from"`
+	To    string `json:"to"`
+	Code  int    `json:"code"`
+	At    int64  `json:"at"`
+}
+
+func readUpgradeStatus() *upgradeStatus {
+	data, err := os.ReadFile(upgradeStatusFile)
+	var status upgradeStatus
+	if err != nil || len(data) > 4096 || json.Unmarshal(data, &status) != nil || (status.State != "running" && status.State != "done" && status.State != "failed") {
+		return nil
+	}
+	return &status
 }
 
 // 版本来自Release包根目录VERSION（bin/o-ui的上级目录）；开发运行时为dev。
@@ -159,8 +188,48 @@ func (p *panelUpdates) get(ctx context.Context, check bool) panelVersion {
 }
 
 func registerPanelVersion(mux *http.ServeMux) {
-	updates := &panelUpdates{current: installedVersion(), fetch: fetchLatestRelease}
+	registerPanelUpdates(mux, &panelUpdates{current: installedVersion(), fetch: fetchLatestRelease})
+}
+
+func registerPanelUpdates(mux *http.ServeMux, updates *panelUpdates) {
 	mux.HandleFunc("GET /api/panel/version", func(w http.ResponseWriter, r *http.Request) {
-		respond(w, 200, updates.get(r.Context(), r.URL.Query().Get("check") == "1"))
+		v := updates.get(r.Context(), r.URL.Query().Get("check") == "1")
+		v.CanUpgrade, v.Update = upgradeReady(), readUpgradeStatus()
+		respond(w, 200, v)
+	})
+	// 立即升级：重新向GitHub确认最新正式版确实更新，再启动升级助手；升级期间面板与代理会短暂中断。
+	mux.HandleFunc("POST /api/panel/update", func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Confirm bool `json:"confirm"`
+		}
+		if !readJSON(w, r, &request, 1024) {
+			return
+		}
+		if !request.Confirm {
+			respond(w, 400, map[string]string{"error": i18n.T("请确认升级", "Confirm the update")})
+			return
+		}
+		if !upgradeReady() {
+			respond(w, 409, map[string]string{"error": i18n.T("服务器上还没有网页升级助手，请先在服务器上运行一次 o-ui update", "The web update helper is not installed yet; run o-ui update on the server once")})
+			return
+		}
+		latest, url, err := updates.fetch(r.Context())
+		if err != nil {
+			respond(w, 502, map[string]string{"error": i18n.T("无法连接 GitHub 检查更新", "Cannot reach GitHub to check for updates")})
+			return
+		}
+		updates.mu.Lock()
+		updates.latest, updates.url, updates.issue, updates.checked = latest, url, "", time.Now()
+		current := updates.current
+		updates.mu.Unlock()
+		if !newerVersion(latest, current) {
+			respond(w, 409, map[string]string{"error": i18n.Errorf("当前已是最新版本 %s", "Already on the latest version %s", current).Error()})
+			return
+		}
+		if output, err := runUpgrade(r.Context()); err != nil {
+			respond(w, 502, map[string]string{"error": i18n.Errorf("启动升级失败：%s", "Failed to start the update: %s", output).Error()})
+			return
+		}
+		respond(w, 202, map[string]string{"target": latest, "current": current})
 	})
 }

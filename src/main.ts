@@ -128,9 +128,9 @@ app.innerHTML = `
     <div id="core-view" hidden></div>
     <div id="panel-view" hidden></div>
   </main>
-  <dialog id="detail-dialog" aria-labelledby="dialog-title" aria-describedby="dialog-description"><div class="dialog-heading"><h2 id="dialog-title"></h2><button class="icon-button" id="close-dialog" aria-label="${t('关闭弹窗', 'Close dialog')}">${icon('x')}</button></div><div class="dialog-body"><p id="dialog-description"></p></div><footer><button class="primary-button" id="confirm-dialog">${t('知道了', 'OK')}</button></footer></dialog>
+  <dialog id="detail-dialog" aria-labelledby="dialog-title" aria-describedby="dialog-description"><div class="dialog-heading"><h2 id="dialog-title"></h2><button class="icon-button" id="close-dialog" aria-label="${t('关闭弹窗', 'Close dialog')}">${icon('x')}</button></div><div class="dialog-body"><p id="dialog-description"></p></div><footer><button class="secondary-button" id="dialog-action" hidden></button><button class="primary-button" id="confirm-dialog">${t('知道了', 'OK')}</button></footer></dialog>
 `;
-type PanelVersion = { current: string; latest?: string; url?: string; updateAvailable: boolean; issue?: string };
+type PanelVersion = { current: string; latest?: string; url?: string; updateAvailable: boolean; issue?: string; canUpgrade?: boolean; update?: { state: string; from: string; to: string; code: number; at: number } };
 if (authenticated) {
   document.querySelector('.demo-label')!.remove();
   document.querySelector('.demo-notice')!.remove();
@@ -240,12 +240,45 @@ const descriptions: Record<string, [string, string]> = {
 };
 async function checkUpdate(): Promise<void> {
   showDetail(t('检测更新', 'Check for updates'), t('正在检查 GitHub 最新版本…', 'Checking GitHub for the latest release…'));
-  let text: string;
+  let text: string, upgrade = '';
   try {
     const v = await api<PanelVersion>('panel/version?check=1');
-    text = v.issue ? v.issue : v.updateAvailable ? `${t('发现新版本 ', 'New version ')}${v.latest}${t('（当前 ', ' is available (current ')}${v.current}${t('）。在服务器上运行 o-ui update 升级，数据和配置会保留。', '). Run o-ui update on the server to upgrade; data and settings are kept.')}` : `${t('已是最新版本 ', 'You are on the latest version ')}${v.current}${t('。', '.')}`;
+    if (v.issue) text = v.issue;
+    else if (v.updateAvailable) {
+      text = `${t('发现新版本 ', 'New version ')}${v.latest}${t('（当前 ', ' is available (current ')}${v.current}${t('）。', '). ')}${v.canUpgrade ? t('点“立即升级”在线升级，数据和配置会保留，失败会自动回退。', 'Click Update now to upgrade online; data and settings are kept, and a failed update rolls back.') : t('请在服务器上运行一次 o-ui update 升级（之后即可在网页上一键升级），数据和配置会保留。', 'Run o-ui update on the server once (after that you can update from the web); data and settings are kept.')}`;
+      if (v.canUpgrade) upgrade = v.latest ?? '';
+    } else text = `${t('已是最新版本 ', 'You are on the latest version ')}${v.current}${t('。', '.')}`;
   } catch (reason) { text = (reason as Error).message; }
-  if (dialog.open) document.querySelector('#dialog-description')!.textContent = text;
+  if (!dialog.open) return;
+  document.querySelector('#dialog-description')!.textContent = text;
+  if (upgrade) {
+    const action = document.querySelector<HTMLButtonElement>('#dialog-action')!;
+    action.textContent = t('立即升级', 'Update now'); action.hidden = false; action.disabled = false;
+    action.onclick = () => { void startUpgrade(upgrade); };
+  }
+}
+// 参照OUI的网页更新：服务器在独立的临时服务里升级，面板会重启；页面轮询版本号直到换成新版本。
+async function startUpgrade(target: string): Promise<void> {
+  if (!window.confirm(`${t('升级到 ', 'Update to ')}${target}${t('？升级期间面板与代理会中断约半分钟，数据和配置会保留，失败会自动回退到当前版本。', '? The panel and proxies stop for about half a minute; data and settings are kept, and a failed update rolls back to the current version.')}`)) return;
+  const action = document.querySelector<HTMLButtonElement>('#dialog-action')!, description = document.querySelector('#dialog-description')!;
+  action.disabled = true;
+  description.textContent = t('正在启动升级…', 'Starting the update…');
+  const since = Math.floor(Date.now() / 1000) - 5;
+  try { await api('panel/update', jsonBody('POST', { confirm: true })); }
+  catch (reason) { description.textContent = (reason as Error).message; action.disabled = false; return; }
+  action.hidden = true;
+  description.textContent = `${t('正在升级到 ', 'Updating to ')}${target}${t('，面板会重启，约需 1 分钟，请勿关闭页面…', '; the panel will restart, which takes about a minute. Keep this page open…')}`;
+  const started = Date.now();
+  const poll = async (): Promise<void> => {
+    try {
+      const v = await api<PanelVersion>('panel/version');
+      if (v.current === target) { description.textContent = `${t('已升级到 ', 'Updated to ')}${target}${t('，正在刷新页面…', '; reloading…')}`; setTimeout(() => location.reload(), 1500); return; }
+      if (v.update && v.update.state === 'failed' && v.update.at >= since) { description.textContent = `${t('升级失败（代码 ', 'The update failed (code ')}${v.update.code}${t('），仍在使用 ', '); still on ')}${v.current}${t('。请在服务器上查看 /var/lib/o-ui-update/output.log，或运行 o-ui update。', '. Check /var/lib/o-ui-update/output.log on the server, or run o-ui update.')}`; return; }
+    } catch { /* 面板重启期间暂时不可达 */ }
+    if (Date.now() - started < 5 * 60_000) setTimeout(() => { void poll(); }, 3000);
+    else description.textContent = t('5 分钟内没有完成升级。请在服务器上查看 /var/lib/o-ui-update/output.log，或运行 o-ui update。', 'The update did not finish within 5 minutes. Check /var/lib/o-ui-update/output.log on the server, or run o-ui update.');
+  };
+  setTimeout(() => { void poll(); }, 3000);
 }
 async function quickRuntime(action: 'restart' | 'stop'): Promise<void> {
   const stop = action === 'stop';
@@ -262,6 +295,8 @@ async function quickRuntime(action: 'restart' | 'stop'): Promise<void> {
 let detailReturnFocus: HTMLElement | null = null;
 function showDetail(title: string, description: string): void {
   detailReturnFocus = document.activeElement as HTMLElement;
+  const action = document.querySelector<HTMLButtonElement>('#dialog-action');
+  if (action) { action.hidden = true; action.onclick = null; }
   document.querySelector('#dialog-title')!.textContent = title;
   document.querySelector('#dialog-description')!.textContent = description;
   dialog.showModal();
