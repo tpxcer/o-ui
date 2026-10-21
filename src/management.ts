@@ -114,7 +114,7 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
     return { name: String(data.get('name') ?? ''), quotaGB: Number(data.get('quotaGB')), ipLimit: Number(data.get('ipLimit')), subscription: data.has('subscription'), expiresAt, reverseTag: String(data.get('reverseTag') ?? '').trim() || undefined };
   };
   const refreshField = (label: string, name: string, value: string, action: string, title: string, attrs = '') => `<div class="form-field"><label for="connection-${name}">${label}</label><div class="input-action"><input id="connection-${name}" name="${name}" value="${esc(value)}" maxlength="4096" autocomplete="off" ${attrs}><button type="button" class="icon-button" data-connection="${action}" title="${title}" aria-label="${title}">${icon('refresh-cw')}</button></div></div>`;
-  const endpointFields = (inbound?: Inbound) => `<fieldset class="sniffing-field"><legend>${t('代理监听与分享地址', 'Proxy listen and share address')}</legend>${input(t('代理监听 IP', 'Proxy listen IP'), 'listen', inbound ? inbound.listen || '127.0.0.1' : '0.0.0.0', 'required maxlength="45" list="proxy-listens" autocomplete="off"', t('0.0.0.0 监听所有地址，客户端可从外网连接；127.0.0.1 仅本机可用。只影响代理入站，不影响管理面板。', '0.0.0.0 listens on all addresses so clients can connect from outside; 127.0.0.1 is local only. Affects proxy inbounds only, not the panel.'))}<datalist id="proxy-listens"><option value="127.0.0.1"></option><option value="::1"></option><option value="0.0.0.0"></option><option value="::"></option></datalist>${input(t('分享主机（域名或 IP）', 'Share host (domain or IP)'), 'shareHost', inbound?.shareHost || '', 'maxlength="253" autocomplete="off"', t('写入节点链接的服务器地址；新建时自动填入本机公网 IP，有域名可改为域名。不含协议、端口或路径。', 'Server address written into node links; new inbounds get the public IP automatically, or enter your domain. No scheme, port or path.'))}<p class="form-hint">${t('端口范围 1024–65535；服务器开了防火墙时请放行该端口。', 'Ports 1024–65535; if the server has a firewall, allow this port.')}</p></fieldset>`;
+  const endpointFields = (inbound?: Inbound) => `<fieldset class="sniffing-field"><legend>${t('代理监听与分享地址', 'Proxy listen and share address')}</legend>${input(t('代理监听 IP', 'Proxy listen IP'), 'listen', inbound ? inbound.listen || '127.0.0.1' : '0.0.0.0', 'required maxlength="45" list="proxy-listens" autocomplete="off"', t('0.0.0.0 监听所有地址，客户端可从外网连接；127.0.0.1 仅本机可用。只影响代理入站，不影响管理面板。', '0.0.0.0 listens on all addresses so clients can connect from outside; 127.0.0.1 is local only. Affects proxy inbounds only, not the panel.'))}<datalist id="proxy-listens"><option value="127.0.0.1"></option><option value="::1"></option><option value="0.0.0.0"></option><option value="::"></option></datalist>${input(t('分享主机（域名或 IP）', 'Share host (domain or IP)'), 'shareHost', inbound?.shareHost || '', 'maxlength="253" autocomplete="off"', t('写入节点链接的服务器地址；新建时优先填入面板证书里的域名，没有证书才填本机公网 IP。域名须直接解析到本机（不能开 CDN 代理）。不含协议、端口或路径。', 'Server address written into node links; new inbounds get the domain from the panel certificate, or the public IP when there is no certificate. The domain must resolve directly to this server (no CDN proxy). No scheme, port or path.'))}<p class="form-hint">${t('端口范围 1024–65535；服务器开了防火墙时请放行该端口。', 'Ports 1024–65535; if the server has a firewall, allow this port.')}</p></fieldset>`;
   const connectionFields = (preset: Preset, connection: Connection = preset === 'hy2' || preset === 'xhttp-tls' ? { ...defaultConnection(), usePanelCertificate: true } : newRealityConnection()) => `<fieldset class="sniffing-field"><legend>${t('连接参数', 'Connection parameters')}</legend><p class="form-hint">${t('UUID／认证值由服务端首次预检生成并保存。REALITY 必须使用公私钥：私钥保留服务端，客户端公钥随连接信息自动提供，无需手填；刷新目标不会更换密钥。', 'The UUID/auth value is generated and saved at the first server preflight. REALITY uses a key pair: the private key stays on the server and the public key is included in the connection info automatically. Changing the target does not change the keys.')}</p>
     ${preset === 'hy2' || preset === 'xhttp-tls' ? check(t('自动复用已生效的面板 HTTPS 证书', 'Reuse the active panel HTTPS certificate'), 'usePanelCertificate', !!connection.usePanelCertificate) + t('<p class="form-hint" data-panel-cert-status role="status">正在读取面板证书状态…</p>', '<p class="form-hint" data-panel-cert-status role="status">Reading panel certificate status…</p>') + `<div data-manual-cert ${connection.usePanelCertificate ? 'hidden' : ''}>` + input(t('证书绝对路径', 'Certificate absolute path'), 'certificateFile', connection.certificateFile, 'maxlength="4096" autocomplete="off"', t('读取本机PEM证书，不上传到远端。', 'Reads a local PEM certificate; nothing is uploaded.')) + input(t('私钥绝对路径', 'Private key absolute path'), 'keyFile', connection.keyFile, 'maxlength="4096" autocomplete="off"') + '</div>' + input(t('TLS 服务域名（SNI）', 'TLS server name (SNI)'), 'serverName', connection.serverName, 'maxlength="253" autocomplete="off"', t('复用时自动填写证书首个域名，可手动修改但必须匹配证书。', 'When reusing, the first certificate domain is filled in; you can change it, but it must match the certificate.')) : refreshField(t('REALITY 目标', 'REALITY target'), 'target', connection.target, 'target', t('换一个预设目标并同步 SNI', 'Pick another preset target and sync SNI'), t('placeholder="域名:443" list="reality-targets"', 'placeholder="domain:443" list="reality-targets"')) + `<datalist id="reality-targets">${realityTargets.map(host => `<option value="${host}:443"></option>`).join('')}</datalist>` + refreshField(t('REALITY 服务域名（SNI）', 'REALITY server name (SNI)'), 'serverName', connection.serverName, 'sni', t('从目标地址填入 SNI', 'Fill SNI from the target')) + t('<p class="form-hint">AMD、Microsoft、Apple、Amazon、特斯拉仅为常用填写候选，可手动修改；未探测外站，不保证在每台服务器可用。</p><p class="form-hint" data-connection-notice role="status"></p>', '<p class="form-hint">AMD, Microsoft, Apple, Amazon and Tesla are only common suggestions and can be changed; external sites are not probed and may not work from every server.</p><p class="form-hint" data-connection-notice role="status"></p>')}
     ${preset === 'reality' || preset === 'xhttp-reality' ? check(t('Mihomo 兼容模式（降低最低客户端版本）', 'Mihomo compatibility (lower minimum client version)'), 'mihomoCompatibility', !!connection.mihomoCompatibility) + t('<p class="form-hint" id="mihomo-compatibility-hint">默认关闭，保留官方客户端限制。开启后最低版本设为 1.8.2；Xray 官方警告此举可能增加被识别、封锁的风险。只保存草稿，应用后才生效。</p>', '<p class="form-hint" id="mihomo-compatibility-hint">Off by default, keeping the official client limit. When on, the minimum version is 1.8.2; Xray warns this may increase the risk of detection and blocking. Saved as a draft; takes effect after applying.</p>') : ''}
@@ -145,6 +145,8 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
     });
     void updatePanelCertificate(form);
   }
+  // 分享主机优先用面板证书里的具体域名（用户2026-10-21决定），没有证书才用公网IP。
+  const certificateDomain = (status: PanelTLSStatus | null) => status?.active ? status.serverNames.find(name => !name.includes('*')) ?? '' : '';
   async function updatePanelCertificate(form: HTMLFormElement): Promise<void> {
     const label = form.querySelector<HTMLElement>('[data-panel-cert-status]'); if (!label) return;
     try {
@@ -187,12 +189,12 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
       const [free, info, cert] = await Promise.all([
         api<{ port: number }>(`system/free-port?transport=${proto}`),
         api<PublicInfo>('system/public').catch(() => null),
-        tls ? api<PanelTLSStatus>('panel/tls') : Promise.resolve(null),
+        api<PanelTLSStatus>('panel/tls').catch(() => null),
       ]);
-      const domain = cert?.serverNames.find(name => !name.includes('*'));
-      if (tls && (!cert?.active || !domain)) throw new Error(t('Hysteria2 和 XHTTP TLS 需要面板证书，请先在“面板设置”配置证书，或用“添加入站”手动填写证书路径。', 'Hysteria2 and XHTTP TLS need the panel certificate; configure it in Panel settings first, or use Add inbound to enter certificate paths.'));
-      const shareHost = tls ? domain! : info?.ipv4?.ip || info?.ipv6?.ip || '';
-      if (!shareHost) throw new Error(t('未查询到服务器公网 IP，请用“添加入站”手动填写分享主机。', 'The public IP is unknown; use Add inbound and enter the share host manually.'));
+      const domain = certificateDomain(cert);
+      if (tls && !domain) throw new Error(t('Hysteria2 和 XHTTP TLS 需要面板证书，请先在“面板设置”配置证书，或用“添加入站”手动填写证书路径。', 'Hysteria2 and XHTTP TLS need the panel certificate; configure it in Panel settings first, or use Add inbound to enter certificate paths.'));
+      const shareHost = domain || info?.ipv4?.ip || info?.ipv6?.ip || '';
+      if (!shareHost) throw new Error(t('面板没有证书域名，也未查询到服务器公网 IP，请用“添加入站”手动填写分享主机。', 'There is no certificate domain and the public IP is unknown; use Add inbound and enter the share host manually.'));
       const client = { name: randomName(), quotaGB: 0, ipLimit: 0, expiresAt: null, subscription: true };
       state = createQuick(state, { ...client, preset, port: free.port, sniffing: defaultSniffing() }, crypto.randomUUID());
       const inbound = state.inbounds.at(-1)!;
@@ -227,11 +229,11 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
     const nameInput = form.elements.namedItem('name') as HTMLInputElement;
     const preview = () => { form.querySelector('#inbound-name-preview')!.textContent = persistent ? `${region}-${presets[preset].label}-${nameInput.value}` : inboundName(preset, nameInput.value); };
     nameInput.addEventListener('input', preview);
-    if (persistent) void api<PublicInfo>('system/public').then(info => {
-      region = regionLabel(info); if (form.isConnected) preview();
-      const share = form.querySelector<HTMLInputElement>('[name="shareHost"]'), ip = info.ipv4?.ip || info.ipv6?.ip;
-      if (share && !share.value && ip) share.value = ip;
-    }).catch(() => {});
+    if (persistent) void Promise.all([api<PublicInfo>('system/public').catch(() => null), api<PanelTLSStatus>('panel/tls').catch(() => null)]).then(([info, cert]) => {
+      if (info) { region = regionLabel(info); if (form.isConnected) preview(); }
+      const share = form.querySelector<HTMLInputElement>('[name="shareHost"]'), host = certificateDomain(cert) || info?.ipv4?.ip || info?.ipv6?.ip;
+      if (share && !share.value && host) share.value = host;
+    });
     form.querySelector('#random-name')!.addEventListener('click', () => { nameInput.value = randomName(); preview(); });
     form.querySelectorAll<HTMLInputElement>('[name="preset"]').forEach(radio => radio.addEventListener('change', () => {
       if (persistent) connections[preset] = readConnection(form);
