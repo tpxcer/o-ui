@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { bytes, duration, fresh, networkPath, coreReadings, type CoreMetrics } from '../src/monitor-model.ts';
+import { bytes, duration, fresh, networkArea, networkPath, coreReadings, type CoreMetrics } from '../src/monitor-model.ts';
 
 test('核心指标区分真实零、不可用、停止和过期，不冒充设备数', () => {
   const now = Date.now();
@@ -39,4 +39,17 @@ test('网速图按时间坐标、不复制点、缺样本和长间隔断线', ()
   assert.equal(networkPath([point(-8000,0),point(0,50)], 'upload', 100, end), 'M860.00,170.00 M900.00,85.00');
   assert.equal(networkPath([point(-181000,100)], 'upload', 100, end), '');
   assert.equal(networkPath([point(0,NaN)], 'upload', 100, end), '');
+});
+test('网速曲线平滑但不越界：单调三次曲线的控制点不超出相邻样本高低，面积闭合到底边', () => {
+  const end = Date.parse('2026-10-18T10:00:00Z');
+  const point = (offset:number, value:number|null) => ({at:new Date(end+offset).toISOString(),upload:value,download:value});
+  const samples = [point(-8000,0), point(-6000,0), point(-4000,100), point(-2000,0), point(0,50)];
+  const path = networkPath(samples, 'upload', 100, end);
+  assert.match(path, /^M860\.00,170\.00 C/);
+  assert.equal(path.split(' C').length, 5, '四段曲线，不断线');
+  const ys = [...path.matchAll(/,(-?[\d.]+)/g)].map(m => Number(m[1]));
+  assert.ok(ys.every(y => y >= 0 && y <= 170), `控制点越界：${ys}`);
+  assert.match(path, /C[\d.]+,170\.00 [\d.]+,170\.00 870\.00,170\.00/, '平坦的零速度段保持贴底');
+  assert.equal(networkArea([point(0,50)], 'upload', 100, end), '', '单个样本没有面积');
+  assert.match(networkArea(samples, 'upload', 100, end), / L900\.00,170 L860\.00,170 Z$/);
 });

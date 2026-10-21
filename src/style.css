@@ -121,7 +121,7 @@ main { margin-left: var(--sidebar-width); padding: 20px 28px 40px; outline: none
 .axis-labels { flex: 0 0 69px; display: flex; flex-direction: column; justify-content: space-between; padding-bottom: 31px; font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .traffic-chart > svg { flex: 1; width: 0; height: 100%; overflow: visible; }
 .grid-line { stroke: var(--border); stroke-dasharray: 2 4; vector-effect: non-scaling-stroke; }
-.chart-line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.chart-line { fill: none; stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
 .resources { border-left: 1px solid var(--border); padding: 18px 20px; display: grid; align-content: space-between; gap: 16px; }
 .resource { min-width: 0; }
 .resource-top { display: flex; align-items: flex-end; gap: 12px; margin-bottom: 6px; }

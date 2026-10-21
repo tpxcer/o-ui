@@ -45,16 +45,43 @@ export function fresh(at: string, now = Date.now()): boolean {
 }
 
 // 横坐标按真实时间展开；缺失/乱序/长间隔只断线，不补零或拉伸样本。
-export function networkPath(points: NetworkPoint[], direction: 'upload' | 'download', max: number, end: number): string {
-  if (!Number.isFinite(end) || !Number.isFinite(max) || max <= 0) return '';
-  const start = end - 180000;
+export function networkSegments(points: NetworkPoint[], direction: 'upload' | 'download', max: number, end: number): [number, number][][] {
+  if (!Number.isFinite(end) || !Number.isFinite(max) || max <= 0) return [];
+  const start = end - 180000, segments: [number, number][][] = [];
   let previous: number | null = null;
-  return points.map(point => {
+  for (const point of points) {
     const at = Date.parse(point.at), value = point[direction];
-    if (!Number.isFinite(at) || at < start || at > end || value === null || !Number.isFinite(value) || value < 0) { previous = null; return ''; }
-    const connected = previous !== null && at > previous && at - previous <= 6000;
-    const command = `${connected ? 'L' : 'M'}${((at - start) / 180000 * 900).toFixed(2)},${(170 - Math.min(value / max, 1) * 170).toFixed(2)}`;
+    if (!Number.isFinite(at) || at < start || at > end || value === null || !Number.isFinite(value) || value < 0) { previous = null; continue; }
+    if (previous === null || at <= previous || at - previous > 6000) segments.push([]);
+    segments[segments.length - 1].push([(at - start) / 180000 * 900, 170 - Math.min(value / max, 1) * 170]);
     previous = at;
-    return command;
-  }).filter(Boolean).join(' ');
+  }
+  return segments;
+}
+
+// 三个及以上相连样本用单调三次曲线（同d3 curveMonotoneX）：线条平滑，但不会越过相邻样本的高低，不画出虚高峰值或负速度。
+function smooth(segment: [number, number][]): string {
+  const f = (n: number) => n.toFixed(2), [x0, y0] = segment[0];
+  if (segment.length < 3) return `M${f(x0)},${f(y0)}${segment.length === 2 ? ` L${f(segment[1][0])},${f(segment[1][1])}` : ''}`;
+  const slopes = segment.slice(1).map(([x, y], i) => (y - segment[i][1]) / (x - segment[i][0]));
+  const tangents = segment.map((_, i) => {
+    if (i === 0) return slopes[0];
+    if (i === segment.length - 1) return slopes[i - 1];
+    const [s0, s1] = [slopes[i - 1], slopes[i]], h0 = segment[i][0] - segment[i - 1][0], h1 = segment[i + 1][0] - segment[i][0];
+    return (Math.sign(s0) + Math.sign(s1)) * Math.min(Math.abs(s0), Math.abs(s1), .5 * Math.abs((s0 * h1 + s1 * h0) / (h0 + h1))) || 0;
+  });
+  return `M${f(x0)},${f(y0)}` + segment.slice(1).map(([x, y], i) => {
+    const [px, py] = segment[i], dx = (x - px) / 3;
+    return ` C${f(px + dx)},${f(py + dx * tangents[i])} ${f(x - dx)},${f(y - dx * tangents[i + 1])} ${f(x)},${f(y)}`;
+  }).join('');
+}
+
+export function networkPath(points: NetworkPoint[], direction: 'upload' | 'download', max: number, end: number): string {
+  return networkSegments(points, direction, max, end).map(smooth).join(' ');
+}
+
+// 曲线下方的面积（每段各自闭合到底边），配合渐变填充。
+export function networkArea(points: NetworkPoint[], direction: 'upload' | 'download', max: number, end: number): string {
+  return networkSegments(points, direction, max, end).filter(segment => segment.length > 1)
+    .map(segment => `${smooth(segment)} L${segment[segment.length - 1][0].toFixed(2)},170 L${segment[0][0].toFixed(2)},170 Z`).join(' ');
 }
