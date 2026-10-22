@@ -249,7 +249,7 @@ async function checkUpdate(): Promise<void> {
     if (v.updateAvailable) notes = (v.notes ?? []).map(note => lang === 'en' ? note.en : note.zh);
     if (v.issue) text = v.issue;
     else if (v.updateAvailable) {
-      text = `${t('发现新版本 ', 'New version ')}${v.latest}${t('（当前 ', ' is available (current ')}${v.current}${t('）。', '). ')}${v.canUpgrade ? t('点“立即升级”在线升级，数据和配置会保留，失败会自动回退。', 'Click Update now to upgrade online; data and settings are kept, and a failed update rolls back.') : t('请在服务器上运行一次 o-ui update 升级（之后即可在网页上一键升级），数据和配置会保留。', 'Run o-ui update on the server once (after that you can update from the web); data and settings are kept.')}`;
+      text = `${t('发现新版本 ', 'New version ')}${v.latest}${t('（当前 ', ' is available (current ')}${v.current}${t('）。', '). ')}${v.canUpgrade ? t('点“立即升级”在线升级，升级期间面板与代理会中断约半分钟，数据和配置会保留，失败会自动回退。', 'Click Update now to upgrade online; the panel and proxies stop for about half a minute, data and settings are kept, and a failed update rolls back.') : t('请在服务器上运行一次 o-ui update 升级（之后即可在网页上一键升级），数据和配置会保留。', 'Run o-ui update on the server once (after that you can update from the web); data and settings are kept.')}`;
       if (v.canUpgrade) upgrade = v.latest ?? '';
     } else text = `${t('已是最新版本 ', 'You are on the latest version ')}${v.current}${t('。', '.')}`;
   } catch (reason) { text = (reason as Error).message; }
@@ -266,11 +266,8 @@ async function checkUpdate(): Promise<void> {
   if (upgrade) {
     const action = document.querySelector<HTMLButtonElement>('#dialog-action')!;
     action.textContent = t('立即升级', 'Update now'); action.hidden = false; action.disabled = false;
-    action.onclick = () => {
-      if (!window.confirm(`${t('升级到 ', 'Update to ')}${upgrade}${t('？升级期间面板与代理会中断约半分钟，数据和配置会保留，失败会自动回退到当前版本。', '? The panel and proxies stop for about half a minute; data and settings are kept, and a failed update rolls back to the current version.')}`)) return;
-      dialog.close();
-      void startUpgrade(upgrade, paintUpdate);
-    };
+    // 弹窗里已说明中断与回退，点“立即升级”直接开始，不再弹浏览器确认框（用户2026-10-22要求）。
+    action.onclick = () => { dialog.close(); void startUpgrade(upgrade, paintUpdate); };
   }
 }
 // 首页“o-ui”卡片的升级按钮（参照OUI）：发现新版本时变为橙色“立即升级”，升级中显示进度；失败后恢复。
