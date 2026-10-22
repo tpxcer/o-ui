@@ -4,6 +4,19 @@ input, select, textarea { font: inherit; color: var(--text); background: var(--i
 input:hover:not(:disabled), select:hover:not(:disabled), textarea:hover:not(:disabled) { border-color: color-mix(in srgb, var(--border-strong) 60%, var(--muted)); }
 /* 磨砂输入框是半透明的，原生下拉选项列表要用不透明底色 */
 option { background: var(--menu); color: var(--text); }
+/* 支持可自定义下拉的浏览器（Chrome/Edge 135+）：下拉列表改为与面板一致的磨砂圆角菜单；其他浏览器保持上面的原生列表 */
+@supports (appearance: base-select) {
+  select, ::picker(select) { appearance: base-select; }
+  select { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+  select::picker-icon { content: ""; width: 16px; height: 16px; background: currentColor; mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") center / contain no-repeat; color: var(--muted); transition: rotate .15s; }
+  select:open::picker-icon { rotate: 180deg; }
+  ::picker(select) { margin-block: 6px; padding: 6px; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--overlay); -webkit-backdrop-filter: var(--glass); backdrop-filter: var(--glass); box-shadow: var(--shadow-pop); color: var(--text); max-block-size: min(320px, 60dvh); scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--muted) 45%, transparent) transparent; }
+  option { min-height: 34px; padding: 6px 10px; border-radius: 8px; background: transparent; color: var(--text); font-size: 13px; }
+  option:hover, option:focus-visible { background: var(--raised); outline: none; }
+  option:checked { background: var(--active); color: var(--blue); font-weight: 500; }
+  option::checkmark { order: 1; margin-inline-start: auto; color: var(--blue); }
+  option:disabled { color: var(--muted); }
+}
 input::placeholder, textarea::placeholder { color: color-mix(in srgb, var(--muted) 75%, transparent); }
 input:focus-visible, select:focus-visible, textarea:focus-visible { outline: none; border-color: var(--blue); box-shadow: var(--focus); }
 .page-title:focus-visible, .form-error:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
