@@ -1,6 +1,10 @@
 package localapi
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -73,5 +77,56 @@ func TestOnlineDuration(t *testing.T) {
 		if got := onlineDuration(d, "zh"); got != want {
 			t.Fatalf("%s: %q != %q", d, got, want)
 		}
+	}
+}
+
+// 上线/离线通知按客户端单独开启（用户2026-10-22要求）：开关存独立文档，不保存入站草稿（否则会重启Xray）；
+// 不存在的客户端拒绝，已删除客户端的旧开关不返回；botEnabled反映机器人能否发送。
+func TestTelegramNotifyPerClient(t *testing.T) {
+	s, rt, handler, cookie := subscriptionFixture(t)
+	call := func(method, body string, want int) map[string]any {
+		t.Helper()
+		r := httptest.NewRequest(method, "/api/panel/telegram/notify", strings.NewReader(body))
+		r.Host, r.RemoteAddr = "127.0.0.1:5180", "127.0.0.1:1234"
+		r.Header.Set("Content-Type", "application/json")
+		r.Header.Set("Origin", "http://127.0.0.1:5180")
+		r.AddCookie(cookie)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("%s %s: %d %s", method, body, w.Code, w.Body)
+		}
+		var result map[string]any
+		_ = json.Unmarshal(w.Body.Bytes(), &result)
+		return result
+	}
+	ctx := context.Background()
+	before, _ := s.ReadDocument(ctx, "workspace")
+	if view := call("GET", "", 200); fmt.Sprint(view["clients"]) != "[]" || view["botEnabled"] != false {
+		t.Fatal("alerts start off for every client", view)
+	}
+	call("PUT", `{"clientId":"missing","enabled":true}`, 404)
+	if view := call("PUT", `{"clientId":"client-one","enabled":true}`, 200); fmt.Sprint(view["clients"]) != "[client-one]" {
+		t.Fatal("enable one client", view)
+	}
+	if after, _ := s.ReadDocument(ctx, "workspace"); after.Revision != before.Revision {
+		t.Fatal("toggling alerts must not save the inbound draft, which would restart Xray")
+	}
+	saveBotSettings(t, rt)
+	if view := call("GET", "", 200); view["botEnabled"] != true {
+		t.Fatal("botEnabled should follow the saved bot settings", view)
+	}
+	doc, _ := s.ReadDocument(ctx, telegramNotifyDocument)
+	if _, err := s.SaveDocument(ctx, telegramNotifyDocument, doc.Revision, json.RawMessage(`{"clients":["client-one","deleted-client"]}`)); err != nil {
+		t.Fatal(err)
+	}
+	if view := call("GET", "", 200); fmt.Sprint(view["clients"]) != "[client-one]" {
+		t.Fatal("alerts of deleted clients are not returned", view)
+	}
+	if view := call("PUT", `{"clientId":"client-one","enabled":false}`, 200); fmt.Sprint(view["clients"]) != "[]" {
+		t.Fatal("disable the client", view)
+	}
+	if set, _, _ := readTelegramNotify(ctx, s); len(set) != 0 {
+		t.Fatal("saving drops stale and disabled entries", set)
 	}
 }

@@ -43,7 +43,6 @@ type telegramSettings struct {
 	ChatIDs        string `json:"chatIds"`
 	ReportTime     string `json:"reportTime"`
 	NotifyLogin    bool   `json:"notifyLogin"`
-	NotifyOnline   bool   `json:"notifyOnline"`
 	CPUThreshold   int    `json:"cpuThreshold"`
 	BackupEnabled  bool   `json:"backupEnabled"`
 	BackupPassword string `json:"backupPassword"`
@@ -55,7 +54,6 @@ type telegramView struct {
 	ChatIDs           string `json:"chatIds"`
 	ReportTime        string `json:"reportTime"`
 	NotifyLogin       bool   `json:"notifyLogin"`
-	NotifyOnline      bool   `json:"notifyOnline"`
 	CPUThreshold      int    `json:"cpuThreshold"`
 	BackupEnabled     bool   `json:"backupEnabled"`
 	TokenSet          bool   `json:"tokenSet"`
@@ -63,7 +61,7 @@ type telegramView struct {
 }
 
 func (s telegramSettings) view() telegramView {
-	return telegramView{Enabled: s.Enabled, ChatIDs: s.ChatIDs, ReportTime: s.ReportTime, NotifyLogin: s.NotifyLogin, NotifyOnline: s.NotifyOnline, CPUThreshold: s.CPUThreshold, BackupEnabled: s.BackupEnabled, TokenSet: s.Token != "", BackupPasswordSet: s.BackupPassword != ""}
+	return telegramView{Enabled: s.Enabled, ChatIDs: s.ChatIDs, ReportTime: s.ReportTime, NotifyLogin: s.NotifyLogin, CPUThreshold: s.CPUThreshold, BackupEnabled: s.BackupEnabled, TokenSet: s.Token != "", BackupPasswordSet: s.BackupPassword != ""}
 }
 
 func (s telegramSettings) chats() []string {
@@ -319,11 +317,7 @@ func (rt *Runtime) RunTelegram(ctx context.Context) {
 				clear(sessions)
 				continue
 			}
-			if s.NotifyOnline {
-				rt.notifyOnline(ctx, s, sessions, now)
-			} else {
-				clear(sessions)
-			}
+			rt.notifyOnline(ctx, s, sessions, now)
 			if s.CPUThreshold > 0 && now.Sub(lastCPU) >= 30*time.Minute {
 				if cpu := rt.monitor.Snapshot().CPU; cpu != nil && *cpu >= float64(s.CPUThreshold) {
 					lastCPU = now
@@ -433,4 +427,5 @@ func registerTelegram(mux *http.ServeMux, rt *Runtime, state *store.Store) {
 		}
 		respond(w, 200, map[string]any{"sent": sent, "total": len(s.chats())})
 	})
+	registerTelegramNotify(mux, state)
 }

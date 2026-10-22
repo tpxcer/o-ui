@@ -1,13 +1,13 @@
 import { t } from './i18n.ts';
 
 // Telegram通知机器人设置（参照OUI的Telegram标签）：令牌与备份口令只写不读，留空表示保持已保存的值。
-export interface TelegramView { enabled: boolean; chatIds: string; reportTime: string; notifyLogin: boolean; notifyOnline: boolean; cpuThreshold: number; backupEnabled: boolean; tokenSet: boolean; backupPasswordSet: boolean }
+export interface TelegramView { enabled: boolean; chatIds: string; reportTime: string; notifyLogin: boolean; cpuThreshold: number; backupEnabled: boolean; tokenSet: boolean; backupPasswordSet: boolean }
 export interface TelegramStatus { revision: number; data: TelegramView }
-export interface TelegramForm { tgEnabled: boolean; tgToken: string; tgChatIds: string; tgReportTime: string; tgNotifyLogin: boolean; tgNotifyOnline: boolean; tgCpuThreshold: string; tgBackupEnabled: boolean; tgBackupPassword: string }
-export interface TelegramRequest { enabled: boolean; token: string; chatIds: string; reportTime: string; notifyLogin: boolean; notifyOnline: boolean; cpuThreshold: number; backupEnabled: boolean; backupPassword: string }
+export interface TelegramForm { tgEnabled: boolean; tgToken: string; tgChatIds: string; tgReportTime: string; tgNotifyLogin: boolean; tgCpuThreshold: string; tgBackupEnabled: boolean; tgBackupPassword: string }
+export interface TelegramRequest { enabled: boolean; token: string; chatIds: string; reportTime: string; notifyLogin: boolean; cpuThreshold: number; backupEnabled: boolean; backupPassword: string }
 
 export function telegramForm(view: TelegramView): TelegramForm {
-  return { tgEnabled: view.enabled, tgToken: '', tgChatIds: view.chatIds, tgReportTime: view.reportTime, tgNotifyLogin: view.notifyLogin, tgNotifyOnline: view.notifyOnline === true, tgCpuThreshold: String(view.cpuThreshold), tgBackupEnabled: view.backupEnabled, tgBackupPassword: '' };
+  return { tgEnabled: view.enabled, tgToken: '', tgChatIds: view.chatIds, tgReportTime: view.reportTime, tgNotifyLogin: view.notifyLogin, tgCpuThreshold: String(view.cpuThreshold), tgBackupEnabled: view.backupEnabled, tgBackupPassword: '' };
 }
 
 export function telegramRequest(form: TelegramForm, view: TelegramView): TelegramRequest {
@@ -19,5 +19,5 @@ export function telegramRequest(form: TelegramForm, view: TelegramView): Telegra
   if (form.tgBackupPassword && (form.tgBackupPassword.length < 12 || form.tgBackupPassword.length > 256)) throw new Error(t('备份口令需为 12 至 256 个字符，请妥善保存，遗忘无法恢复', 'Backup password must be 12–256 characters; keep it safe, it cannot be recovered'));
   if (form.tgEnabled && (!(token || view.tokenSet) || !chats.length)) throw new Error(t('启用机器人须填写 Bot Token 和至少一个 Chat ID', 'Enabling the bot needs a bot token and at least one chat ID'));
   if (form.tgBackupEnabled && (!(form.tgBackupPassword || view.backupPasswordSet) || !form.tgReportTime)) throw new Error(t('发送备份须设置备份加密口令和每日报告时间', 'Sending backups needs a backup password and a daily report time'));
-  return { enabled: form.tgEnabled, token, chatIds: chats.join(','), reportTime: form.tgReportTime, notifyLogin: form.tgNotifyLogin, notifyOnline: form.tgNotifyOnline, cpuThreshold: threshold, backupEnabled: form.tgBackupEnabled, backupPassword: form.tgBackupPassword };
+  return { enabled: form.tgEnabled, token, chatIds: chats.join(','), reportTime: form.tgReportTime, notifyLogin: form.tgNotifyLogin, cpuThreshold: threshold, backupEnabled: form.tgBackupEnabled, backupPassword: form.tgBackupPassword };
 }

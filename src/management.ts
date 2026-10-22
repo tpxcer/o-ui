@@ -31,6 +31,8 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
   type IPLimitView = { enforced: boolean; issue: string; clients: Record<string, { online: { ip: string; lastSeen: string }[]; banned: { ip: string; until: string }[]; exempt: { ip: string; until: string }[] }> };
   let ipView: IPLimitView | null = null;
   let subscriptionService: boolean | null = null;
+  // Telegram上线/离线通知按客户端单独开启；开关存在独立设置里，切换不保存入站、不重启 Xray。
+  let notifyView: { clients: Set<string>; botEnabled: boolean } | null = null;
   // 多选删除：选中项只保留在当前页可见的行里；客户端实时网速由相邻两次累计差值算出。
   const selected = new Set<string>();
   let speeds: Record<string, { up: number; down: number }> = {};
@@ -355,6 +357,20 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
   // 面板设置里关闭了订阅服务时，所有订阅链接都不返回内容；此时不再按客户端各自的选项显示“订阅开启”。
   const subscriptionLabel = (item: Client) => persistent && subscriptionService === false ? t('订阅已停用（全局）', 'Subscriptions off (global)') : item.subscription ? t('订阅开启', 'Subscription on') : t('订阅关闭', 'Subscription off');
   // 在线IP数/上限与封禁数（真实模式点开看明细与解封）；演示数据只显示上限。
+  const notifyCell = (item: Client) => {
+    const hint = notifyView && !notifyView.botEnabled ? t('Telegram 机器人未启用：开启后也暂不发送', 'The Telegram bot is off: nothing is sent until it is enabled') : t('通过 Telegram 通知上线（本次累计 1 MB 流量）和离线（10 分钟无流量）', 'Telegram alerts when the client comes online (1 MB this session) or goes offline (10 minutes without traffic)');
+    return `<label class="switch" title="${hint}"><input type="checkbox" data-toggle-notify="${esc(item.id)}" ${notifyView?.clients.has(item.id) ? 'checked' : ''} ${notifyView ? '' : 'disabled'} aria-label="${t('上线/离线通知', 'Online/offline alerts')} ${esc(item.name)}"><span aria-hidden="true"></span></label>`;
+  };
+  async function toggleNotify(input: HTMLInputElement): Promise<void> {
+    const id = input.dataset.toggleNotify!, enabled = input.checked, name = state.clients.find(item => item.id === id)?.name ?? '';
+    input.disabled = true;
+    try {
+      const view = await api<{ clients: string[]; botEnabled: boolean }>('panel/telegram/notify', jsonBody('PUT', { clientId: id, enabled }));
+      notifyView = { clients: new Set(view.clients), botEnabled: view.botEnabled };
+      announce(`${enabled ? t('已开启 ', 'Alerts on for ') : t('已关闭 ', 'Alerts off for ')}${name}${t(' 的上线/离线通知', '')}${enabled && !view.botEnabled ? t('（Telegram 机器人未启用，暂不发送）', ' (the Telegram bot is off, so nothing is sent yet)') : ''}`);
+    } catch (reason) { input.checked = !enabled; announce((reason as Error).message); }
+    finally { input.disabled = false; }
+  }
   const ipCell = (item: Client) => {
     if (!persistent) return item.ipLimit ? `${item.ipLimit} ${t('个 IP', 'IPs')}` : t('IP 不限', 'Unlimited IPs');
     const view = ipView?.clients[item.id], online = view?.online.length ?? 0, banned = view?.banned.length ?? 0;
@@ -422,8 +438,8 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
     const count = visible.size;
     root.querySelector('#result-count')!.textContent = `${t('显示', 'Showing')} ${count} / ${page === 'inbounds' ? state.inbounds.length : state.clients.length} ${t('条', '')}`;
     const headers = page === 'inbounds' ? [t('入站名称', 'Inbound name'), t('类型 / 端口', 'Type / port'), t('状态', 'Status'), t('客户端', 'Clients'), t('总流量', 'Total traffic'), t('操作', 'Actions')]
-      : [t('客户端 / 入站', 'Client / inbound'), persistent ? t('状态', 'Status') : t('演示状态', 'Demo status'), t('流量', 'Traffic'), t('到期', 'Expiry'), t('最近上线', 'Last online'), t('IP / 订阅', 'IP / subscription'), t('操作', 'Actions')];
-    root.querySelector('#list-content')!.innerHTML = count ? `<table class="data-table ${page}-table"><caption class="sr-only">${page === 'inbounds' ? persistent ? t('入站列表', 'Inbounds') : t('入站演示列表', 'Demo inbounds') : persistent ? t('客户端列表', 'Clients') : t('客户端演示列表', 'Demo clients')}</caption><thead><tr><th scope="col" class="select-cell"><input type="checkbox" data-select-all aria-label="${t('全选', 'Select all')}"></th>${headers.map(label => `<th scope="col">${label}</th>`).join('')}</tr></thead><tbody>${page === 'inbounds' ? inboundRows.map(item => `<tr>${selectCell(item)}
+      : [t('客户端 / 入站', 'Client / inbound'), persistent ? t('状态', 'Status') : t('演示状态', 'Demo status'), t('流量', 'Traffic'), t('到期', 'Expiry'), t('最近上线', 'Last online'), t('IP / 订阅', 'IP / subscription'), ...(persistent ? [t('上线通知', 'Online alerts')] : []), t('操作', 'Actions')];
+    root.querySelector('#list-content')!.innerHTML = count ? `<table class="data-table ${page}-table${page === 'clients' && persistent ? ' with-notify' : ''}"><caption class="sr-only">${page === 'inbounds' ? persistent ? t('入站列表', 'Inbounds') : t('入站演示列表', 'Demo inbounds') : persistent ? t('客户端列表', 'Clients') : t('客户端演示列表', 'Demo clients')}</caption><thead><tr><th scope="col" class="select-cell"><input type="checkbox" data-select-all aria-label="${t('全选', 'Select all')}"></th>${headers.map(label => `<th scope="col">${label}</th>`).join('')}</tr></thead><tbody>${page === 'inbounds' ? inboundRows.map(item => `<tr>${selectCell(item)}
       <td data-label="${t('入站名称', 'Inbound name')}"><strong class="record-name">${esc(item.name)}</strong><small class="table-secondary">${presets[item.preset].protocol} · ${presets[item.preset].security}</small></td>
       <td data-label="${t('类型 / 端口', 'Type / port')}"><span class="tag preset-${item.preset}">${presets[item.preset].label}</span><small class="table-secondary">${presets[item.preset].transport} / ${item.port}${item.portHopping ? ` · ${t('跳跃', 'hop')} ${item.portHopping}` : ''}</small></td>
       <td data-label="${t('状态', 'Status')}">${badge(item.enabled ? t('已启用', 'Enabled') : t('已停用', 'Disabled'), item.enabled)}</td>
@@ -435,7 +451,7 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
           <td data-label="${t('流量', 'Traffic')}" data-client-traffic>${trafficCell(item)}</td>
           <td data-label="${t('到期', 'Expiry')}">${item.expiresAt === null ? `<span class="date-value">${t('永不过期', 'Never expires')}</span>` : `<span class="date-value">${expiryLeft(item.expiresAt, now)}</span><small class="table-secondary">${chineseDate(item.expiresAt)}</small>`}</td>
           <td data-label="${t('最近上线', 'Last online')}" data-client-last>${lastOnlineCell(item)}</td>
-          <td data-label="${t('IP / 订阅', 'IP / subscription')}" data-client-ip>${ipCell(item)}<small class="table-secondary">${subscriptionLabel(item)}</small></td><td data-label="${t('操作', 'Actions')}">${rowActions(item, 'client')}</td></tr>`;
+          <td data-label="${t('IP / 订阅', 'IP / subscription')}" data-client-ip>${ipCell(item)}<small class="table-secondary">${subscriptionLabel(item)}</small></td>${persistent ? `<td data-label="${t('上线通知', 'Online alerts')}" data-client-notify>${notifyCell(item)}</td>` : ''}<td data-label="${t('操作', 'Actions')}">${rowActions(item, 'client')}</td></tr>`;
       }).join('')}</tbody></table>` : (page === 'inbounds' ? state.inbounds : state.clients).length === 0 ? `<div class="empty-state">${icon(page === 'inbounds' ? 'log-in' : 'users')}<h2>${page === 'inbounds' ? t('还没有入站', 'No inbounds yet') : t('还没有客户端', 'No clients yet')}</h2><p>${page === 'inbounds' ? t('用右上角的“添加入站”或“一键创建”开始。', 'Start with Add inbound or Quick create at the top right.') : t('先创建入站，再为它添加客户端。', 'Create an inbound first, then add clients to it.')}</p></div>`
       : `<div class="empty-state">${icon('search')}<h2>${page === 'inbounds' ? t('没有匹配的入站', 'No matching inbounds') : t('没有匹配的客户端', 'No matching clients')}</h2><p>${t('试试其他关键词或清除筛选。', 'Try other keywords or clear the filters.')}</p><button class="secondary-button" data-clear>${t('清除搜索与筛选', 'Clear search and filters')}</button></div>`;
     updateSelection();
@@ -482,6 +498,7 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
     if (target.hasAttribute('data-select-all')) { root.querySelectorAll<HTMLInputElement>('[data-select]').forEach(box => { box.checked = target.checked; if (target.checked) selected.add(box.dataset.select!); else selected.delete(box.dataset.select!); }); updateSelection(); }
     // 开关先复原，确认弹窗保存成功后列表按新状态重绘。
     if (target.dataset.toggleClient !== undefined) { target.checked = !target.checked; if (loaded && !loading && !submitting && !reloadRequired) operate('toggle-client', target.dataset.toggleClient); }
+    if (target.dataset.toggleNotify !== undefined) void toggleNotify(target);
   });
   async function load(force = false): Promise<void> {
     if ((!force && loaded) || loading || submitting) return;
@@ -519,7 +536,7 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
           const up = Number(BigInt(count.uplink) - BigInt(before.uplink)), down = Number(BigInt(count.downlink) - BigInt(before.downlink));
           if (up >= 0 && down >= 0) speeds[id] = { up: up / seconds, down: down / seconds };
         }
-      } if (page === 'clients') { ipView = await api<IPLimitView>('runtime/iplimit').catch(() => ipView); subscriptionService = await api<{ data: { enabled: boolean } }>('panel/subscription').then(s => s.data.enabled, () => subscriptionService); } }
+      } if (page === 'clients') { ipView = await api<IPLimitView>('runtime/iplimit').catch(() => ipView); subscriptionService = await api<{ data: { enabled: boolean } }>('panel/subscription').then(s => s.data.enabled, () => subscriptionService); notifyView = await api<{ clients: string[]; botEnabled: boolean }>('panel/telegram/notify').then(v => ({ clients: new Set(v.clients), botEnabled: v.botEnabled }), () => notifyView); } }
     catch (reason) { trafficError = (reason as Error).message; }
     finally {
       trafficLoading = false;
@@ -533,6 +550,8 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
         const ipTarget = row.querySelector<HTMLElement>('[data-client-ip]');
         if (ipTarget && !ipTarget.contains(document.activeElement)) ipTarget.innerHTML = `${ipCell(item)}<small class="table-secondary">${subscriptionLabel(item)}</small>`;
         row.querySelector('[data-client-status]')!.innerHTML = clientState(item, state.inbounds.find(inbound => inbound.id === item.inboundId));
+        const notifyTarget = row.querySelector<HTMLElement>('[data-client-notify]');
+        if (notifyTarget && !notifyTarget.contains(document.activeElement)) notifyTarget.innerHTML = notifyCell(item);
       });
       root.querySelectorAll<HTMLElement>('[data-inbound-traffic]').forEach(cell => { cell.innerHTML = `<span class="date-value">${inboundTraffic(cell.dataset.inboundTraffic!)}</span>`; });
     }
