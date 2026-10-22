@@ -90,8 +90,30 @@ func onlineDuration(d time.Duration, lang string) string {
 	return fmt.Sprintf(i18n.Pick(lang, "%d秒", "%d s"), seconds)
 }
 
-// onlineMessage的字段与顺序参照OUI的上线/下线通知（用户2026-10-22提供截图）；OUI按IP分条发送，这里合并为一条列出全部IP。
-func onlineMessage(event onlineEvent, inbound string, ips []string, lang string) string {
+// ouiTraffic与OUI通知里的流量写法一致：1024进制、两位小数、数字与单位之间无空格，如1.41MB。
+func ouiTraffic(n uint64) string {
+	units := []string{"B", "KB", "MB", "GB", "TB", "PB"}
+	value, unit := float64(n), 0
+	for value >= 1024 && unit < len(units)-1 {
+		value /= 1024
+		unit++
+	}
+	return fmt.Sprintf("%.2f%s", value, units[unit])
+}
+
+// onlineMessages的字段、顺序与写法照OUI的上线/下线通知（用户2026-10-22提供截图）：每个IP一条，其余内容相同；没有采到IP时发一条不含IP。
+func onlineMessages(event onlineEvent, inbound string, ips []string, lang string) []string {
+	if len(ips) == 0 {
+		return []string{onlineMessage(event, inbound, "", lang)}
+	}
+	messages := []string{}
+	for _, ip := range ips {
+		messages = append(messages, onlineMessage(event, inbound, ip, lang))
+	}
+	return messages
+}
+
+func onlineMessage(event onlineEvent, inbound, ip, lang string) string {
 	say := func(zh, en string) string { return i18n.Pick(lang, zh, en) }
 	code := func(value string) string { return "<code>" + html.EscapeString(value) + "</code>" }
 	lines := []string{say("💎 <b>o-ui 用户通知</b>", "💎 <b>o-ui client alert</b>"), say("📴 <b>客户端下线</b>", "📴 <b>Client offline</b>")}
@@ -99,12 +121,12 @@ func onlineMessage(event onlineEvent, inbound string, ips []string, lang string)
 		lines[1] = say("🚀 <b>客户端上线</b>", "🚀 <b>Client online</b>")
 	}
 	lines = append(lines, say("📧 用户/节点：", "📧 Client: ")+code(event.client.Name), say("🧩 节点名称：", "🧩 Inbound: ")+code(inbound))
-	if len(ips) > 0 {
+	if ip != "" {
 		label := say("🌐 IP 地址：", "🌐 IP: ")
 		if !event.online {
 			label = say("🌐 离线 IP 地址：", "🌐 Last IP: ")
 		}
-		lines = append(lines, label+code(strings.Join(ips, ", ")))
+		lines = append(lines, label+code(ip))
 	}
 	if event.online {
 		return strings.Join(append(lines, say("⏰ 上线时间：", "⏰ Online at: ")+code(event.session.start.Local().Format("2006-01-02 15:04:05"))), "\n")
@@ -114,7 +136,7 @@ func onlineMessage(event onlineEvent, inbound string, ips []string, lang string)
 	return strings.Join(append(lines,
 		say("⏱ 在线时长：", "⏱ Online for: ")+code(onlineDuration(offline.Sub(event.session.start), lang)),
 		say("⏰ 下线时间：", "⏰ Offline at: ")+code(offline.Local().Format("2006-01-02 15:04:05")),
-		say("📊 流量：", "📊 Traffic: ")+code(fmt.Sprintf(say("↑%s / ↓%s / 合计%s", "↑%s / ↓%s / total %s"), humanBytes(up), humanBytes(down), humanBytes(up+down))),
+		say("📊 流量：", "📊 Traffic: ")+code(fmt.Sprintf(say("↑%s / ↓%s / 合计%s", "↑%s / ↓%s / total %s"), ouiTraffic(up), ouiTraffic(down), ouiTraffic(up+down))),
 	), "\n")
 }
 
@@ -273,6 +295,8 @@ func (rt *Runtime) notifyOnline(ctx context.Context, s telegramSettings, session
 		if event.online {
 			ips = mergeIPs(slices.Clone(ips), rt.onlineIPs(event.client.ID))
 		}
-		_, _ = telegramBroadcast(ctx, s, onlineMessage(event, inbounds[event.client.InboundID], ips, lang))
+		for _, text := range onlineMessages(event, inbounds[event.client.InboundID], ips, lang) {
+			_, _ = telegramBroadcast(ctx, s, text)
+		}
 	}
 }

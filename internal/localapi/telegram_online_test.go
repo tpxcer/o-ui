@@ -39,7 +39,7 @@ func TestOnlineChangesAnnouncesOnceAndOffline(t *testing.T) {
 	if !online.online || !online.session.start.Equal(start) {
 		t.Fatal("1 MB in this session should announce online once", online)
 	}
-	text := onlineMessage(online, "台湾-Reality", []string{"203.0.113.9"}, "zh")
+	text := onlineMessage(online, "台湾-Reality", "203.0.113.9", "zh")
 	for _, part := range []string{"💎 <b>o-ui 用户通知</b>\n🚀 <b>客户端上线</b>", "📧 用户/节点：<code>a&lt;b</code>", "🧩 节点名称：<code>台湾-Reality</code>", "🌐 IP 地址：<code>203.0.113.9</code>", "⏰ 上线时间：<code>"} {
 		if !strings.Contains(text, part) {
 			t.Fatalf("online message missing %q:\n%s", part, text)
@@ -52,11 +52,19 @@ func TestOnlineChangesAnnouncesOnceAndOffline(t *testing.T) {
 	if offline.online || len(sessions) != 0 {
 		t.Fatal("10 minutes without traffic should announce offline and end the session", offline, sessions)
 	}
-	text = onlineMessage(offline, "台湾-Reality", []string{"203.0.113.9", "198.51.100.7"}, "zh")
-	for _, part := range []string{"💎 <b>o-ui 用户通知</b>\n📴 <b>客户端下线</b>", "🌐 离线 IP 地址：<code>203.0.113.9, 198.51.100.7</code>", "⏱ 在线时长：<code>1分钟30秒</code>", "⏰ 下线时间：<code>", "📊 流量：<code>↑700 KB / ↓900 KB / 合计1.6 MB</code>"} {
-		if !strings.Contains(text, part) {
-			t.Fatalf("offline message missing %q:\n%s", part, text)
+	messages := onlineMessages(offline, "台湾-Reality", []string{"203.0.113.9", "198.51.100.7"}, "zh")
+	if len(messages) != 2 || !strings.Contains(messages[0], "🌐 离线 IP 地址：<code>203.0.113.9</code>") || !strings.Contains(messages[1], "🌐 离线 IP 地址：<code>198.51.100.7</code>") {
+		t.Fatal("like OUI, one message per IP", messages)
+	}
+	for _, text := range messages {
+		for _, part := range []string{"💎 <b>o-ui 用户通知</b>\n📴 <b>客户端下线</b>", "📧 用户/节点：<code>a&lt;b</code>", "🧩 节点名称：<code>台湾-Reality</code>", "⏱ 在线时长：<code>1分钟30秒</code>", "⏰ 下线时间：<code>", "📊 流量：<code>↑683.59KB / ↓878.91KB / 合计1.53MB</code>"} {
+			if !strings.Contains(text, part) {
+				t.Fatalf("offline message missing %q:\n%s", part, text)
+			}
 		}
+	}
+	if only := onlineMessages(offline, "台湾-Reality", nil, "zh"); len(only) != 1 || strings.Contains(only[0], "IP") {
+		t.Fatal("without sampled IPs send one message without the IP line", only)
 	}
 
 	now = start.Add(time.Hour)
@@ -84,6 +92,15 @@ func TestMergeIPs(t *testing.T) {
 	}
 	if len(ips) != 8 {
 		t.Fatal("keep at most 8 IPs", ips)
+	}
+}
+
+// 流量写法与OUI一致，如截图中的↑1.41MB / ↓518.78KB。
+func TestOUITraffic(t *testing.T) {
+	for n, want := range map[uint64]string{0: "0.00B", 1023: "1023.00B", 531_231: "518.78KB", 1_478_492: "1.41MB", 5 << 30: "5.00GB"} {
+		if got := ouiTraffic(n); got != want {
+			t.Fatalf("%d: %q != %q", n, got, want)
+		}
 	}
 }
 
