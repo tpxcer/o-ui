@@ -46,8 +46,12 @@ test('Freedom策略统一使用官方targetStrategy，不被旧字段或出站�
   assert.equal(JSON.parse(draft.outbounds)[0].settings.targetStrategy, 'ForceIPv6');
 });
 test('路由空条件、错误字段类型与DNS空地址不应被当作结构校验通过', () => {
-  for (const condition of [{ domain: [] }, { domain: [''] }, { ip: '192.0.2.1' }, { port: 443 }, { network: '' }, { network: 'not-a-network' }]) {
+  for (const condition of [{ domain: [] }, { domain: [''] }, { ip: '192.0.2.1' }, { port: 443 }, { network: '' }, { network: 'not-a-network' }, { attrs: "attrs[':method'] == 'GET'" }, { attrs: {} }, { attrs: { '': 'GET' } }, { vlessRoute: '' }]) {
     assert.throws(() => buildSettings({ ...defaultSettings(), rules: JSON.stringify([{ type: 'field', outboundTag: 'direct', ...condition }]) }));
+  }
+  // 参照OUI的路由字段（官方26.7.28实测可用）：VLESS路由、属性对象、sourceIP。
+  for (const condition of [{ vlessRoute: '53,443' }, { attrs: { ':method': 'GET' } }, { sourceIP: ['10.0.0.0/8'] }]) {
+    assert.doesNotThrow(() => buildSettings({ ...defaultSettings(), rules: JSON.stringify([{ type: 'field', outboundTag: 'direct', ...condition }]) }), JSON.stringify(condition));
   }
   assert.throws(() => buildSettings({ ...defaultSettings(), rules: '[{"type":"field","domain":["example.test"],"outboundTag":["direct"]}]' }));
   for (const dns of ['{"servers":[""]}', '{"servers":[{}]}', '{"servers":[{"address":""}]}']) assert.throws(() => buildSettings({ ...defaultSettings(), dns }));

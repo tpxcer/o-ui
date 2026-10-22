@@ -224,11 +224,20 @@ func TestCompileSettingsProtectsManagedFields(t *testing.T) {
 		t.Fatal("balancer selected a dynamic reverse outbound")
 	}
 	draft.Balancers = "[]"
-	for _, rule := range []string{`{"type":"field","outboundTag":"direct"}`, `{"type":"field","outboundTag":"direct","network":"bogus"}`, `{"type":"field","outboundTag":"direct","ip":[]}`} {
+	for _, rule := range []string{`{"type":"field","outboundTag":"direct"}`, `{"type":"field","outboundTag":"direct","network":"bogus"}`, `{"type":"field","outboundTag":"direct","ip":[]}`,
+		`{"type":"field","outboundTag":"direct","attrs":"attrs[':method'] == 'GET'"}`, `{"type":"field","outboundTag":"direct","attrs":{}}`, `{"type":"field","outboundTag":"direct","attrs":{"":"GET"}}`, `{"type":"field","outboundTag":"direct","vlessRoute":""}`} {
 		draft.Rules = "[" + rule + "]"
 		data, _ := json.Marshal(draft)
 		if _, err := compileSettings(data); err == nil {
-			t.Fatal("invalid routing accepted")
+			t.Fatal("invalid routing accepted", rule)
+		}
+	}
+	// 参照OUI的路由字段（官方26.7.28实测可用）：VLESS路由、属性对象、sourceIP。
+	for _, rule := range []string{`{"type":"field","outboundTag":"direct","vlessRoute":"53,443,1000-2000"}`, `{"type":"field","outboundTag":"direct","attrs":{":method":"GET"}}`, `{"type":"field","outboundTag":"direct","sourceIP":["10.0.0.0/8"]}`} {
+		draft.Rules = "[" + rule + "]"
+		data, _ := json.Marshal(draft)
+		if _, err := compileSettings(data); err != nil {
+			t.Fatal("valid routing rejected", rule, err)
 		}
 	}
 }

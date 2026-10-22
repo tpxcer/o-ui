@@ -74,16 +74,18 @@ export function buildSettings(draft: SettingsDraft, reverseTags: string[] = []):
     if (('outboundTag' in rule) === ('balancerTag' in rule)) throw new Error(t('每条路由规则必须且只能指定outboundTag或balancerTag。', 'Each routing rule must specify exactly one of outboundTag or balancerTag.'));
     if ('outboundTag' in rule && (typeof rule.outboundTag !== 'string' || !(outboundTags.has(rule.outboundTag) || reverseTags.includes(rule.outboundTag)))) throw new Error(t('路由引用了不存在的出站，或outboundTag不是字符串。', 'A routing rule references a missing outbound, or outboundTag is not a string.'));
     if ('balancerTag' in rule && (typeof rule.balancerTag !== 'string' || !balancerTags.has(rule.balancerTag))) throw new Error(t('路由引用了不存在的负载均衡，或balancerTag不是字符串。', 'A routing rule references a missing balancer, or balancerTag is not a string.'));
-    const arrayConditions = ['domain', 'ip', 'source', 'protocol', 'inboundTag', 'user', 'process'];
-    const textConditions = ['port', 'sourcePort', 'network', 'attrs'];
+    const arrayConditions = ['domain', 'ip', 'source', 'sourceIP', 'protocol', 'inboundTag', 'user', 'process'];
+    const textConditions = ['port', 'sourcePort', 'vlessRoute', 'network'];
     for (const key of arrayConditions) {
       if (key in rule && (!Array.isArray(rule[key]) || !rule[key].length || !rule[key].every(value => typeof value === 'string' && value.trim()))) throw new Error(`${t('路由', 'Routing ')}${key}${t('必须为非空字符串数组。', ' must be a non-empty string array.')}`);
     }
     for (const key of textConditions) {
       if (key in rule && (typeof rule[key] !== 'string' || !rule[key].trim())) throw new Error(`${t('路由', 'Routing ')}${key}${t('必须为非空字符串。', ' must be a non-empty string.')}`);
     }
+    // attrs为“名称→值”对象（官方26.7.28实测：字符串写法预检失败）。
+    if ('attrs' in rule && (!object(rule.attrs) || !Object.keys(rule.attrs).length || Object.entries(rule.attrs).some(([name, value]) => !name.trim() || typeof value !== 'string'))) throw new Error(t('路由属性必须为非空的名称与值。', 'Routing attrs must be non-empty name/value pairs.'));
     if (typeof rule.network === 'string' && !rule.network.split(',').every(value => ['tcp', 'udp'].includes(value.trim()))) throw new Error(t('路由network只接受tcp、udp或tcp,udp。', 'Routing network accepts only tcp, udp or tcp,udp.'));
-    if (![...arrayConditions, ...textConditions].some(key => key in rule)) throw new Error(t('路由规则至少需要一个匹配条件。', 'A routing rule needs at least one match condition.'));
+    if (![...arrayConditions, ...textConditions, 'attrs'].some(key => key in rule)) throw new Error(t('路由规则至少需要一个匹配条件。', 'A routing rule needs at least one match condition.'));
   }
   if (!Array.isArray(dns.servers) || !dns.servers.length || !dns.servers.every(server => typeof server === 'string' ? !!server.trim() : object(server) && typeof server.address === 'string' && !!server.address.trim())) throw new Error(t('DNS需要非空servers数组，成员为非空地址字符串或带address的对象。', 'DNS needs a non-empty servers array of address strings or objects with address.'));
   if (dns.queryStrategy !== undefined && !['UseIP', 'UseIPv4', 'UseIPv6'].includes(String(dns.queryStrategy))) throw new Error(t('DNS查询策略应为UseIP、UseIPv4或UseIPv6。', 'DNS query strategy must be UseIP, UseIPv4 or UseIPv6.'));

@@ -48,17 +48,20 @@ export function ensureOutbound(outbounds: Json[], tag: string, outbound: Json): 
 }
 
 // ---- 路由规则 ----
-export type RuleForm = { domain: string; ip: string; port: string; sourceIP: string; sourcePort: string; network: string; protocol: string[]; inboundTag: string[]; user: string; target: string };
-export const emptyRule = (): RuleForm => ({ domain: '', ip: '', port: '', sourceIP: '', sourcePort: '', network: '', protocol: [], inboundTag: [], user: '', target: '' });
-const ruleKeys = ['type', 'domain', 'ip', 'port', 'source', 'sourcePort', 'network', 'protocol', 'inboundTag', 'user', 'outboundTag', 'balancerTag'];
+// 字段与顺序参照OUI的路由规则弹窗（用户2026-10-22要求）；多项用逗号分隔（换行也可）。
+export type RuleForm = { sourceIP: string; sourcePort: string; vlessRoute: string; network: string; protocol: string[]; attrs: [string, string][]; ip: string; domain: string; user: string; port: string; inboundTag: string[]; outboundTag: string; balancerTag: string };
+export const emptyRule = (): RuleForm => ({ sourceIP: '', sourcePort: '', vlessRoute: '', network: '', protocol: [], attrs: [], ip: '', domain: '', user: '', port: '', inboundTag: [], outboundTag: '', balancerTag: '' });
+const ruleKeys = ['type', 'domain', 'ip', 'port', 'source', 'sourceIP', 'sourcePort', 'vlessRoute', 'network', 'protocol', 'attrs', 'inboundTag', 'user', 'outboundTag', 'balancerTag'];
 
 export function ruleForm(rule: Json): RuleForm | null {
   if (Object.keys(rule).some(key => !ruleKeys.includes(key))) return null;
+  const attrs = rule.attrs ?? {};
+  if (!attrs || typeof attrs !== 'object' || Array.isArray(attrs) || Object.values(attrs).some(value => typeof value !== 'string')) return null;
   const text = (value: unknown) => typeof value === 'string' ? value : '';
   return {
-    domain: list(rule.domain).join('\n'), ip: list(rule.ip).join('\n'), port: text(rule.port), sourceIP: list(rule.source).join('\n'), sourcePort: text(rule.sourcePort),
-    network: text(rule.network), protocol: list(rule.protocol), inboundTag: list(rule.inboundTag), user: list(rule.user).join('\n'),
-    target: typeof rule.balancerTag === 'string' ? `balancer:${rule.balancerTag}` : typeof rule.outboundTag === 'string' ? `outbound:${rule.outboundTag}` : '',
+    sourceIP: [...list(rule.source), ...list(rule.sourceIP)].join(', '), sourcePort: text(rule.sourcePort), vlessRoute: text(rule.vlessRoute), network: text(rule.network),
+    protocol: list(rule.protocol), attrs: Object.entries(attrs as Record<string, string>), ip: list(rule.ip).join(', '), domain: list(rule.domain).join(', '), user: list(rule.user).join(', '),
+    port: text(rule.port), inboundTag: list(rule.inboundTag), outboundTag: text(rule.outboundTag), balancerTag: text(rule.balancerTag),
   };
 }
 
@@ -66,11 +69,12 @@ export function ruleFromForm(form: RuleForm): Json {
   const rule: Json = { type: 'field' };
   const arrays: [string, string[]][] = [['domain', lines(form.domain)], ['ip', lines(form.ip)], ['source', lines(form.sourceIP)], ['protocol', form.protocol], ['inboundTag', form.inboundTag], ['user', lines(form.user)]];
   for (const [key, values] of arrays) if (values.length) rule[key] = values;
-  for (const [key, value] of [['port', form.port], ['sourcePort', form.sourcePort], ['network', form.network]] as const) if (value.trim()) rule[key] = value.trim();
+  for (const [key, value] of [['port', form.port], ['sourcePort', form.sourcePort], ['vlessRoute', form.vlessRoute], ['network', form.network]] as const) if (value.trim()) rule[key] = value.trim();
+  const attrs = form.attrs.map(([name, value]) => [name.trim(), value.trim()]).filter(([name]) => name);
+  if (attrs.length) rule.attrs = Object.fromEntries(attrs);
   if (Object.keys(rule).length === 1) throw new Error(t('至少填写一个匹配条件。', 'Fill in at least one match condition.'));
-  const [kind, tag] = [form.target.split(':')[0], form.target.slice(form.target.indexOf(':') + 1)];
-  if (!tag || (kind !== 'outbound' && kind !== 'balancer')) throw new Error(t('请选择出站或负载均衡。', 'Choose an outbound or balancer.'));
-  rule[kind === 'outbound' ? 'outboundTag' : 'balancerTag'] = tag;
+  if (!form.outboundTag === !form.balancerTag) throw new Error(t('出站标签和负载均衡标签需要且只能选一个。', 'Choose exactly one of outbound tag or balancer tag.'));
+  if (form.outboundTag) rule.outboundTag = form.outboundTag; else rule.balancerTag = form.balancerTag;
   return rule;
 }
 
@@ -79,7 +83,9 @@ export function ruleSummary(rule: Json): string {
   const add = (label: string, values: string[]) => { if (values.length) parts.push(`${label} ${values.slice(0, 3).join(', ')}${values.length > 3 ? ` +${values.length - 3}` : ''}`); };
   add(t('域名', 'Domain'), list(rule.domain)); add('IP', list(rule.ip)); add(t('来源', 'Source'), list(rule.source)); add(t('协议', 'Protocol'), list(rule.protocol));
   add(t('入站', 'Inbound'), list(rule.inboundTag)); add(t('用户', 'User'), list(rule.user));
-  for (const [label, key] of [[t('端口', 'Port'), 'port'], [t('来源端口', 'Source port'), 'sourcePort'], [t('网络', 'Network'), 'network']] as const) if (typeof rule[key] === 'string') parts.push(`${label} ${rule[key]}`);
+  add(t('来源', 'Source'), list(rule.sourceIP));
+  for (const [label, key] of [[t('端口', 'Port'), 'port'], [t('来源端口', 'Source port'), 'sourcePort'], [t('VLESS 路由', 'VLESS route'), 'vlessRoute'], [t('网络', 'Network'), 'network']] as const) if (typeof rule[key] === 'string') parts.push(`${label} ${rule[key]}`);
+  if (rule.attrs && typeof rule.attrs === 'object') add(t('属性', 'Attrs'), Object.entries(rule.attrs as Record<string, unknown>).map(([name, value]) => `${name}=${String(value)}`));
   return parts.join(' · ') || t('（高级条件）', '(advanced conditions)');
 }
 

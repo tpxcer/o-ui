@@ -118,7 +118,7 @@ func compileSettings(data json.RawMessage, reverseTags ...string) (map[string]an
 			}
 		}
 		conditions := 0
-		for _, key := range []string{"domain", "ip", "source", "protocol", "inboundTag", "user", "process"} {
+		for _, key := range []string{"domain", "ip", "source", "sourceIP", "protocol", "inboundTag", "user", "process"} {
 			if value, exists := rule[key]; exists {
 				values, ok := value.([]any)
 				if !ok || len(values) == 0 {
@@ -133,7 +133,7 @@ func compileSettings(data json.RawMessage, reverseTags ...string) (map[string]an
 				conditions++
 			}
 		}
-		for _, key := range []string{"port", "sourcePort", "network", "attrs"} {
+		for _, key := range []string{"port", "sourcePort", "vlessRoute", "network"} {
 			if value, exists := rule[key]; exists {
 				text, ok := value.(string)
 				if !ok || strings.TrimSpace(text) == "" {
@@ -148,6 +148,19 @@ func compileSettings(data json.RawMessage, reverseTags ...string) (map[string]an
 				}
 				conditions++
 			}
+		}
+		// attrs为“名称→值”对象（官方26.7.28实测：字符串写法预检失败）。
+		if value, exists := rule["attrs"]; exists {
+			attrs, ok := value.(map[string]any)
+			if !ok || len(attrs) == 0 {
+				return nil, i18n.New("路由属性必须为非空的名称与值", "Routing attrs must be non-empty name/value pairs")
+			}
+			for name, value := range attrs {
+				if _, ok := value.(string); !ok || strings.TrimSpace(name) == "" {
+					return nil, i18n.New("路由属性必须为非空的名称与值", "Routing attrs must be non-empty name/value pairs")
+				}
+			}
+			conditions++
 		}
 		if conditions == 0 {
 			return nil, i18n.New("路由必须至少提供一个匹配条件", "Routing rules need at least one match condition")

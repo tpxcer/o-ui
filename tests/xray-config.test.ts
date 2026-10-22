@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { defaultSettings } from '../src/xray-settings-model.ts';
 import {
-  balancerFromForm, dnsServerForm, dnsServerFromForm, outboundAddress, outboundForm, outboundFromForm, outboundFromLink, outboundReverseTag, parseParts, ruleForm, ruleFromForm,
+  balancerFromForm, dnsServerForm, emptyRule, dnsServerFromForm, outboundAddress, outboundForm, outboundFromForm, outboundFromLink, outboundReverseTag, parseParts, ruleForm, ruleFromForm,
   ruleValues, setRuleValues, syncObservatory, writeParts,
 } from '../src/xray-config.ts';
 
@@ -22,12 +22,17 @@ test('基础路由按出站与字段读写同一条规则，空值时删除', ()
   assert.equal(rules.length, 2, '混合条件的自定义规则不被基础路由改写');
 });
 
-test('路由规则表单支持入站、用户、来源等条件，往返一致', () => {
-  const rule = ruleFromForm({ domain: 'geosite:openai\nexample.com', ip: '', port: '443', sourceIP: '10.0.0.0/8', sourcePort: '', network: 'tcp,udp', protocol: ['tls'], inboundTag: ['in-a'], user: 'client-b', target: 'balancer:auto' });
-  assert.deepEqual(rule, { type: 'field', domain: ['geosite:openai', 'example.com'], source: ['10.0.0.0/8'], protocol: ['tls'], inboundTag: ['in-a'], user: ['client-b'], port: '443', network: 'tcp,udp', balancerTag: 'auto' });
+test('路由规则表单参照OUI：入站、用户、来源、VLESS路由、属性等条件，往返一致', () => {
+  const form = { ...emptyRule(), domain: 'geosite:openai, example.com', port: '443', sourceIP: '10.0.0.0/8', network: 'tcp,udp', protocol: ['tls'], inboundTag: ['in-a'], user: 'client-b', vlessRoute: '53,443', attrs: [[':method', 'GET'], ['', 'ignored']] as [string, string][], balancerTag: 'auto' };
+  const rule = ruleFromForm(form);
+  assert.deepEqual(rule, { type: 'field', domain: ['geosite:openai', 'example.com'], source: ['10.0.0.0/8'], protocol: ['tls'], inboundTag: ['in-a'], user: ['client-b'], port: '443', vlessRoute: '53,443', network: 'tcp,udp', attrs: { ':method': 'GET' }, balancerTag: 'auto' });
   assert.deepEqual(ruleFromForm(ruleForm(rule)!), rule);
-  assert.equal(ruleForm({ type: 'field', outboundTag: 'direct', attrs: { a: 1 } }), null, '表单不支持的字段改用JSON编辑');
-  assert.throws(() => ruleFromForm({ ...ruleForm(rule)!, domain: '', port: '', sourceIP: '', network: '', protocol: [], inboundTag: [], user: '' }), /匹配条件/);
+  assert.equal(ruleForm({ type: 'field', sourceIP: ['192.0.2.0/24'], outboundTag: 'direct' })!.sourceIP, '192.0.2.0/24', '兼容sourceIP写法');
+  assert.equal(ruleForm({ type: 'field', outboundTag: 'direct', attrs: { a: 1 } }), null, '属性值不是字符串时改用JSON编辑');
+  assert.equal(ruleForm({ type: 'field', outboundTag: 'direct', localIP: ['127.0.0.1'] }), null, '表单不支持的字段改用JSON编辑');
+  assert.throws(() => ruleFromForm({ ...emptyRule(), outboundTag: 'direct' }), /匹配条件/);
+  assert.throws(() => ruleFromForm({ ...form, outboundTag: 'direct' }), /只能选一个/);
+  assert.throws(() => ruleFromForm({ ...form, balancerTag: '' }), /只能选一个/);
 });
 
 test('分享链接导入：vless reality、vmess、trojan、ss、hysteria2', () => {

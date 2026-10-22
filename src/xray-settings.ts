@@ -8,8 +8,8 @@ import { settingRow, settingSection, settingsToolbar, selectControl, textControl
 import {
   balancerForm, balancerFromForm, balancerStrategies, blockDomainOptions, blockIPOptions, directDomainOptions, directIPOptions, dnsPresets, dnsServerForm,
   dnsServerFromForm, emptyBalancer, emptyDNSServer, emptyOutbound, emptyRule, ensureOutbound, outboundAddress, outboundForm, outboundFromForm, outboundFromLink, outboundReverseTag,
-  outboundProtocolOptions, parseParts, proxyProtocols, ruleForm, ruleFromForm, ruleSummary, ruleValues, setRuleValues, ssMethods, streamProtocols, syncObservatory, writeParts,
-  type BalancerForm, type DNSServerForm, type Json, type OutboundForm, type Parts, type RuleForm,
+  lines, outboundProtocolOptions, parseParts, proxyProtocols, ruleForm, ruleFromForm, ruleSummary, ruleValues, setRuleValues, ssMethods, streamProtocols, syncObservatory, writeParts,
+  type BalancerForm, type DNSServerForm, type Json, type OutboundForm, type Parts,
 } from './xray-config.ts';
 import './xray-settings.css';
 import { t } from './i18n.ts';
@@ -80,7 +80,6 @@ export function initXraySettings(root: HTMLElement, icons: () => void, persisten
   }
 
   // ---- 表格页 ----
-  const targets = (p: Parts): [string, string][] => [...p.outbounds.map(item => [`outbound:${item.tag}`, `${t('出站', 'Outbound')} · ${item.tag}`] as [string, string]), ...p.balancers.map(item => [`balancer:${item.tag}`, `${t('均衡', 'Balancer')} · ${item.tag}`] as [string, string]), ...reverseTags().map(tag => [`outbound:${tag}`, `${t('反向代理', 'Reverse')} · ${tag}`] as [string, string])];
   const actions = (kind: string, index: number, count: number) => `<div class="row-actions">${button('↑', `data-op="${kind}:up" data-index="${index}" aria-label="${t('上移', 'Move up')}" ${index === 0 ? 'disabled' : ''}`, 'icon-button')}${button('↓', `data-op="${kind}:down" data-index="${index}" aria-label="${t('下移', 'Move down')}" ${index === count - 1 ? 'disabled' : ''}`, 'icon-button')}${button(t('编辑', 'Edit'), `data-op="${kind}:edit" data-index="${index}"`, 'text-button')}${button(t('删除', 'Delete'), `data-op="${kind}:delete" data-index="${index}"`, 'text-button danger-text')}</div>`;
   const table = (heads: string[], rows: string[], empty: string) => rows.length ? `<div class="table-scroll"><table class="xray-table"><thead><tr>${heads.map(head => `<th scope="col">${head}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table></div>` : `<p class="form-intro">${empty}</p>`;
   function routingTab(p: Parts): string {
@@ -132,8 +131,8 @@ export function initXraySettings(root: HTMLElement, icons: () => void, persisten
   }
 
   // ---- 弹窗 ----
-  function openDialog(title: string, fields: string, submit: (form: HTMLFormElement) => void, onInput?: (form: HTMLFormElement) => void): void {
-    dialog.innerHTML = `<form novalidate><header class="dialog-heading"><h2>${esc(title)}</h2><button type="button" class="icon-button" data-close aria-label="${t('关闭弹窗', 'Close dialog')}">×</button></header><div class="edit-body">${fields}<p class="form-error" role="alert" hidden></p></div><footer>${button(t('取消', 'Cancel'), 'data-close')}<button class="primary-button">${t('确定', 'OK')}</button></footer></form>`;
+  function openDialog(title: string, fields: string, submit: (form: HTMLFormElement) => void, onInput?: (form: HTMLFormElement) => void, labels: [string, string] = [t('取消', 'Cancel'), t('确定', 'OK')]): void {
+    dialog.innerHTML = `<form novalidate><header class="dialog-heading"><h2>${esc(title)}</h2><button type="button" class="icon-button" data-close aria-label="${t('关闭弹窗', 'Close dialog')}">×</button></header><div class="edit-body">${fields}<p class="form-error" role="alert" hidden></p></div><footer>${button(labels[0], 'data-close')}<button class="primary-button">${labels[1]}</button></footer></form>`;
     const form = dialog.querySelector('form')!;
     dialog.querySelectorAll('[data-close]').forEach(item => item.addEventListener('click', () => dialog.close()));
     if (onInput) form.addEventListener('change', () => onInput(form));
@@ -169,20 +168,42 @@ export function initXraySettings(root: HTMLElement, icons: () => void, persisten
     if (!existing) { jsonDialog(t('编辑路由规则', 'Edit routing rule'), p.rules[index!], next => change(current => ({ ...current, rules: current.rules.map((rule, i) => i === index ? next : rule) }))); return; }
     const inbounds: [string, string][] = [...workspace.inbounds.map(item => [`in-${item.id}`, item.name] as [string, string]), ...p.outbounds.map(outboundReverseTag).filter(Boolean).map(tag => [tag, `${t('反向代理', 'Reverse')} · ${tag}`] as [string, string])];
     const users: [string, string][] = workspace.clients.map(item => [`client-${item.id}`, item.name]);
-    openDialog(index === null ? t('添加路由规则', 'Add routing rule') : t('编辑路由规则', 'Edit routing rule'), [
-      field(t('目标', 'Target'), select('target', existing.target, [['', t('请选择出站或负载均衡', 'Choose an outbound or balancer')], ...targets(p)])),
-      field(t('目标域名（每行一项）', 'Domains (one per line)'), area('domain', existing.domain), t('支持 example.com、domain:、full:、geosite:cn、regexp:', 'Supports example.com, domain:, full:, geosite:cn, regexp:')),
-      field(t('目标 IP（每行一项）', 'IPs (one per line)'), area('ip', existing.ip), t('支持 IP、CIDR、geoip:cn、geoip:private', 'Supports IP, CIDR, geoip:cn, geoip:private')),
-      field(t('目标端口', 'Ports'), input('port', existing.port, 'placeholder="443,1000-2000"')),
-      field(t('网络', 'Network'), select('network', existing.network, [['', t('不限', 'Any')], ['tcp', 'TCP'], ['udp', 'UDP'], ['tcp,udp', 'TCP + UDP']])),
-      field(t('协议（嗅探）', 'Protocols (sniffed)'), checks('protocol', existing.protocol, [['http', 'HTTP'], ['tls', 'TLS'], ['quic', 'QUIC'], ['bittorrent', 'BitTorrent']])),
-      inbounds.length ? field(t('入站', 'Inbounds'), checks('inboundTag', existing.inboundTag, inbounds)) : '',
-      users.length ? field(t('用户', 'Users'), checks('userTag', existing.user.split('\n').filter(Boolean), users)) : '',
-      field(t('来源 IP（每行一项）', 'Source IPs (one per line)'), area('sourceIP', existing.sourceIP, 2)),
-      field(t('来源端口', 'Source ports'), input('sourcePort', existing.sourcePort)),
-    ].join(''), form => {
-      const rule = ruleFromForm({ domain: value(form, 'domain'), ip: value(form, 'ip'), port: value(form, 'port'), sourceIP: value(form, 'sourceIP'), sourcePort: value(form, 'sourcePort'), network: value(form, 'network'), protocol: checked(form, 'protocol'), inboundTag: checked(form, 'inboundTag'), user: checked(form, 'userTag').join('\n'), target: value(form, 'target') } as RuleForm);
+    const none = (label: string): [string, string] => ['', `(${label})`];
+    // 布局与字段顺序参照OUI的路由规则弹窗：标签在左、输入在右（手机上下排列），多项用逗号分隔。
+    const comma = t('多个项目请用逗号分隔', 'Separate multiple items with commas');
+    const help = (text: string) => `<span class="rule-help" title="${esc(text)}" aria-label="${esc(text)}">?</span>`;
+    const row = (label: string, control: string, hint = '') => `<label class="rule-row"><span class="rule-label">${label}${hint ? help(hint) : ''}</span>${control}</label>`;
+    const group = (label: string, control: string) => `<div class="rule-row is-top" role="group" aria-label="${esc(label)}"><span class="rule-label">${label}</span>${control}</div>`;
+    const chips = (name: string, current: string[], options: [string, string][]) => `<div class="rule-chips">${options.map(([key, label]) => `<label class="check-field"><input type="checkbox" name="${name}" value="${esc(key)}" ${current.includes(key) ? 'checked' : ''}><span>${esc(label)}</span></label>`).join('')}</div>`;
+    const attrRow = ([name, value]: [string, string]) => `<div class="attr-row"><span class="attr-index"></span><input name="attrName" value="${esc(name)}" placeholder="${t('名称', 'Name')}" aria-label="${t('属性名称', 'Attribute name')}" autocomplete="off"><input name="attrValue" value="${esc(value)}" placeholder="${t('值', 'Value')}" aria-label="${t('属性值', 'Attribute value')}" autocomplete="off">${button('−', `data-attr-remove aria-label="${t('删除属性', 'Remove attribute')}"`, 'icon-button bordered')}</div>`;
+    const ip = 'placeholder="0.0.0.0/8, fc00::/7, geoip:cn"', ports = 'placeholder="53,443,1000-2000"';
+    openDialog(index === null ? t('+ 路由规则', '+ Routing rule') : t('编辑路由规则', 'Edit routing rule'), `<div class="rule-form">${[
+      row(t('源 IP', 'Source IP'), input('sourceIP', existing.sourceIP, ip), comma),
+      row(t('源端口', 'Source port'), input('sourcePort', existing.sourcePort, ports), comma),
+      row(t('VLESS 路由', 'VLESS route'), input('vlessRoute', existing.vlessRoute, ports), comma),
+      row(t('网络', 'Network'), select('network', existing.network, [none(t('任意', 'Any')), ['tcp', 'TCP'], ['udp', 'UDP'], ['tcp,udp', 'TCP,UDP']])),
+      group(t('协议', 'Protocol'), chips('protocol', existing.protocol, [['http', 'http'], ['tls', 'tls'], ['bittorrent', 'bittorrent'], ['quic', 'quic']])),
+      group(t('属性', 'Attributes'), `<div class="attr-rows" data-attr-rows>${existing.attrs.map(attrRow).join('')}${button('+', `data-attr-add aria-label="${t('添加属性', 'Add attribute')}"`, 'icon-button bordered')}</div>`),
+      row('IP', input('ip', existing.ip, ip), comma),
+      row(t('域名', 'Domain'), input('domain', existing.domain, 'placeholder="google.com, geosite:cn"'), comma),
+      users.length ? group(t('用户', 'User'), chips('userTag', lines(existing.user), users)) : '',
+      row(t('端口', 'Port'), input('port', existing.port, ports), comma),
+      inbounds.length ? group(t('入站标签', 'Inbound tags'), chips('inboundTag', existing.inboundTag, inbounds)) : '',
+      row(t('出站标签', 'Outbound tag'), select('outboundTag', existing.outboundTag, [none(t('无', 'None')), ...p.outbounds.map(item => [String(item.tag), String(item.tag)] as [string, string]), ...reverseTags().map(tag => [tag, `${t('反向代理', 'Reverse')} · ${tag}`] as [string, string])])),
+      row(t('负载均衡标签', 'Balancer tag'), select('balancerTag', existing.balancerTag, [none(t('无', 'None')), ...p.balancers.map(item => [String(item.tag), String(item.tag)] as [string, string])]), t('通过已配置的负载均衡转发流量', 'Route traffic through a configured balancer')),
+    ].join('')}</div>`, form => {
+      const data = new FormData(form), names = data.getAll('attrName').map(String), values = data.getAll('attrValue').map(String);
+      const rule = ruleFromForm({ sourceIP: value(form, 'sourceIP'), sourcePort: value(form, 'sourcePort'), vlessRoute: value(form, 'vlessRoute'), network: value(form, 'network'), protocol: checked(form, 'protocol'), attrs: names.map((name, i) => [name, values[i] ?? ''] as [string, string]), ip: value(form, 'ip'), domain: value(form, 'domain'), user: checked(form, 'userTag').join(','), port: value(form, 'port'), inboundTag: checked(form, 'inboundTag'), outboundTag: value(form, 'outboundTag'), balancerTag: value(form, 'balancerTag') });
       change(current => ({ ...current, rules: index === null ? [...current.rules, rule] : current.rules.map((item, i) => i === index ? rule : item) }));
+    }, undefined, [t('关闭', 'Close'), index === null ? t('创建', 'Create') : t('保存', 'Save')]);
+    // 属性行可增删，序号随之重排。
+    const rows = dialog.querySelector<HTMLElement>('[data-attr-rows]')!;
+    const renumber = () => rows.querySelectorAll('.attr-index').forEach((cell, i) => { cell.textContent = String(i + 1); });
+    renumber();
+    rows.addEventListener('click', event => {
+      const target = event.target as HTMLElement;
+      if (target.closest('[data-attr-add]')) { target.closest('[data-attr-add]')!.insertAdjacentHTML('beforebegin', attrRow(['', ''])); renumber(); rows.querySelectorAll<HTMLInputElement>('[name="attrName"]').item(rows.querySelectorAll('.attr-row').length - 1).focus(); }
+      if (target.closest('[data-attr-remove]')) { target.closest('.attr-row')!.remove(); renumber(); }
     });
   }
 

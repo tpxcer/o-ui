@@ -87,3 +87,20 @@
 .segmented span:hover { background: var(--raised); }
 .segmented input:checked + span { border-color: var(--blue); color: var(--text); background: var(--active); }
 .segmented input:focus-visible + span { outline: 2px solid var(--blue); outline-offset: 2px; }
+/* 路由规则弹窗参照OUI：标签在左右对齐（带?提示）、输入在右；手机上下排列 */
+.rule-form { display: grid; gap: 14px; }
+.rule-row { display: grid; grid-template-columns: 132px minmax(0, 1fr); align-items: center; gap: 16px; margin: 0; font-size: 13px; font-weight: 500; }
+.rule-row.is-top { align-items: start; }
+.rule-label { justify-self: end; display: inline-flex; align-items: center; gap: 6px; color: var(--text); text-align: right; }
+.rule-row.is-top > .rule-label { min-height: var(--control); }
+.rule-help { display: inline-grid; place-items: center; width: 15px; height: 15px; border: 1.5px solid var(--muted); border-radius: 50%; color: var(--muted); font-size: 10px; font-weight: 700; line-height: 1; cursor: help; }
+.rule-chips { display: flex; flex-wrap: wrap; gap: 0 18px; }
+.rule-chips .check-field { font-weight: 400; }
+.attr-rows { display: grid; gap: 8px; justify-items: start; }
+.attr-row { display: grid; grid-template-columns: 22px minmax(0, 1fr) minmax(0, 1fr) var(--control); gap: 8px; align-items: center; width: 100%; }
+.attr-index { color: var(--muted); font-size: 12px; text-align: center; font-variant-numeric: tabular-nums; }
+@media (max-width: 600px) {
+  .rule-row { grid-template-columns: 1fr; gap: 6px; }
+  .rule-label { justify-self: start; text-align: left; }
+  .rule-row.is-top > .rule-label { min-height: 0; }
+}
