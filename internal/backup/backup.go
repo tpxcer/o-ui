@@ -18,8 +18,9 @@ const magic = "IXPBACK\x01"
 const headerSize = len(magic) + 16 + 12
 
 func ValidatePassword(password string) error {
-	if len(password) < 12 || len(password) > 256 {
-		return i18n.New("备份密码需为12至256字节，请妥善保存，遗忘无法恢复", "Backup password must be 12–256 bytes; keep it safe, it cannot be recovered")
+	// 备份密码不限长度（用户2026-10-22要求），只要求非空。
+	if password == "" {
+		return i18n.New("请填写备份密码，请妥善保存，遗忘无法恢复", "Enter a backup password; keep it safe, it cannot be recovered")
 	}
 	return nil
 }

@@ -10,16 +10,17 @@ export function requireLogin(): Promise<boolean> {
   // 离线文件只保留明确标识的界面演示，不绕过后端认证。
   if (location.protocol === 'file:') return Promise.resolve(false);
   return new Promise(resolve => {
+    // 先读登录状态，确认未登录或连不上时才显示登录页；已登录（如刚登录或升级后刷新）直接进入面板，不闪现“正在读取登录状态”。
     const root = document.createElement('section');
     root.className = 'auth-screen'; root.setAttribute('aria-label', t('管理员登录', 'Administrator sign-in'));
-    document.body.append(root);
     const content = document.createElement('div');
     content.className = 'auth-content';
     root.append(content);
-    const stopBackdrop = startBackdrop(root);
+    let stopBackdrop = () => {};
     let status: AuthStatus | null = null;
     let error = '', busy = false, disposed = false;
     function paint(): void {
+      if (!root.isConnected) { document.body.append(root); stopBackdrop = startBackdrop(root); }
       const setup = status && !status.initialized;
       document.title = `o-ui · ${status ? setup ? t('设置管理员', 'Set up administrator') : t('管理员登录', 'Administrator sign-in') : t('连接本机面板', 'Connect to the panel')}`;
       content.innerHTML = `<div class="card auth-card"><div class="auth-heading">${languageButton()}<span>o-ui</span><small class="slogan">${t('让世界触手可及', 'World within reach')}</small><h1>${status ? setup ? t('设置管理员', 'Set up administrator') : t('管理员登录', 'Administrator sign-in') : t('连接本机面板', 'Connect to the panel')}</h1><p>${setup ? t('首次使用请设置账号密码。没有默认密码，不导入旧 OUI 数据。', 'Set a username and password on first use. There is no default password.') : t('登录以管理 Xray 节点。', 'Sign in to manage your Xray nodes.')}</p></div>
@@ -53,7 +54,7 @@ export function requireLogin(): Promise<boolean> {
       });
     }
     async function load(): Promise<void> {
-      error = ''; paint();
+      error = ''; if (root.isConnected) paint();
       try {
         status = await api<AuthStatus>('auth/status');
         if (status.authenticated) { disposed = true; stopBackdrop(); root.remove(); resolve(true); return; }

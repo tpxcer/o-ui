@@ -16,7 +16,6 @@ export function telegramRequest(form: TelegramForm, view: TelegramView): Telegra
   if (chats.length > 10 || !chats.every(chat => /^-?[0-9]{1,20}$/.test(chat))) throw new Error(t('Chat ID 只能是数字（群组以 - 开头），多个用英文逗号分隔，最多 10 个', 'Chat IDs must be numbers (groups start with -), comma separated, at most 10'));
   if (form.tgReportTime && !/^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(form.tgReportTime)) throw new Error(t('每日报告时间格式应为 HH:MM，留空表示不发送', 'Daily report time must be HH:MM, or empty to disable'));
   if (!Number.isInteger(threshold) || threshold < 0 || threshold > 100) throw new Error(t('CPU 提醒阈值须为 0 至 100（0 表示关闭）', 'CPU alert threshold must be 0–100 (0 turns it off)'));
-  if (form.tgBackupPassword && (form.tgBackupPassword.length < 12 || form.tgBackupPassword.length > 256)) throw new Error(t('备份口令需为 12 至 256 个字符，请妥善保存，遗忘无法恢复', 'Backup password must be 12–256 characters; keep it safe, it cannot be recovered'));
   if (form.tgEnabled && (!(token || view.tokenSet) || !chats.length)) throw new Error(t('启用机器人须填写 Bot Token 和至少一个 Chat ID', 'Enabling the bot needs a bot token and at least one chat ID'));
   if (form.tgBackupEnabled && (!(form.tgBackupPassword || view.backupPasswordSet) || !form.tgReportTime)) throw new Error(t('发送备份须设置备份加密口令和每日报告时间', 'Sending backups needs a backup password and a daily report time'));
   return { enabled: form.tgEnabled, token, chatIds: chats.join(','), reportTime: form.tgReportTime, notifyLogin: form.tgNotifyLogin, cpuThreshold: threshold, backupEnabled: form.tgBackupEnabled, backupPassword: form.tgBackupPassword };

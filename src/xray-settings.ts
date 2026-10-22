@@ -165,7 +165,8 @@ export function initXraySettings(root: HTMLElement, icons: () => void, persisten
     if (persistent) { try { workspace = (await api<{ data: Workspace | null }>('workspace')).data ?? workspace; } catch { /* 读取失败时沿用已有列表。 */ } }
     const p = parts(); if (!p) return;
     const existing = index === null ? emptyRule() : ruleForm(p.rules[index]);
-    if (!existing) { jsonDialog(t('编辑路由规则', 'Edit routing rule'), p.rules[index!], next => change(current => ({ ...current, rules: current.rules.map((rule, i) => i === index ? next : rule) }))); return; }
+    // 入站标签按用户要求只能选一个；已有多个入站标签的规则改用JSON编辑，避免保存时丢掉其余标签。
+    if (!existing || existing.inboundTag.length > 1) { jsonDialog(t('编辑路由规则', 'Edit routing rule'), p.rules[index!], next => change(current => ({ ...current, rules: current.rules.map((rule, i) => i === index ? next : rule) }))); return; }
     const inbounds: [string, string][] = [...workspace.inbounds.map(item => [`in-${item.id}`, item.name] as [string, string]), ...p.outbounds.map(outboundReverseTag).filter(Boolean).map(tag => [tag, `${t('反向代理', 'Reverse')} · ${tag}`] as [string, string])];
     const users: [string, string][] = workspace.clients.map(item => [`client-${item.id}`, item.name]);
     const none = (label: string): [string, string] => ['', `(${label})`];
@@ -175,8 +176,6 @@ export function initXraySettings(root: HTMLElement, icons: () => void, persisten
     const row = (label: string, control: string, hint = '') => `<label class="rule-row"><span class="rule-label">${label}${hint ? help(hint) : ''}</span>${control}</label>`;
     const group = (label: string, control: string) => `<div class="rule-row is-top" role="group" aria-label="${esc(label)}"><span class="rule-label">${label}</span>${control}</div>`;
     const chips = (name: string, current: string[], options: [string, string][]) => `<div class="rule-chips">${options.map(([key, label]) => `<label class="check-field"><input type="checkbox" name="${name}" value="${esc(key)}" ${current.includes(key) ? 'checked' : ''}><span>${esc(label)}</span></label>`).join('')}</div>`;
-    // 入站标签用下拉多选（用户2026-10-22要求）：收起时显示已选名称，展开为磨砂选项面板，点外面收起。
-    const dropdown = (name: string, current: string[], options: [string, string][]) => `<details class="tag-select"><summary data-placeholder="${t('请选择', 'Select')}">${esc(options.filter(([key]) => current.includes(key)).map(([, label]) => label).join(', '))}</summary><div class="tag-options">${options.map(([key, label]) => `<label class="check-field"><input type="checkbox" name="${name}" value="${esc(key)}" ${current.includes(key) ? 'checked' : ''}><span>${esc(label)}</span></label>`).join('')}</div></details>`;
     const attrRow = ([name, value]: [string, string]) => `<div class="attr-row"><span class="attr-index"></span><input name="attrName" value="${esc(name)}" placeholder="${t('名称', 'Name')}" aria-label="${t('属性名称', 'Attribute name')}" autocomplete="off"><input name="attrValue" value="${esc(value)}" placeholder="${t('值', 'Value')}" aria-label="${t('属性值', 'Attribute value')}" autocomplete="off">${button('−', `data-attr-remove aria-label="${t('删除属性', 'Remove attribute')}"`, 'icon-button bordered')}</div>`;
     const ip = 'placeholder="0.0.0.0/8, fc00::/7, geoip:cn"', ports = 'placeholder="53,443,1000-2000"';
     openDialog(index === null ? t('+ 路由规则', '+ Routing rule') : t('编辑路由规则', 'Edit routing rule'), `<div class="rule-form">${[
@@ -190,19 +189,14 @@ export function initXraySettings(root: HTMLElement, icons: () => void, persisten
       row(t('域名', 'Domain'), input('domain', existing.domain, 'placeholder="google.com, geosite:cn"'), comma),
       users.length ? group(t('用户', 'User'), chips('userTag', lines(existing.user), users)) : '',
       row(t('端口', 'Port'), input('port', existing.port, ports), comma),
-      inbounds.length ? group(t('入站标签', 'Inbound tags'), dropdown('inboundTag', existing.inboundTag, inbounds)) : '',
+      inbounds.length ? row(t('入站标签', 'Inbound tag'), select('inboundTag', existing.inboundTag[0] ?? '', [none(t('无', 'None')), ...inbounds])) : '',
       row(t('出站标签', 'Outbound tag'), select('outboundTag', existing.outboundTag, [none(t('无', 'None')), ...p.outbounds.map(item => [String(item.tag), String(item.tag)] as [string, string]), ...reverseTags().map(tag => [tag, `${t('反向代理', 'Reverse')} · ${tag}`] as [string, string])])),
       row(t('负载均衡标签', 'Balancer tag'), select('balancerTag', existing.balancerTag, [none(t('无', 'None')), ...p.balancers.map(item => [String(item.tag), String(item.tag)] as [string, string])]), t('通过已配置的负载均衡转发流量', 'Route traffic through a configured balancer')),
     ].join('')}</div>`, form => {
       const data = new FormData(form), names = data.getAll('attrName').map(String), values = data.getAll('attrValue').map(String);
-      const rule = ruleFromForm({ sourceIP: value(form, 'sourceIP'), sourcePort: value(form, 'sourcePort'), vlessRoute: value(form, 'vlessRoute'), network: value(form, 'network'), protocol: checked(form, 'protocol'), attrs: names.map((name, i) => [name, values[i] ?? ''] as [string, string]), ip: value(form, 'ip'), domain: value(form, 'domain'), user: checked(form, 'userTag').join(','), port: value(form, 'port'), inboundTag: checked(form, 'inboundTag'), outboundTag: value(form, 'outboundTag'), balancerTag: value(form, 'balancerTag') });
+      const rule = ruleFromForm({ sourceIP: value(form, 'sourceIP'), sourcePort: value(form, 'sourcePort'), vlessRoute: value(form, 'vlessRoute'), network: value(form, 'network'), protocol: checked(form, 'protocol'), attrs: names.map((name, i) => [name, values[i] ?? ''] as [string, string]), ip: value(form, 'ip'), domain: value(form, 'domain'), user: checked(form, 'userTag').join(','), port: value(form, 'port'), inboundTag: value(form, 'inboundTag') ? [value(form, 'inboundTag')] : [], outboundTag: value(form, 'outboundTag'), balancerTag: value(form, 'balancerTag') });
       change(current => ({ ...current, rules: index === null ? [...current.rules, rule] : current.rules.map((item, i) => i === index ? rule : item) }));
     }, undefined, [t('关闭', 'Close'), index === null ? t('创建', 'Create') : t('保存', 'Save')]);
-    const editor = dialog.querySelector('form')!;
-    editor.querySelectorAll<HTMLDetailsElement>('.tag-select').forEach(box => box.addEventListener('change', () => {
-      box.querySelector('summary')!.textContent = [...box.querySelectorAll<HTMLInputElement>('input:checked')].map(input => input.nextElementSibling!.textContent).join(', ');
-    }));
-    editor.addEventListener('click', event => editor.querySelectorAll<HTMLDetailsElement>('.tag-select[open]').forEach(box => { if (!box.contains(event.target as Node)) box.open = false; }));
     // 属性行可增删，序号随之重排。
     const rows = dialog.querySelector<HTMLElement>('[data-attr-rows]')!;
     const renumber = () => rows.querySelectorAll('.attr-index').forEach((cell, i) => { cell.textContent = String(i + 1); });

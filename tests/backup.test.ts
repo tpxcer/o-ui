@@ -10,9 +10,10 @@ test('备份编码往返与大小边界', () => {
   assert.throws(() => decodeBackup('!invalid'));
   assert.throws(() => decodeBackup(''));
 });
-test('备份密码按UTF-8字节校验', () => {
-  assert.throws(() => validateBackupPassword('short'));
-  assert.throws(() => validateBackupPassword('中'.repeat(86)));
+test('备份密码不限长度，只要求非空', () => {
+  assert.throws(() => validateBackupPassword(''));
+  assert.doesNotThrow(() => validateBackupPassword('short'));
+  assert.doesNotThrow(() => validateBackupPassword('中'.repeat(86)));
   assert.doesNotThrow(() => validateBackupPassword('中文密码'));
   assert.doesNotThrow(() => validateBackupPassword('x'.repeat(256)));
 });

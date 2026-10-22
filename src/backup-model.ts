@@ -8,8 +8,8 @@ export interface BackupPreview {
 }
 
 export function validateBackupPassword(password: string): void {
-  const length = new TextEncoder().encode(password).length;
-  if (length < 12 || length > 256) throw new Error(t('备份密码需为12至256字节；请妥善保存，遗忘无法恢复。', 'Backup password must be 12–256 bytes; keep it safe, it cannot be recovered.'));
+  // 备份密码不限长度（用户2026-10-22要求），只要求非空。
+  if (!password) throw new Error(t('请填写备份密码；请妥善保存，遗忘无法恢复。', 'Enter a backup password; keep it safe, it cannot be recovered.'));
 }
 
 export function encodeBackup(data: Uint8Array): string {

@@ -107,7 +107,6 @@ func TestTelegramSettingsAndNotifications(t *testing.T) {
 		{"reportTime": "24:00"},
 		{"cpuThreshold": 101},
 		{"backupEnabled": true, "reportTime": "09:00"},
-		{"backupPassword": "short"},
 	} {
 		put(0, bad, 400)
 	}

@@ -119,7 +119,7 @@ export function initPanelSettings(root: HTMLElement, persistent: boolean): { ren
       settingRow(t('CPU 提醒阈值（%）', 'CPU alert threshold (%)'), t('CPU 使用率达到该值时提醒，30 分钟内不重复；0 表示关闭', 'Alerts when CPU usage reaches this value, at most once per 30 minutes; 0 turns it off'), textControl('tgCpuThreshold', v.tgCpuThreshold, t('CPU 提醒阈值（%）', 'CPU alert threshold (%)'), 'type="number" min="0" max="100" inputmode="numeric"')),
     ].join(''))}${settingSection(t('备份', 'Backup'), [
       settingRow(t('随每日报告发送备份', 'Send backup with the daily report'), t('发送加密业务备份文件（.ixpb），可在“备份和恢复”中用下方口令恢复', 'Sends an encrypted business backup (.ixpb) that can be restored under Backup and restore with the password below'), toggle('tgBackupEnabled', v.tgBackupEnabled, t('随每日报告发送备份', 'Send backup with the daily report'))),
-      settingRow(t('备份加密口令', 'Backup password'), t('12 至 256 个字符；遗忘则备份无法恢复。只写不读', '12–256 characters; backups cannot be restored without it. Write-only'), secret('tgBackupPassword', v.tgBackupPassword, view?.backupPasswordSet, t('备份加密口令', 'Backup password'))),
+      settingRow(t('备份加密口令', 'Backup password'), t('长度不限；遗忘则备份无法恢复。只写不读', 'Any length; backups cannot be restored without it. Write-only'), secret('tgBackupPassword', v.tgBackupPassword, view?.backupPasswordSet, t('备份加密口令', 'Backup password'))),
     ].join(''))}</form>
     <div class="settings-table-actions"><button type="button" class="secondary-button" id="telegram-test">${t('发送测试消息', 'Send test message')}</button><button type="button" class="secondary-button" id="telegram-report">${t('立即发送报告', 'Send report now')}</button></div>`;
   }

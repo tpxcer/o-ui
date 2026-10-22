@@ -46,8 +46,11 @@ func TestAuthenticatedEncryption(t *testing.T) {
 			t.Fatal("tamper accepted", index)
 		}
 	}
-	if _, err = Seal(plaintext, "short"); err == nil {
-		t.Fatal("weak password")
+	if _, err = Seal(plaintext, ""); err == nil {
+		t.Fatal("empty password accepted")
+	}
+	if _, err = Seal(plaintext, "x"); err != nil {
+		t.Fatal("backup passwords have no length limit", err)
 	}
 	if _, err = Seal(make([]byte, MaxPlaintext+1), password); err == nil {
 		t.Fatal("oversized plaintext")
