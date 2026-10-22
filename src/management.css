@@ -215,8 +215,9 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent-bg); wi
 .create-actions { display: flex; align-items: center; gap: 10px; }
 .quick-create { position: relative; }
 .quick-menu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 30; display: grid; min-width: 220px; padding: 6px; background: var(--overlay); -webkit-backdrop-filter: var(--glass); backdrop-filter: var(--glass); border: 1px solid var(--border-strong); border-radius: 12px; box-shadow: var(--shadow-pop); }
-.quick-menu button { padding: 9px 12px; text-align: left; color: var(--text); background: none; border: 0; border-radius: var(--radius-sm); cursor: pointer; white-space: nowrap; }
-.quick-menu button:hover, .quick-menu button:focus-visible { background: var(--raised); }
+.quick-menu button { min-height: 34px; padding: 6px 10px; text-align: left; color: var(--text); background: none; border: 0; border-radius: 8px; cursor: pointer; white-space: nowrap; font-size: 13px; }
+/* 与磨砂下拉列表的选项一致：悬停与键盘聚焦用浅底高亮，不画粗蓝框 */
+.quick-menu button:hover, .quick-menu button:focus-visible { background: var(--raised); outline: none; }
 @media (max-width: 700px) { .create-actions { flex-wrap: wrap; justify-content: flex-end; } }
 
 /* 在线IP弹窗 */
