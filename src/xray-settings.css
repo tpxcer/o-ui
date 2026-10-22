@@ -75,8 +75,10 @@
 .multi-options .check-field { margin: 0; }
 .check-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px 12px; }
 .field-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 0 12px; }
-.import-row { display: flex; gap: 8px; align-items: flex-end; }
-.import-row .form-field { flex: 1; }
+/* 输入框与按钮底边对齐：字段的下边距移到整行，按钮与输入框同高 */
+.import-row { display: flex; gap: 8px; align-items: flex-end; margin-bottom: 18px; }
+.import-row .form-field { flex: 1; margin-bottom: 0; }
+.import-row > button { flex-shrink: 0; }
 .json-editor { width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 .segmented { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
 .segmented label { cursor: pointer; }
