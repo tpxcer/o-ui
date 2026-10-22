@@ -40,7 +40,7 @@ func TestOnlineChangesAnnouncesOnceAndOffline(t *testing.T) {
 		t.Fatal("1 MB in this session should announce online once", online)
 	}
 	text := onlineMessage(online, "台湾-Reality", []string{"203.0.113.9"}, "zh")
-	for _, part := range []string{"🚀 <b>o-ui 客户端上线</b>", "<code>a&lt;b</code>", "<code>台湾-Reality</code>", "🌐 IP：<code>203.0.113.9</code>"} {
+	for _, part := range []string{"💎 <b>o-ui 用户通知</b>\n🚀 <b>客户端上线</b>", "📧 用户/节点：<code>a&lt;b</code>", "🧩 节点名称：<code>台湾-Reality</code>", "🌐 IP 地址：<code>203.0.113.9</code>", "⏰ 上线时间：<code>"} {
 		if !strings.Contains(text, part) {
 			t.Fatalf("online message missing %q:\n%s", part, text)
 		}
@@ -52,8 +52,8 @@ func TestOnlineChangesAnnouncesOnceAndOffline(t *testing.T) {
 	if offline.online || len(sessions) != 0 {
 		t.Fatal("10 minutes without traffic should announce offline and end the session", offline, sessions)
 	}
-	text = onlineMessage(offline, "台湾-Reality", nil, "zh")
-	for _, part := range []string{"📴 <b>o-ui 客户端离线</b>", "⏱ 在线时长：1 分钟", "🔼 700 KB · 🔽 900 KB · 合计 1.6 MB"} {
+	text = onlineMessage(offline, "台湾-Reality", []string{"203.0.113.9", "198.51.100.7"}, "zh")
+	for _, part := range []string{"💎 <b>o-ui 用户通知</b>\n📴 <b>客户端下线</b>", "🌐 离线 IP 地址：<code>203.0.113.9, 198.51.100.7</code>", "⏱ 在线时长：<code>1分钟30秒</code>", "⏰ 下线时间：<code>", "📊 流量：<code>↑700 KB / ↓900 KB / 合计1.6 MB</code>"} {
 		if !strings.Contains(text, part) {
 			t.Fatalf("offline message missing %q:\n%s", part, text)
 		}
@@ -72,8 +72,23 @@ func TestOnlineChangesAnnouncesOnceAndOffline(t *testing.T) {
 	}
 }
 
+// 会话期间出现过的IP按顺序去重保留，离线时连接已断开也能列出；最多8个。
+func TestMergeIPs(t *testing.T) {
+	ips := mergeIPs(nil, []string{"203.0.113.9"})
+	ips = mergeIPs(ips, []string{"203.0.113.9", "198.51.100.7"})
+	if fmt.Sprint(ips) != "[203.0.113.9 198.51.100.7]" {
+		t.Fatal(ips)
+	}
+	for i := range 20 {
+		ips = mergeIPs(ips, []string{fmt.Sprintf("192.0.2.%d", i)})
+	}
+	if len(ips) != 8 {
+		t.Fatal("keep at most 8 IPs", ips)
+	}
+}
+
 func TestOnlineDuration(t *testing.T) {
-	for d, want := range map[time.Duration]string{30 * time.Second: "不到 1 分钟", 59 * time.Minute: "59 分钟", 125 * time.Minute: "2 小时 5 分钟", 50 * time.Hour: "2 天 2 小时"} {
+	for d, want := range map[time.Duration]string{-time.Second: "0秒", 30 * time.Second: "30秒", 10*time.Minute + 19*time.Second: "10分钟19秒", 125 * time.Minute: "2小时5分钟0秒", 50 * time.Hour: "50小时0分钟0秒"} {
 		if got := onlineDuration(d, "zh"); got != want {
 			t.Fatalf("%s: %q != %q", d, got, want)
 		}

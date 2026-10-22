@@ -9,6 +9,7 @@ import (
 	"independent-panel/internal/i18n"
 	"independent-panel/internal/store"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 )
@@ -24,6 +25,7 @@ type onlineSession struct {
 	start     time.Time
 	up, down  uint64
 	announced bool
+	ips       []string // 会话期间出现过的在线IP；离线时连接已断开，IP采样里已经没有它们
 }
 
 type onlineEvent struct {
@@ -74,38 +76,56 @@ func onlineChanges(sessions map[string]onlineSession, clients []clientDraft, tra
 	return events
 }
 
+// onlineDuration与OUI一致精确到秒：“X小时Y分钟Z秒”。
 func onlineDuration(d time.Duration, lang string) string {
-	minutes := int(d.Minutes())
+	seconds := int(max(d, 0).Seconds())
+	hours, minutes := seconds/3600, seconds%3600/60
+	seconds %= 60
 	switch {
-	case minutes < 1:
-		return i18n.Pick(lang, "不到 1 分钟", "under a minute")
-	case minutes < 60:
-		return fmt.Sprintf(i18n.Pick(lang, "%d 分钟", "%d min"), minutes)
-	case minutes < 24*60:
-		return fmt.Sprintf(i18n.Pick(lang, "%d 小时 %d 分钟", "%d h %d min"), minutes/60, minutes%60)
+	case hours > 0:
+		return fmt.Sprintf(i18n.Pick(lang, "%d小时%d分钟%d秒", "%d h %d min %d s"), hours, minutes, seconds)
+	case minutes > 0:
+		return fmt.Sprintf(i18n.Pick(lang, "%d分钟%d秒", "%d min %d s"), minutes, seconds)
 	}
-	return fmt.Sprintf(i18n.Pick(lang, "%d 天 %d 小时", "%d d %d h"), minutes/(24*60), minutes%(24*60)/60)
+	return fmt.Sprintf(i18n.Pick(lang, "%d秒", "%d s"), seconds)
 }
 
+// onlineMessage的字段与顺序参照OUI的上线/下线通知（用户2026-10-22提供截图）；OUI按IP分条发送，这里合并为一条列出全部IP。
 func onlineMessage(event onlineEvent, inbound string, ips []string, lang string) string {
 	say := func(zh, en string) string { return i18n.Pick(lang, zh, en) }
-	client := say("👤 客户端：", "👤 Client: ") + "<code>" + html.EscapeString(event.client.Name) + "</code>"
-	where := say("📍 入站：", "📍 Inbound: ") + "<code>" + html.EscapeString(inbound) + "</code>"
+	code := func(value string) string { return "<code>" + html.EscapeString(value) + "</code>" }
+	lines := []string{say("💎 <b>o-ui 用户通知</b>", "💎 <b>o-ui client alert</b>"), say("📴 <b>客户端下线</b>", "📴 <b>Client offline</b>")}
 	if event.online {
-		lines := []string{say("🚀 <b>o-ui 客户端上线</b>", "🚀 <b>o-ui client online</b>"), client, where}
-		if len(ips) > 0 {
-			lines = append(lines, say("🌐 IP：", "🌐 IP: ")+"<code>"+html.EscapeString(strings.Join(ips, ", "))+"</code>")
+		lines[1] = say("🚀 <b>客户端上线</b>", "🚀 <b>Client online</b>")
+	}
+	lines = append(lines, say("📧 用户/节点：", "📧 Client: ")+code(event.client.Name), say("🧩 节点名称：", "🧩 Inbound: ")+code(inbound))
+	if len(ips) > 0 {
+		label := say("🌐 IP 地址：", "🌐 IP: ")
+		if !event.online {
+			label = say("🌐 离线 IP 地址：", "🌐 Last IP: ")
 		}
-		return strings.Join(append(lines, say("⏰ 上线时间：", "⏰ Online since: ")+event.session.start.Local().Format("2006-01-02 15:04:05")), "\n")
+		lines = append(lines, label+code(strings.Join(ips, ", ")))
+	}
+	if event.online {
+		return strings.Join(append(lines, say("⏰ 上线时间：", "⏰ Online at: ")+code(event.session.start.Local().Format("2006-01-02 15:04:05"))), "\n")
 	}
 	offline := event.traffic.lastOnline
 	up, down := event.traffic.up-event.session.up, event.traffic.down-event.session.down
-	return strings.Join([]string{
-		say("📴 <b>o-ui 客户端离线</b>", "📴 <b>o-ui client offline</b>"), client, where,
-		say("⏱ 在线时长：", "⏱ Online for: ") + onlineDuration(max(offline.Sub(event.session.start), 0), lang),
-		say("⏰ 离线时间：", "⏰ Offline at: ") + offline.Local().Format("2006-01-02 15:04:05"),
-		fmt.Sprintf(say("📊 本次流量：🔼 %s · 🔽 %s · 合计 %s", "📊 This session: 🔼 %s · 🔽 %s · total %s"), humanBytes(up), humanBytes(down), humanBytes(up+down)),
-	}, "\n")
+	return strings.Join(append(lines,
+		say("⏱ 在线时长：", "⏱ Online for: ")+code(onlineDuration(offline.Sub(event.session.start), lang)),
+		say("⏰ 下线时间：", "⏰ Offline at: ")+code(offline.Local().Format("2006-01-02 15:04:05")),
+		say("📊 流量：", "📊 Traffic: ")+code(fmt.Sprintf(say("↑%s / ↓%s / 合计%s", "↑%s / ↓%s / total %s"), humanBytes(up), humanBytes(down), humanBytes(up+down))),
+	), "\n")
+}
+
+// mergeIPs按出现顺序去重合并，最多保留8个。
+func mergeIPs(ips, more []string) []string {
+	for _, ip := range more {
+		if len(ips) < 8 && !slices.Contains(ips, ip) {
+			ips = append(ips, ip)
+		}
+	}
+	return ips
 }
 
 // onlineIPs读取IP上限采样到的当前在线IP（每10秒一次；Xray不统计本机回环地址）。
@@ -243,10 +263,15 @@ func (rt *Runtime) notifyOnline(ctx context.Context, s telegramSettings, session
 		inbounds[in.ID] = in.Name
 	}
 	lang := telegramLang()
-	for _, event := range onlineChanges(sessions, clients, traffic, now) {
-		var ips []string
+	events := onlineChanges(sessions, clients, traffic, now)
+	for id, session := range sessions {
+		session.ips = mergeIPs(session.ips, rt.onlineIPs(id))
+		sessions[id] = session
+	}
+	for _, event := range events {
+		ips := event.session.ips
 		if event.online {
-			ips = rt.onlineIPs(event.client.ID)
+			ips = mergeIPs(slices.Clone(ips), rt.onlineIPs(event.client.ID))
 		}
 		_, _ = telegramBroadcast(ctx, s, onlineMessage(event, inbounds[event.client.InboundID], ips, lang))
 	}
