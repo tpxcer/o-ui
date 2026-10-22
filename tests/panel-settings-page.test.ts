@@ -42,7 +42,7 @@ function page(write: Fetcher, options: { read?: () => Promise<void>; twoFactor?:
     if (path === 'panel/subscription') return Response.json({ revision: 0, data: { enabled: true, updateHours: 12, title: 'o-ui', showInfo: true, remarkClientName: true, clashEnabled: true, jsonEnabled: true, jsonFragment: false, fragmentPackets: 'tlshello', fragmentLength: '100-200', fragmentInterval: '10-20', jsonDirectIP: [], jsonDirectDomain: [] } });
     if (path === 'auth/status') return Response.json({ initialized: true, authenticated: true, username: 'pageqa', twoFactor: false });
     if (path === 'auth/2fa') return Response.json({ enabled: false });
-    if (path === 'panel/telegram') return Response.json({ revision: 0, data: { enabled: false, chatIds: '', reportTime: '', notifyLogin: false, cpuThreshold: 0, backupEnabled: false, tokenSet: false, backupPasswordSet: false } });
+    if (path === 'panel/telegram') return Response.json({ revision: 0, data: { enabled: false, chatIds: '', reportTime: '', notifyLogin: false, notifyOnline: false, cpuThreshold: 0, backupEnabled: false, tokenSet: false, backupPasswordSet: false } });
     return Response.json({ interfaces: ['eth0'] });
   };
   const values = {

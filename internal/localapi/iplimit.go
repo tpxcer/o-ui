@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"independent-panel/internal/engine"
 	"independent-panel/internal/i18n"
 	"independent-panel/internal/store"
@@ -389,8 +390,8 @@ func notifyIPLimit(state *store.Store, target ipLimitTarget, keep, banned []stri
 			return
 		}
 		lang := telegramLang()
-		text := fmt.Sprintf(i18n.Pick(lang, "o-ui IP 上限：客户端 %s（上限 %d）同时在线超出，已在端口 %d/%s 封禁 %s 10 分钟；保留 %s", "o-ui IP limit: client %s (limit %d) exceeded; on port %d/%s banned %s for 10 minutes; kept %s"),
-			target.name, target.limit, target.port, target.protocol, strings.Join(banned, ", "), strings.Join(keep, ", "))
+		text := fmt.Sprintf(i18n.Pick(lang, "🚫 <b>o-ui IP 上限</b>\n👤 客户端：<code>%s</code>（上限 %d）\n🔌 端口：%d/%s\n⛔ 已封禁 10 分钟：%s\n✅ 保留：%s", "🚫 <b>o-ui IP limit</b>\n👤 Client: <code>%s</code> (limit %d)\n🔌 Port: %d/%s\n⛔ Banned for 10 minutes: %s\n✅ Kept: %s"),
+			html.EscapeString(target.name), target.limit, target.port, target.protocol, html.EscapeString(strings.Join(banned, ", ")), html.EscapeString(strings.Join(keep, ", ")))
 		_, _ = telegramBroadcast(ctx, s, text)
 	}()
 }

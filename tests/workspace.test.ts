@@ -115,6 +115,10 @@ test('流量自动单位：字节取整，去掉多余的0', async () => {
   assert.equal(formatBytes(50e9), '50 GB');
   assert.equal(formatBytes(41_500_000), '41.5 MB');
   assert.equal(formatBytes(2_850_000), '2.85 MB');
+  assert.equal(formatBytes(700_000), '700 KB');
+  assert.equal(formatBytes(250e6), '250 MB');
+  assert.equal(formatBytes(100e9), '100 GB');
+  assert.equal(formatBytes(10e6), '10 MB');
   assert.equal(formatBytes(1_500_000_000n), '1.5 GB');
   assert.equal(formatBytes(null), '未采集');
 });

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"html"
 	"independent-panel/internal/config"
 	"independent-panel/internal/i18n"
 	"io"
@@ -75,7 +76,7 @@ func telegramRequest(ctx context.Context, token, method string, payload any, res
 }
 
 func telegramReply(ctx context.Context, token, chat, text string, keyboard [][]tgButton) {
-	payload := map[string]any{"chat_id": chat, "text": text, "disable_web_page_preview": true}
+	payload := map[string]any{"chat_id": chat, "text": text, "parse_mode": "HTML", "disable_web_page_preview": true}
 	if len(keyboard) > 0 {
 		payload["reply_markup"] = map[string]any{"inline_keyboard": keyboard}
 	}
@@ -158,18 +159,18 @@ func (rt *Runtime) handleTelegram(ctx context.Context, s telegramSettings, updat
 		command = strings.ToLower(strings.SplitN(fields[0], "@", 2)[0])
 	}
 	if command == "/id" {
-		telegramReply(ctx, s.Token, chat, say("本聊天的 Chat ID：", "This chat's ID: ")+chat, nil)
+		telegramReply(ctx, s.Token, chat, say("🆔 本聊天的 Chat ID：", "🆔 This chat's ID: ")+"<code>"+chat+"</code>", nil)
 		return
 	}
 	if !slices.Contains(s.chats(), chat) {
 		if command == "/start" {
-			telegramReply(ctx, s.Token, chat, say("未授权。请把 Chat ID ", "Not authorized. Add Chat ID ")+chat+say(" 加到面板“面板设置 → Telegram”的管理员 Chat ID 里。", " to the admin chat IDs under Panel settings → Telegram."), nil)
+			telegramReply(ctx, s.Token, chat, say("⛔ 未授权。请把 Chat ID ", "⛔ Not authorized. Add Chat ID ")+"<code>"+chat+"</code>"+say(" 加到面板“面板设置 → Telegram”的管理员 Chat ID 里。", " to the admin chat IDs under Panel settings → Telegram."), nil)
 		}
 		return
 	}
 	switch {
 	case command == "/start" || command == "/help" || command == "/menu" || data == "m":
-		telegramReply(ctx, s.Token, chat, say("o-ui 管理菜单", "o-ui admin menu"), rt.telegramMenu(lang))
+		telegramReply(ctx, s.Token, chat, say("🤖 <b>o-ui 管理菜单</b>\n👇 请选择：", "🤖 <b>o-ui admin menu</b>\n👇 Choose an action:"), rt.telegramMenu(lang))
 	case command == "/status" || data == "st":
 		telegramReply(ctx, s.Token, chat, rt.telegramStatus(ctx, lang), backButton(lang))
 	case data != "":
@@ -189,7 +190,7 @@ func (rt *Runtime) telegramMenu(lang string) [][]tgButton {
 }
 
 func backButton(lang string) [][]tgButton {
-	return [][]tgButton{{{i18n.Pick(lang, "« 返回菜单", "« Menu"), "m"}}}
+	return [][]tgButton{{{i18n.Pick(lang, "🏠 返回菜单", "🏠 Menu"), "m"}}}
 }
 
 // telegramData读取入站草稿与流量账本；只读，不需要rt.mu。
@@ -239,7 +240,10 @@ func humanBytes(n uint64) string {
 	} else if value >= 10 {
 		text = strconv.FormatFloat(value, 'f', 1, 64)
 	}
-	return strings.TrimSuffix(strings.TrimRight(strings.TrimRight(text, "0"), "."), ".") + " " + units[unit]
+	if strings.Contains(text, ".") {
+		text = strings.TrimRight(strings.TrimRight(text, "0"), ".")
+	}
+	return text + " " + units[unit]
 }
 
 func presetLabel(preset string) string {
@@ -250,12 +254,12 @@ func (rt *Runtime) telegramStatus(ctx context.Context, lang string) string {
 	rt.mu.Lock()
 	report := rt.telegramReport(ctx, time.Now())
 	rt.mu.Unlock()
-	lines := []string{strings.Replace(report, i18n.Pick(lang, "o-ui 每日报告", "o-ui daily report"), i18n.Pick(lang, "o-ui 状态", "o-ui status"), 1)}
+	lines := []string{strings.Replace(report, i18n.Pick(lang, "o-ui 每日报告", "o-ui daily report"), i18n.Pick(lang, "o-ui 服务器状态", "o-ui server status"), 1)}
 	if node, _ := rt.business.network(); node != nil && node.Upload != nil && node.Download != nil {
-		lines = append(lines, fmt.Sprintf(i18n.Pick(lang, "节点网速：↑ %s/s ↓ %s/s", "Node speed: ↑ %s/s ↓ %s/s"), humanBytes(uint64(*node.Upload)), humanBytes(uint64(*node.Download))))
+		lines = append(lines, fmt.Sprintf(i18n.Pick(lang, "⚡ 节点网速：🔼 %s/s · 🔽 %s/s", "⚡ Node speed: 🔼 %s/s · 🔽 %s/s"), humanBytes(uint64(*node.Upload)), humanBytes(uint64(*node.Download))))
 	}
 	if nic := rt.monitor.Snapshot().Network; nic != nil && nic.Upload != nil && nic.Download != nil {
-		lines = append(lines, fmt.Sprintf(i18n.Pick(lang, "网卡总速度：↑ %s/s ↓ %s/s", "NIC speed: ↑ %s/s ↓ %s/s"), humanBytes(uint64(*nic.Upload)), humanBytes(uint64(*nic.Download))))
+		lines = append(lines, fmt.Sprintf(i18n.Pick(lang, "📶 网卡总速度：🔼 %s/s · 🔽 %s/s", "📶 NIC speed: 🔼 %s/s · 🔽 %s/s"), humanBytes(uint64(*nic.Upload)), humanBytes(uint64(*nic.Download))))
 	}
 	if _, _, traffic, err := rt.telegramData(ctx); err == nil {
 		online := 0
@@ -264,7 +268,7 @@ func (rt *Runtime) telegramStatus(ctx context.Context, lang string) string {
 				online++
 			}
 		}
-		lines = append(lines, fmt.Sprintf(i18n.Pick(lang, "在线客户端：%d", "Online clients: %d"), online))
+		lines = append(lines, fmt.Sprintf(i18n.Pick(lang, "🟢 在线客户端：%d 个", "🟢 Online clients: %d"), online))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -272,10 +276,13 @@ func (rt *Runtime) telegramStatus(ctx context.Context, lang string) string {
 func (rt *Runtime) telegramAction(ctx context.Context, s telegramSettings, chat, data, lang string) {
 	say := func(zh, en string) string { return i18n.Pick(lang, zh, en) }
 	reply := func(text string, keyboard [][]tgButton) { telegramReply(ctx, s.Token, chat, text, keyboard) }
+	failed := func(prefix string, err error) {
+		reply("❌ "+prefix+html.EscapeString(i18n.Translate(err.Error(), lang)), backButton(lang))
+	}
 	action, argument, _ := strings.Cut(data, ":")
 	draft, revision, traffic, err := rt.telegramData(ctx)
 	if err != nil && action != "bk" && action != "rx" && action != "rxc" && action != "up" && action != "upc" {
-		reply(say("读取数据失败：", "Failed to read data: ")+i18n.Translate(err.Error(), lang), backButton(lang))
+		failed(say("读取数据失败：", "Failed to read data: "), err)
 		return
 	}
 	inboundName := map[string]string{}
@@ -289,31 +296,35 @@ func (rt *Runtime) telegramAction(ctx context.Context, s telegramSettings, chat,
 			a, b := traffic[clients[i].ID], traffic[clients[j].ID]
 			return a.up+a.down > b.up+b.down
 		})
-		lines := []string{say("📈 流量排行（累计）", "📈 Traffic ranking (total)")}
+		lines := []string{say("📈 <b>流量排行</b>（累计）", "📈 <b>Traffic ranking</b> (total)")}
 		for i, client := range clients {
 			if i == 15 {
 				break
 			}
+			rank := strconv.Itoa(i+1) + "."
+			if i < 3 {
+				rank = []string{"🥇", "🥈", "🥉"}[i]
+			}
 			t := traffic[client.ID]
-			lines = append(lines, fmt.Sprintf("%d. %s — %s (↑%s ↓%s)", i+1, client.Name, humanBytes(t.up+t.down), humanBytes(t.up), humanBytes(t.down)))
+			lines = append(lines, fmt.Sprintf("%s <b>%s</b> · <code>%s</code>\n      🔼 %s · 🔽 %s", rank, html.EscapeString(client.Name), humanBytes(t.up+t.down), humanBytes(t.up), humanBytes(t.down)))
 		}
 		if len(clients) == 0 {
-			lines = append(lines, say("还没有客户端", "No clients yet"))
+			lines = append(lines, say("📭 还没有客户端", "📭 No clients yet"))
 		}
 		reply(strings.Join(lines, "\n"), backButton(lang))
 	case "on":
-		lines := []string{say("🟢 在线客户端（最近2分钟有流量）", "🟢 Online clients (traffic in the last 2 minutes)")}
+		lines := []string{say("🟢 <b>在线客户端</b>（最近 2 分钟有流量）", "🟢 <b>Online clients</b> (traffic in the last 2 minutes)")}
 		for _, client := range draft.Clients {
 			if traffic[client.ID].online {
-				lines = append(lines, fmt.Sprintf("• %s · %s", client.Name, inboundName[client.InboundID]))
+				lines = append(lines, fmt.Sprintf("👤 <b>%s</b> · 📍 %s", html.EscapeString(client.Name), html.EscapeString(inboundName[client.InboundID])))
 			}
 		}
 		if len(lines) == 1 {
-			lines = append(lines, say("当前没有在线客户端", "No client is online"))
+			lines = append(lines, say("😴 当前没有在线客户端", "😴 No client is online"))
 		}
 		reply(strings.Join(lines, "\n"), backButton(lang))
 	case "ds":
-		lines := []string{say("⏳ 3 天内到期或流量已用 80% 以上", "⏳ Expiring within 3 days or 80%+ of quota used")}
+		lines := []string{say("⏳ <b>即将到期或流量快用完</b>\n（3 天内到期或已用 80% 以上）", "⏳ <b>Expiring or low on quota</b>\n(expiring within 3 days or 80%+ used)")}
 		now := time.Now()
 		for _, client := range draft.Clients {
 			if !client.Enabled {
@@ -321,21 +332,21 @@ func (rt *Runtime) telegramAction(ctx context.Context, s telegramSettings, chat,
 			}
 			t, notes := traffic[client.ID], []string{}
 			if client.ExpiresAt != nil && time.UnixMilli(*client.ExpiresAt).Before(now.Add(72*time.Hour)) {
-				notes = append(notes, say("到期 ", "expires ")+time.UnixMilli(*client.ExpiresAt).Format("2006-01-02 15:04"))
+				notes = append(notes, say("📅 到期 ", "📅 expires ")+time.UnixMilli(*client.ExpiresAt).Format("2006-01-02 15:04"))
 			}
 			if quota := quotaBytes(client.QuotaGB); quota > 0 && (t.up+t.down)*100 >= quota*80 {
-				notes = append(notes, fmt.Sprintf("%s / %s", humanBytes(t.up+t.down), humanBytes(quota)))
+				notes = append(notes, fmt.Sprintf("📊 %s / %s", humanBytes(t.up+t.down), humanBytes(quota)))
 			}
 			if len(notes) > 0 {
-				lines = append(lines, fmt.Sprintf("• %s: %s", client.Name, strings.Join(notes, ", ")))
+				lines = append(lines, fmt.Sprintf("👤 <b>%s</b>\n      %s", html.EscapeString(client.Name), strings.Join(notes, " · ")))
 			}
 		}
 		if len(lines) == 1 {
-			lines = append(lines, say("没有即将到期或流量快用完的客户端", "No client is expiring soon or low on quota"))
+			lines = append(lines, say("✅ 没有即将到期或流量快用完的客户端", "✅ No client is expiring soon or low on quota"))
 		}
 		reply(strings.Join(lines, "\n"), backButton(lang))
 	case "ib":
-		lines := []string{say("📋 入站列表", "📋 Inbounds")}
+		lines := []string{say("📋 <b>入站列表</b>（🟢 启用 · ⛔ 停用）", "📋 <b>Inbounds</b> (🟢 on · ⛔ off)")}
 		for _, in := range draft.Inbounds {
 			var total uint64
 			count := 0
@@ -345,18 +356,22 @@ func (rt *Runtime) telegramAction(ctx context.Context, s telegramSettings, chat,
 					count++
 				}
 			}
-			state := say("启用", "on")
+			state := "🟢"
 			if !in.Enabled {
-				state = say("停用", "off")
+				state = "⛔"
 			}
 			transport := "TCP"
 			if in.Preset == "hy2" {
 				transport = "UDP"
 			}
-			lines = append(lines, fmt.Sprintf("• %s\n  %s · %s/%d · %s · %d %s · %s", in.Name, presetLabel(in.Preset), transport, in.Port, state, count, say("个客户端", "clients"), humanBytes(total)))
+			port := fmt.Sprintf("🔌 %s/%d", transport, in.Port)
+			if in.PortHopping != "" {
+				port += say(" · 🔀 跳跃 ", " · 🔀 hopping ") + in.PortHopping
+			}
+			lines = append(lines, fmt.Sprintf(say("%s <b>%s</b>\n      🧩 %s · %s\n      👥 %d 个客户端 · 🚦 %s", "%s <b>%s</b>\n      🧩 %s · %s\n      👥 %d clients · 🚦 %s"), state, html.EscapeString(in.Name), presetLabel(in.Preset), port, count, humanBytes(total)))
 		}
 		if len(draft.Inbounds) == 0 {
-			lines = append(lines, say("还没有入站，可用“一键创建入站”", "No inbounds yet; use Quick create inbound"))
+			lines = append(lines, say("📭 还没有入站，可用“一键创建入站”", "📭 No inbounds yet; use Quick create inbound"))
 		}
 		reply(strings.Join(lines, "\n"), backButton(lang))
 	case "cl":
@@ -378,31 +393,31 @@ func (rt *Runtime) telegramAction(ctx context.Context, s telegramSettings, chat,
 		}
 		nav := []tgButton{}
 		if page > 0 {
-			nav = append(nav, tgButton{say("« 上一页", "« Prev"), "cl:" + strconv.Itoa(page-1)})
+			nav = append(nav, tgButton{say("⬅️ 上一页", "⬅️ Prev"), "cl:" + strconv.Itoa(page-1)})
 		}
 		if (page+1)*size < len(draft.Clients) {
-			nav = append(nav, tgButton{say("下一页 »", "Next »"), "cl:" + strconv.Itoa(page+1)})
+			nav = append(nav, tgButton{say("下一页 ➡️", "Next ➡️"), "cl:" + strconv.Itoa(page+1)})
 		}
 		if len(nav) > 0 {
 			keyboard = append(keyboard, nav)
 		}
 		keyboard = append(keyboard, backButton(lang)...)
-		title := fmt.Sprintf(say("👤 客户端（共 %d 个，🟢在线 ⚪离线 ⛔停用）", "👤 Clients (%d total; 🟢 online ⚪ offline ⛔ disabled)"), len(draft.Clients))
+		title := fmt.Sprintf(say("👤 <b>客户端</b>（共 %d 个）\n🟢 在线 · ⚪ 离线 · ⛔ 停用", "👤 <b>Clients</b> (%d total)\n🟢 online · ⚪ offline · ⛔ disabled"), len(draft.Clients))
 		if len(draft.Clients) == 0 {
-			title = say("还没有客户端", "No clients yet")
+			title = say("📭 还没有客户端", "📭 No clients yet")
 		}
 		reply(title, keyboard)
 	case "c":
 		client, ok := findClient(draft, argument)
 		if !ok {
-			reply(say("客户端不存在或已删除", "The client does not exist or was deleted"), backButton(lang))
+			reply(say("❌ 客户端不存在或已删除", "❌ The client does not exist or was deleted"), backButton(lang))
 			return
 		}
 		reply(clientDetail(client, inboundName[client.InboundID], traffic[client.ID], lang), clientButtons(client, lang))
 	case "ct":
 		client, ok := findClient(draft, argument)
 		if !ok {
-			reply(say("客户端不存在或已删除", "The client does not exist or was deleted"), backButton(lang))
+			reply(say("❌ 客户端不存在或已删除", "❌ The client does not exist or was deleted"), backButton(lang))
 			return
 		}
 		result, err := rt.botSaveWorkspace(ctx, func(next *workspaceDraft) error {
@@ -415,84 +430,92 @@ func (rt *Runtime) telegramAction(ctx context.Context, s telegramSettings, chat,
 			return i18n.New("客户端不存在或已删除", "The client does not exist or was deleted")
 		})
 		if err != nil {
-			reply(say("操作失败：", "Failed: ")+i18n.Translate(err.Error(), lang), backButton(lang))
+			failed(say("操作失败：", "Failed: "), err)
 			return
 		}
 		client.Enabled = !client.Enabled
-		reply(fmt.Sprintf(say("已%s %s。%s", "%s %s. %s"), map[bool]string{true: say("启用", "Enabled"), false: say("停用", "Disabled")}[client.Enabled], client.Name, appliedText(result, lang)), clientButtons(client, lang))
+		verb := say("✅ 已启用", "✅ Enabled")
+		if !client.Enabled {
+			verb = say("⛔ 已停用", "⛔ Disabled")
+		}
+		reply(verb+" <b>"+html.EscapeString(client.Name)+"</b>\n"+appliedText(result, lang), clientButtons(client, lang))
 	case "cn":
 		rt.mu.Lock()
 		connection, err := rt.connection(ctx, connectionRequest{ClientID: argument, WorkspaceRevision: revision})
 		rt.mu.Unlock()
 		if err != nil {
-			reply(say("无法生成节点链接：", "Cannot build the node link: ")+i18n.Translate(err.Error(), lang), backButton(lang))
+			failed(say("无法生成节点链接：", "Cannot build the node link: "), err)
 			return
 		}
-		reply(connection.Link, backButton(lang))
+		reply(say("🔗 <b>节点链接</b>（点击复制）\n", "🔗 <b>Node link</b> (tap to copy)\n")+"<code>"+html.EscapeString(connection.Link)+"</code>", backButton(lang))
 	case "qc":
-		reply(say("选择要一键创建的入站类型（自动选端口、生成客户端，保存即生效；TLS 类需要面板证书）", "Choose an inbound type to create (port and client are generated, applied on save; TLS types need the panel certificate)"),
-			[][]tgButton{{{"Hysteria2", "q:hy2"}, {"VLESS Reality Vision", "q:reality"}}, {{"VLESS XHTTP TLS", "q:xhttp-tls"}, {"VLESS XHTTP Reality", "q:xhttp-reality"}}, {{say("« 返回菜单", "« Menu"), "m"}}})
+		reply(say("⚡ <b>一键创建入站</b>\n🎲 自动选端口、生成客户端，保存即生效\n🔐 TLS 类需要面板证书\n⚠️ 保存会重启 Xray，经本机节点的连接（包括 Telegram）会短暂断开", "⚡ <b>Quick create inbound</b>\n🎲 Port and client are generated, applied on save\n🔐 TLS types need the panel certificate\n⚠️ Saving restarts Xray; connections through this server (Telegram included) drop briefly"),
+			append([][]tgButton{{{"Hysteria2", "q:hy2"}, {"VLESS Reality Vision", "q:reality"}}, {{"VLESS XHTTP TLS", "q:xhttp-tls"}, {"VLESS XHTTP Reality", "q:xhttp-reality"}}}, backButton(lang)...))
 	case "q":
 		name, clientID, result, err := rt.botQuickCreate(ctx, argument, lang)
 		if err != nil {
-			reply(say("创建失败：", "Create failed: ")+i18n.Translate(err.Error(), lang), backButton(lang))
+			failed(say("创建失败：", "Create failed: "), err)
 			return
 		}
-		reply(fmt.Sprintf(say("已创建 %s。%s", "Created %s. %s"), name, appliedText(result, lang)), [][]tgButton{{{say("🔗 节点链接", "🔗 Node link"), "cn:" + clientID}}, {{say("« 返回菜单", "« Menu"), "m"}}})
+		reply(say("✅ 已创建 ", "✅ Created ")+"<b>"+html.EscapeString(name)+"</b>\n"+appliedText(result, lang), append([][]tgButton{{{say("🔗 节点链接", "🔗 Node link"), "cn:" + clientID}}}, backButton(lang)...))
 	case "bk":
 		if s.BackupPassword == "" {
-			reply(say("请先在“面板设置 → Telegram”设置备份加密口令", "Set a backup password under Panel settings → Telegram first"), backButton(lang))
+			reply(say("🔑 请先在“面板设置 → Telegram”设置备份加密口令", "🔑 Set a backup password under Panel settings → Telegram first"), backButton(lang))
 			return
 		}
 		if !rt.backupMu.TryLock() {
-			reply(say("备份正在进行，请稍后再试", "A backup is running; try again later"), backButton(lang))
+			reply(say("⏳ 备份正在进行，请稍后再试", "⏳ A backup is running; try again later"), backButton(lang))
 			return
 		}
+		// 备份只读数据并查询一次流量计数，不重启Xray；文件附带返回菜单按钮。
 		rt.mu.Lock()
 		name, file, err := rt.exportBackup(ctx, s.BackupPassword)
 		rt.mu.Unlock()
 		rt.backupMu.Unlock()
 		if err != nil {
-			reply(say("备份失败：", "Backup failed: ")+i18n.Translate(err.Error(), lang), backButton(lang))
+			failed(say("备份失败：", "Backup failed: "), err)
 			return
 		}
-		_ = telegramDocumentSend(ctx, s.Token, chat, name, file, say("o-ui 加密备份（用设置的备份口令在面板“备份和恢复”中恢复）", "o-ui encrypted backup (restore it under Backup and restore with the configured password)"))
+		if err := telegramDocumentSend(ctx, s.Token, chat, name, file, backupCaption(time.Now(), lang), backButton(lang)); err != nil {
+			failed(say("备份文件发送失败：", "Failed to send the backup file: "), err)
+		}
 	case "rx":
-		reply(say("确认按已保存配置重启 Xray？现有连接会短暂中断。", "Restart Xray with the saved configuration? Existing connections will drop briefly."), [][]tgButton{{{say("确认重启", "Restart"), "rxc"}, {say("取消", "Cancel"), "m"}}})
+		reply(say("🔄 <b>重启 Xray</b>\n⚠️ 按已保存配置重启，现有连接会短暂断开。确认重启？", "🔄 <b>Restart Xray</b>\n⚠️ Restarts with the saved configuration; existing connections drop briefly. Restart?"), [][]tgButton{{{say("✅ 确认重启", "✅ Restart"), "rxc"}, {say("✖️ 取消", "✖️ Cancel"), "m"}}})
 	case "rxc":
 		rt.mu.Lock()
 		err := rt.applySaved(ctx)
 		status := rt.engine.Status()
 		rt.mu.Unlock()
 		if err != nil {
-			reply(say("重启失败：", "Restart failed: ")+i18n.Translate(err.Error(), lang), backButton(lang))
+			failed(say("重启失败：", "Restart failed: "), err)
 			return
 		}
-		reply(fmt.Sprintf(say("Xray 已重启：运行中 %s，%d 条代理入站", "Xray restarted: running %s, %d proxy inbounds"), status.Version, status.Inbounds), backButton(lang))
+		reply(fmt.Sprintf(say("✅ <b>Xray 已重启</b>\n📡 版本：%s\n📋 代理入站：%d 条", "✅ <b>Xray restarted</b>\n📡 Version: %s\n📋 Proxy inbounds: %d"), html.EscapeString(status.Version), status.Inbounds), backButton(lang))
 	case "up", "upc":
-		current := installedVersion()
+		current := html.EscapeString(installedVersion())
 		latest, _, err := fetchLatestRelease(ctx)
 		if err != nil {
-			reply(say("无法连接 GitHub 检查更新", "Cannot reach GitHub to check for updates"), backButton(lang))
+			reply(say("❌ 无法连接 GitHub 检查更新", "❌ Cannot reach GitHub to check for updates"), backButton(lang))
 			return
 		}
-		if !newerVersion(latest, current) {
-			reply(fmt.Sprintf(say("当前已是最新版本 %s", "Already on the latest version %s"), current), backButton(lang))
+		if !newerVersion(latest, installedVersion()) {
+			reply(fmt.Sprintf(say("✅ 当前已是最新版本 <code>%s</code>", "✅ Already on the latest version <code>%s</code>"), current), backButton(lang))
 			return
 		}
+		latest = html.EscapeString(latest)
 		if !upgradeReady() {
-			reply(fmt.Sprintf(say("发现新版本 %s（当前 %s）。服务器上还没有网页升级助手，请先在服务器上运行一次 o-ui update。", "New version %s (current %s). The web update helper is not installed; run o-ui update on the server once."), latest, current), backButton(lang))
+			reply(fmt.Sprintf(say("⬆️ 发现新版本 <b>%s</b>（当前 %s）\n🛠 服务器上还没有网页升级助手，请先在服务器上运行一次 <code>o-ui update</code>", "⬆️ New version <b>%s</b> (current %s)\n🛠 The web update helper is not installed; run <code>o-ui update</code> on the server once"), latest, current), backButton(lang))
 			return
 		}
 		if action == "up" {
-			reply(fmt.Sprintf(say("发现新版本 %s（当前 %s），要立即升级吗？升级期间面板与代理会短暂中断。", "New version %s (current %s). Update now? The panel and proxies drop briefly during the update."), latest, current), [][]tgButton{{{say("立即升级", "Update now"), "upc"}, {say("取消", "Cancel"), "m"}}})
+			reply(fmt.Sprintf(say("⬆️ 发现新版本 <b>%s</b>（当前 %s）\n⚠️ 升级期间面板与代理会短暂中断，要立即升级吗？", "⬆️ New version <b>%s</b> (current %s)\n⚠️ The panel and proxies drop briefly during the update. Update now?"), latest, current), [][]tgButton{{{say("🚀 立即升级", "🚀 Update now"), "upc"}, {say("✖️ 取消", "✖️ Cancel"), "m"}}})
 			return
 		}
 		if output, err := runUpgrade(ctx); err != nil {
-			reply(say("启动升级失败：", "Failed to start the update: ")+output, backButton(lang))
+			reply(say("❌ 启动升级失败：", "❌ Failed to start the update: ")+html.EscapeString(output), backButton(lang))
 			return
 		}
-		reply(fmt.Sprintf(say("已开始升级到 %s，约一分钟后面板恢复。", "Updating to %s; the panel is back in about a minute."), latest), nil)
+		reply(fmt.Sprintf(say("🚀 已开始升级到 <b>%s</b>，约一分钟后面板恢复。", "🚀 Updating to <b>%s</b>; the panel is back in about a minute."), latest), nil)
 	}
 }
 
@@ -536,9 +559,10 @@ func clientDetail(client clientDraft, inbound string, t trafficSnapshot, lang st
 		limit = strconv.Itoa(client.IPLimit)
 	}
 	return strings.Join([]string{
-		"👤 " + client.Name, say("入站：", "Inbound: ") + inbound, say("状态：", "Status: ") + state,
-		fmt.Sprintf(say("流量：%s / %s（↑%s ↓%s）", "Traffic: %s / %s (↑%s ↓%s)"), humanBytes(t.up+t.down), quota, humanBytes(t.up), humanBytes(t.down)),
-		say("到期：", "Expiry: ") + expiry, say("最近上线：", "Last online: ") + last, say("IP 上限：", "IP limit: ") + limit,
+		"👤 <b>" + html.EscapeString(client.Name) + "</b>", say("📍 入站：", "📍 Inbound: ") + html.EscapeString(inbound), say("🌐 状态：", "🌐 Status: ") + state,
+		fmt.Sprintf(say("📊 流量：<code>%s / %s</code>", "📊 Traffic: <code>%s / %s</code>"), humanBytes(t.up+t.down), quota),
+		fmt.Sprintf(say("🔼 上传：%s · 🔽 下载：%s", "🔼 Upload: %s · 🔽 Download: %s"), humanBytes(t.up), humanBytes(t.down)),
+		say("📅 到期：", "📅 Expiry: ") + expiry, say("🔙 最近上线：", "🔙 Last online: ") + last, say("🔢 IP 上限：", "🔢 IP limit: ") + limit,
 	}, "\n")
 }
 
@@ -548,16 +572,17 @@ func clientButtons(client clientDraft, lang string) [][]tgButton {
 	if !client.Enabled {
 		toggle = say("✅ 启用", "✅ Enable")
 	}
-	return [][]tgButton{{{toggle, "ct:" + client.ID}, {say("🔗 节点链接", "🔗 Node link"), "cn:" + client.ID}}, {{say("« 客户端列表", "« Clients"), "cl:0"}, {say("« 返回菜单", "« Menu"), "m"}}}
+	return [][]tgButton{{{toggle, "ct:" + client.ID}, {say("🔗 节点链接", "🔗 Node link"), "cn:" + client.ID}}, {{say("👤 客户端列表", "👤 Clients"), "cl:0"}, {say("🏠 返回菜单", "🏠 Menu"), "m"}}}
 }
 
+// appliedText：保存会生成新的Xray进程，现有连接（包括经本机节点的Telegram）短暂断开后重连。
 func appliedText(result savedDocument, lang string) string {
-	text := i18n.Pick(lang, "已保存并生效。", "Saved and applied.")
+	text := i18n.Pick(lang, "✅ 已保存并生效（Xray 已重启，现有连接会短暂断开后自动重连）", "✅ Saved and applied (Xray restarted; existing connections drop briefly and reconnect)")
 	if !result.Applied {
-		text = i18n.Pick(lang, "已保存，但未生效：", "Saved, but not applied: ") + i18n.Translate(result.ApplyError, lang)
+		text = i18n.Pick(lang, "⚠️ 已保存，但未生效：", "⚠️ Saved, but not applied: ") + html.EscapeString(i18n.Translate(result.ApplyError, lang))
 	}
 	if result.Firewall != "" {
-		text += i18n.Pick(lang, " 防火墙：", " Firewall: ") + i18n.Translate(result.Firewall, lang)
+		text += i18n.Pick(lang, "\n🧱 防火墙：", "\n🧱 Firewall: ") + html.EscapeString(i18n.Translate(result.Firewall, lang))
 	}
 	return text
 }

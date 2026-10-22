@@ -35,7 +35,8 @@ export function formatBytes(bytes: bigint | number | null): string {
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
   let value = n, unit = 0;
   while (value >= 1000 && unit < units.length - 1) { value /= 1000; unit++; }
-  const text = unit === 0 ? String(Math.round(value)) : (value < 10 ? value.toFixed(2) : value < 100 ? value.toFixed(1) : value.toFixed(0)).replace(/\.?0+$/, '');
+  const fixed = unit === 0 ? String(Math.round(value)) : value < 10 ? value.toFixed(2) : value < 100 ? value.toFixed(1) : value.toFixed(0);
+  const text = fixed.includes('.') ? fixed.replace(/\.?0+$/, '') : fixed;
   return `${text} ${units[unit]}`;
 }
 

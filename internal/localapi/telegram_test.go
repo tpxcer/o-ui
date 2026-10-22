@@ -19,8 +19,8 @@ import (
 const telegramFixtureToken = "123456789:AAFakeTokenForIsolatedTestsOnly_abcdefgh"
 
 type telegramSent struct {
-	method, chat, text, document string
-	file                         []byte
+	method, chat, text, document, mode string
+	file                               []byte
 }
 
 // 只用本地模拟的Telegram接口，不连接真实机器人。
@@ -44,9 +44,10 @@ func telegramFixture(t *testing.T) (func() []telegramSent, func(bool)) {
 			var body struct {
 				ChatID string `json:"chat_id"`
 				Text   string `json:"text"`
+				Mode   string `json:"parse_mode"`
 			}
 			_ = json.NewDecoder(r.Body).Decode(&body)
-			item.chat, item.text = body.ChatID, body.Text
+			item.chat, item.text, item.mode = body.ChatID, body.Text, body.Mode
 		} else {
 			_, params, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
 			form, err := multipart.NewReader(r.Body, params["boundary"]).ReadForm(16 << 20)
@@ -54,7 +55,7 @@ func telegramFixture(t *testing.T) (func() []telegramSent, func(bool)) {
 				t.Error(err)
 				return
 			}
-			item.chat, item.text = form.Value["chat_id"][0], form.Value["caption"][0]
+			item.chat, item.text, item.mode = form.Value["chat_id"][0], form.Value["caption"][0], form.Value["parse_mode"][0]
 			header := form.File["document"][0]
 			file, _ := header.Open()
 			item.document = header.Filename
@@ -161,10 +162,13 @@ func TestTelegramSettingsAndNotifications(t *testing.T) {
 	if len(got) != 4 || got[0].method != "sendMessage" || got[2].method != "sendDocument" {
 		t.Fatal("report and backup", got)
 	}
-	for _, part := range []string{"o-ui 每日报告", "Xray：已停止", "客户端：共 1 个，启用 1 个", "3 天内到期：client"} {
+	for _, part := range []string{"📊 <b>o-ui 每日报告</b>", "📡 Xray：🔴 已停止", "👥 客户端：共 1 个 · 启用 1 个", "⏳ 3 天内到期：client", "🚦 业务流量累计："} {
 		if !strings.Contains(got[0].text, part) {
 			t.Fatalf("report missing %q:\n%s", part, got[0].text)
 		}
+	}
+	if got[0].mode != "HTML" || got[2].mode != "HTML" || !strings.Contains(got[2].text, "🗄 <b>o-ui 加密备份</b>") {
+		t.Fatal("report and backup caption should use HTML formatting", got[0].mode, got[2].mode, got[2].text)
 	}
 	if !strings.HasSuffix(got[2].document, ".ixpb") {
 		t.Fatal("backup filename", got[2].document)

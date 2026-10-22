@@ -1,9 +1,12 @@
 package localapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
+	"mime"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -26,7 +29,19 @@ func botFixture(t *testing.T, batches ...[]map[string]any) func() []botCall {
 		method := strings.TrimPrefix(r.URL.Path, "/bot"+telegramFixtureToken+"/")
 		var body map[string]any
 		data, _ := io.ReadAll(r.Body)
-		_ = json.Unmarshal(data, &body)
+		if _, params, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err == nil && params["boundary"] != "" {
+			form, err := multipart.NewReader(bytes.NewReader(data), params["boundary"]).ReadForm(16 << 20)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			body = map[string]any{}
+			for key, values := range form.Value {
+				body[key] = values[0]
+			}
+		} else {
+			_ = json.Unmarshal(data, &body)
+		}
 		mu.Lock()
 		calls = append(calls, botCall{method, body})
 		result := any(true)
@@ -110,6 +125,9 @@ func TestTelegramBotAdminMenuAndActions(t *testing.T) {
 	}
 
 	handle(message(4, 1001, "/start"))
+	if last := calls()[len(calls())-1]; last.body["parse_mode"] != "HTML" {
+		t.Fatal("bot replies should use HTML formatting", last.body)
+	}
 	if _, keyboard := lastReply(t, calls()); !strings.Contains(keyboard, `"rk"`) || !strings.Contains(keyboard, `"cl:0"`) || !strings.Contains(keyboard, `"qc"`) {
 		t.Fatal("admin menu missing buttons", keyboard)
 	}
@@ -213,5 +231,34 @@ func TestTelegramBotQuickCreate(t *testing.T) {
 	}
 	if client, ok := findClient(draft, firstClient); !ok || client.InboundID != created.ID || !client.Subscription || !client.Enabled {
 		t.Fatal("quick create should add one enabled client", client, ok)
+	}
+}
+
+// 立即备份：没有口令时提示设置；有口令时发送加密文件，说明用HTML排版并附返回菜单按钮，菜单不会“断掉”。
+func TestTelegramBotBackupKeepsMenu(t *testing.T) {
+	calls := botFixture(t)
+	_, rt, _, _ := subscriptionFixture(t)
+	s := saveBotSettings(t, rt)
+	ctx := context.Background()
+	rt.telegramAction(ctx, s, "1001", "bk", "zh")
+	if text, keyboard := lastReply(t, calls()); !strings.Contains(text, "备份加密口令") || !strings.Contains(keyboard, `"m"`) {
+		t.Fatal("backup without a password should ask for one", text, keyboard)
+	}
+	s.BackupPassword = "backup-passphrase-for-tests"
+	rt.telegramAction(ctx, s, "1001", "bk", "zh")
+	last := calls()[len(calls())-1]
+	caption, _ := last.body["caption"].(string)
+	markup, _ := last.body["reply_markup"].(string)
+	if last.method != "sendDocument" || last.body["chat_id"] != "1001" || last.body["parse_mode"] != "HTML" || !strings.Contains(caption, "o-ui 加密备份") || !strings.Contains(caption, "备份时间") || !strings.Contains(markup, `"m"`) {
+		t.Fatal("backup should be sent as a document with a caption and the menu button", last)
+	}
+}
+
+// 整数部分的0不能被当作小数尾零删掉（700 KB曾显示成7 KB）。
+func TestHumanBytesKeepsWholeNumbers(t *testing.T) {
+	for n, want := range map[uint64]string{219: "219 B", 700_000: "700 KB", 250_000_000: "250 MB", 100e9: "100 GB", 10_000_000: "10 MB", 1_500_000: "1.5 MB", 2_850_000: "2.85 MB", 1_000_000: "1 MB"} {
+		if got := humanBytes(n); got != want {
+			t.Fatalf("%d: %q != %q", n, got, want)
+		}
 	}
 }

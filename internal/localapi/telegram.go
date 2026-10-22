@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"independent-panel/internal/backup"
 	"independent-panel/internal/i18n"
 	"independent-panel/internal/store"
@@ -23,8 +24,8 @@ import (
 	"unicode"
 )
 
-// Telegram通知机器人（参照OUI的Telegram设置，只做通知）：登录提醒、每日报告、CPU超阈值提醒，
-// 以及随每日报告发送加密业务备份。不接收或执行任何来自Telegram的命令。
+// Telegram通知（参照OUI的Telegram设置）：登录提醒、每日报告、CPU超阈值提醒、客户端上线/离线，
+// 以及随每日报告发送加密业务备份。消息按HTML排版，用户可控的文字一律转义；管理菜单见telegram_bot.go。
 const telegramDocument = "telegram"
 
 var (
@@ -42,6 +43,7 @@ type telegramSettings struct {
 	ChatIDs        string `json:"chatIds"`
 	ReportTime     string `json:"reportTime"`
 	NotifyLogin    bool   `json:"notifyLogin"`
+	NotifyOnline   bool   `json:"notifyOnline"`
 	CPUThreshold   int    `json:"cpuThreshold"`
 	BackupEnabled  bool   `json:"backupEnabled"`
 	BackupPassword string `json:"backupPassword"`
@@ -53,6 +55,7 @@ type telegramView struct {
 	ChatIDs           string `json:"chatIds"`
 	ReportTime        string `json:"reportTime"`
 	NotifyLogin       bool   `json:"notifyLogin"`
+	NotifyOnline      bool   `json:"notifyOnline"`
 	CPUThreshold      int    `json:"cpuThreshold"`
 	BackupEnabled     bool   `json:"backupEnabled"`
 	TokenSet          bool   `json:"tokenSet"`
@@ -60,7 +63,7 @@ type telegramView struct {
 }
 
 func (s telegramSettings) view() telegramView {
-	return telegramView{Enabled: s.Enabled, ChatIDs: s.ChatIDs, ReportTime: s.ReportTime, NotifyLogin: s.NotifyLogin, CPUThreshold: s.CPUThreshold, BackupEnabled: s.BackupEnabled, TokenSet: s.Token != "", BackupPasswordSet: s.BackupPassword != ""}
+	return telegramView{Enabled: s.Enabled, ChatIDs: s.ChatIDs, ReportTime: s.ReportTime, NotifyLogin: s.NotifyLogin, NotifyOnline: s.NotifyOnline, CPUThreshold: s.CPUThreshold, BackupEnabled: s.BackupEnabled, TokenSet: s.Token != "", BackupPasswordSet: s.BackupPassword != ""}
 }
 
 func (s telegramSettings) chats() []string {
@@ -155,15 +158,20 @@ func telegramCall(ctx context.Context, token, method, contentType string, body i
 }
 
 func telegramMessage(ctx context.Context, token, chat, text string) error {
-	data, _ := json.Marshal(map[string]any{"chat_id": chat, "text": text, "disable_web_page_preview": true})
+	data, _ := json.Marshal(map[string]any{"chat_id": chat, "text": text, "parse_mode": "HTML", "disable_web_page_preview": true})
 	return telegramCall(ctx, token, "sendMessage", "application/json", bytes.NewReader(data))
 }
 
-func telegramDocumentSend(ctx context.Context, token, chat, name string, file []byte, caption string) error {
+func telegramDocumentSend(ctx context.Context, token, chat, name string, file []byte, caption string, keyboard [][]tgButton) error {
 	var body bytes.Buffer
 	form := multipart.NewWriter(&body)
 	_ = form.WriteField("chat_id", chat)
 	_ = form.WriteField("caption", caption)
+	_ = form.WriteField("parse_mode", "HTML")
+	if len(keyboard) > 0 {
+		markup, _ := json.Marshal(map[string]any{"inline_keyboard": keyboard})
+		_ = form.WriteField("reply_markup", string(markup))
+	}
 	part, err := form.CreateFormFile("document", name)
 	if err != nil {
 		return err
@@ -219,14 +227,15 @@ func notifyLogin(state *store.Store, username, remote string, err error) {
 		if splitErr != nil {
 			ip = remote
 		}
-		result := i18n.Pick(lang, "成功", "succeeded")
+		icon, result := "✅", i18n.Pick(lang, "成功", "succeeded")
 		switch {
 		case errors.Is(err, store.ErrLimited):
-			result = i18n.Pick(lang, "失败次数过多，已限速", "too many failures, rate limited")
+			icon, result = "⛔", i18n.Pick(lang, "失败次数过多，已限速", "too many failures, rate limited")
 		case err != nil:
-			result = i18n.Pick(lang, "失败", "failed")
+			icon, result = "❌", i18n.Pick(lang, "失败", "failed")
 		}
-		text := fmt.Sprintf(i18n.Pick(lang, "o-ui 登录%s\n用户名：%s\nIP：%s\n时间：%s", "o-ui sign-in %s\nUsername: %s\nIP: %s\nTime: %s"), result, string(name), ip, time.Now().Format("2006-01-02 15:04:05"))
+		text := fmt.Sprintf(i18n.Pick(lang, "%s <b>o-ui 登录%s</b>\n👤 用户名：<code>%s</code>\n🌐 IP：<code>%s</code>\n⏰ 时间：%s", "%s <b>o-ui sign-in %s</b>\n👤 Username: <code>%s</code>\n🌐 IP: <code>%s</code>\n⏰ Time: %s"),
+			icon, result, html.EscapeString(string(name)), html.EscapeString(ip), time.Now().Format("2006-01-02 15:04:05"))
 		_, _ = telegramBroadcast(ctx, s, text)
 	}()
 }
@@ -238,23 +247,20 @@ func percent(value *float64) string {
 	return strconv.FormatFloat(*value, 'f', 0, 64) + "%"
 }
 
-func gigabytes(value uint64) string {
-	return strconv.FormatFloat(float64(value)/1e9, 'f', 2, 64) + " GB"
-}
-
 // telegramReport汇总Xray状态、系统资源、业务流量和客户端到期情况；调用方须持有rt.mu。
 func (rt *Runtime) telegramReport(ctx context.Context, now time.Time) string {
 	lang := telegramLang()
-	lines := []string{fmt.Sprintf(i18n.Pick(lang, "o-ui 每日报告 %s", "o-ui daily report %s"), now.Format("2006-01-02 15:04"))}
+	say := func(zh, en string) string { return i18n.Pick(lang, zh, en) }
+	lines := []string{say("📊 <b>o-ui 每日报告</b>", "📊 <b>o-ui daily report</b>"), say("⏰ 时间：", "⏰ Time: ") + now.Format("2006-01-02 15:04")}
 	snapshot := rt.monitor.Snapshot()
 	if snapshot.Host != nil && snapshot.Host.Name != "" {
-		lines = append(lines, i18n.Pick(lang, "主机：", "Host: ")+snapshot.Host.Name)
+		lines = append(lines, say("💻 主机：", "💻 Host: ")+html.EscapeString(snapshot.Host.Name))
 	}
 	status := rt.engine.Status()
 	if status.Running {
-		lines = append(lines, fmt.Sprintf(i18n.Pick(lang, "Xray：运行中 %s", "Xray: running %s"), status.Version))
+		lines = append(lines, say("📡 Xray：🟢 运行中 ", "📡 Xray: 🟢 running ")+html.EscapeString(status.Version))
 	} else {
-		lines = append(lines, i18n.Pick(lang, "Xray：已停止", "Xray: stopped"))
+		lines = append(lines, say("📡 Xray：🔴 已停止", "📡 Xray: 🔴 stopped"))
 	}
 	memory, disk := (*float64)(nil), (*float64)(nil)
 	if snapshot.Memory != nil {
@@ -263,20 +269,20 @@ func (rt *Runtime) telegramReport(ctx context.Context, now time.Time) string {
 	if snapshot.Disk != nil {
 		disk = snapshot.Disk.Percent
 	}
-	lines = append(lines, fmt.Sprintf(i18n.Pick(lang, "CPU %s · 内存 %s · 磁盘 %s", "CPU %s · memory %s · disk %s"), percent(snapshot.CPU), percent(memory), percent(disk)))
+	lines = append(lines, fmt.Sprintf(say("🖥 CPU：%s · 📋 内存：%s · 💾 磁盘：%s", "🖥 CPU: %s · 📋 Memory: %s · 💾 Disk: %s"), percent(snapshot.CPU), percent(memory), percent(disk)))
 	_ = rt.checkpointCurrent(ctx)
 	ledger, _, err := rt.ledger(ctx)
 	workspace, workspaceErr := rt.state.ReadDocument(ctx, "workspace")
 	var draft workspaceDraft
 	if err != nil || workspaceErr != nil || json.Unmarshal(workspace.Data, &draft) != nil {
-		return strings.Join(append(lines, i18n.Pick(lang, "流量与客户端信息暂不可用", "Traffic and client details are unavailable")), "\n")
+		return strings.Join(append(lines, say("⚠️ 流量与客户端信息暂不可用", "⚠️ Traffic and client details are unavailable")), "\n")
 	}
 	var upload, download uint64
 	for _, count := range ledger.Totals {
 		upload += count.Uplink
 		download += count.Downlink
 	}
-	lines = append(lines, fmt.Sprintf(i18n.Pick(lang, "业务流量累计：上传 %s · 下载 %s", "Proxy traffic total: upload %s · download %s"), gigabytes(upload), gigabytes(download)))
+	lines = append(lines, fmt.Sprintf(say("🚦 业务流量累计：%s（🔼 %s · 🔽 %s）", "🚦 Proxy traffic total: %s (🔼 %s · 🔽 %s)"), humanBytes(upload+download), humanBytes(upload), humanBytes(download)))
 	enabled, limited, soon := 0, 0, []string{}
 	for _, client := range draft.Clients {
 		if !client.Enabled {
@@ -287,13 +293,13 @@ func (rt *Runtime) telegramReport(ctx context.Context, now time.Time) string {
 		if blocked(limit, ledger.Totals[client.ID], now) {
 			limited++
 		} else if client.ExpiresAt != nil && time.UnixMilli(*client.ExpiresAt).Before(now.Add(72*time.Hour)) {
-			soon = append(soon, fmt.Sprintf("%s（%s）", client.Name, time.UnixMilli(*client.ExpiresAt).Format("2006-01-02")))
+			soon = append(soon, fmt.Sprintf("%s（%s）", html.EscapeString(client.Name), time.UnixMilli(*client.ExpiresAt).Format("2006-01-02")))
 		}
 	}
 	sort.Strings(soon)
-	lines = append(lines, fmt.Sprintf(i18n.Pick(lang, "客户端：共 %d 个，启用 %d 个，已到期或超额 %d 个", "Clients: %d total, %d enabled, %d expired or over quota"), len(draft.Clients), enabled, limited))
+	lines = append(lines, fmt.Sprintf(say("👥 客户端：共 %d 个 · 启用 %d 个 · 到期或超额 %d 个", "👥 Clients: %d total · %d enabled · %d expired or over quota"), len(draft.Clients), enabled, limited))
 	if len(soon) > 0 {
-		lines = append(lines, i18n.Pick(lang, "3 天内到期：", "Expiring within 3 days: ")+strings.Join(soon, ", "))
+		lines = append(lines, say("⏳ 3 天内到期：", "⏳ Expiring within 3 days: ")+strings.Join(soon, ", "))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -302,7 +308,7 @@ func (rt *Runtime) telegramReport(ctx context.Context, now time.Time) string {
 func (rt *Runtime) RunTelegram(ctx context.Context) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
-	lastReport, lastCPU := "", time.Time{}
+	lastReport, lastCPU, sessions := "", time.Time{}, map[string]onlineSession{}
 	for {
 		select {
 		case <-ctx.Done():
@@ -310,13 +316,19 @@ func (rt *Runtime) RunTelegram(ctx context.Context) {
 		case now := <-ticker.C:
 			s, _, err := readTelegram(ctx, rt.state)
 			if err != nil || !s.Enabled {
+				clear(sessions)
 				continue
+			}
+			if s.NotifyOnline {
+				rt.notifyOnline(ctx, s, sessions, now)
+			} else {
+				clear(sessions)
 			}
 			if s.CPUThreshold > 0 && now.Sub(lastCPU) >= 30*time.Minute {
 				if cpu := rt.monitor.Snapshot().CPU; cpu != nil && *cpu >= float64(s.CPUThreshold) {
 					lastCPU = now
 					lang := telegramLang()
-					_, _ = telegramBroadcast(ctx, s, fmt.Sprintf(i18n.Pick(lang, "o-ui CPU 提醒：当前 %s，超过阈值 %d%%（30 分钟内不再重复提醒）", "o-ui CPU alert: currently %s, above the %d%% threshold (no repeat within 30 minutes)"), percent(cpu), s.CPUThreshold))
+					_, _ = telegramBroadcast(ctx, s, fmt.Sprintf(i18n.Pick(lang, "🔥 <b>o-ui CPU 提醒</b>\n🖥 当前 CPU：%s\n⚠️ 阈值：%d%%\n⏰ 30 分钟内不再重复提醒", "🔥 <b>o-ui CPU alert</b>\n🖥 CPU now: %s\n⚠️ Threshold: %d%%\n⏰ No repeat within 30 minutes"), percent(cpu), s.CPUThreshold))
 				}
 			}
 			if s.ReportTime != "" && now.Format("15:04") == s.ReportTime && lastReport != now.Format("2006-01-02") {
@@ -345,12 +357,19 @@ func (rt *Runtime) sendTelegramReport(ctx context.Context, s telegramSettings, n
 	rt.backupMu.Unlock()
 	lang := telegramLang()
 	if err != nil {
-		_, _ = telegramBroadcast(ctx, s, i18n.Pick(lang, "o-ui 备份失败：", "o-ui backup failed: ")+i18n.Translate(err.Error(), lang))
+		_, _ = telegramBroadcast(ctx, s, i18n.Pick(lang, "❌ <b>o-ui 备份失败</b>\n", "❌ <b>o-ui backup failed</b>\n")+html.EscapeString(i18n.Translate(err.Error(), lang)))
 		return
 	}
 	for _, chat := range s.chats() {
-		_ = telegramDocumentSend(ctx, s.Token, chat, name, file, i18n.Pick(lang, "o-ui 加密备份（用设置的备份口令在面板“备份和恢复”中恢复）", "o-ui encrypted backup (restore it under Backup and restore with the configured password)"))
+		if err := telegramDocumentSend(ctx, s.Token, chat, name, file, backupCaption(now, lang), nil); err != nil {
+			_ = telegramMessage(ctx, s.Token, chat, i18n.Pick(lang, "❌ 备份文件发送失败：", "❌ Failed to send the backup file: ")+html.EscapeString(i18n.Translate(err.Error(), lang)))
+		}
 	}
+}
+
+func backupCaption(at time.Time, lang string) string {
+	return i18n.Pick(lang, "🗄 <b>o-ui 加密备份</b>\n⏰ 备份时间：", "🗄 <b>o-ui encrypted backup</b>\n⏰ Backup time: ") + at.Format("2006-01-02 15:04:05") +
+		i18n.Pick(lang, "\n🔑 用设置的备份口令在面板“备份和恢复”中恢复", "\n🔑 Restore it under Backup and restore with the configured password")
 }
 
 func registerTelegram(mux *http.ServeMux, rt *Runtime, state *store.Store) {
@@ -401,7 +420,7 @@ func registerTelegram(mux *http.ServeMux, rt *Runtime, state *store.Store) {
 			respond(w, 409, map[string]string{"error": i18n.T("请先保存Bot Token和Chat ID", "Save the bot token and chat ID first")})
 			return
 		}
-		text := i18n.Pick(telegramLang(), "o-ui 测试消息：机器人配置正确。", "o-ui test message: the bot is configured correctly.")
+		text := i18n.Pick(telegramLang(), "✅ <b>o-ui 测试消息</b>\n🤖 机器人配置正确。", "✅ <b>o-ui test message</b>\n🤖 The bot is configured correctly.")
 		if rt != nil && r.URL.Query().Get("report") == "1" {
 			rt.mu.Lock()
 			text = rt.telegramReport(r.Context(), time.Now())
