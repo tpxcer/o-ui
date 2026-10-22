@@ -51,6 +51,13 @@ func TestClientConnectionsFourPresets(t *testing.T) {
 			if strings.HasPrefix(preset, "xhttp-") && (u.Query().Get("path") != in.XHTTP.Path || u.Query().Get("mode") != "auto") {
 				t.Fatal("XHTTP URI escaping mismatch")
 			}
+			// 除HY2（QUIC）外都显式模拟Chrome握手，链接与Xray配置一致。
+			if fp := u.Query().Get("fp"); (fp == "chrome") == (preset == "hy2") {
+				t.Fatal("client fingerprint mismatch", fp)
+			}
+			if preset == "xhttp-tls" && stream["tlsSettings"].(map[string]any)["fingerprint"] != "chrome" {
+				t.Fatal("XHTTP-TLS config should mimic Chrome")
+			}
 		})
 	}
 }

@@ -71,7 +71,13 @@ func ClientConnection(in CompiledInbound, user User, serverName, name string, sh
 		query.Set("sid", r.ShortIDs[0])
 		query.Set("spx", "/")
 	} else if in.Stream.Security == "tls" && in.Stream.TLS != nil {
-		stream["tlsSettings"] = map[string]any{"serverName": serverName, "alpn": in.Stream.TLS.ALPN, "minVersion": in.Stream.TLS.MinVersion}
+		tlsSettings := map[string]any{"serverName": serverName, "alpn": in.Stream.TLS.ALPN, "minVersion": in.Stream.TLS.MinVersion}
+		// XHTTP-TLS与REALITY一样显式模拟Chrome握手：官方26.7.28留空时也按chrome，但其他或较旧的客户端未必；HY2走QUIC不用这类指纹。
+		if in.Protocol != "hysteria" {
+			tlsSettings["fingerprint"] = "chrome"
+			query.Set("fp", "chrome")
+		}
+		stream["tlsSettings"] = tlsSettings
 	} else {
 		return nil, "", i18n.New("客户端安全参数无效", "Invalid client security parameters")
 	}
