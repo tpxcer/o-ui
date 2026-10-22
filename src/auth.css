@@ -1,11 +1,12 @@
-.auth-screen { position: relative; overflow: hidden; min-height: 100dvh; display: grid; place-items: center; padding: 24px 16px; background: radial-gradient(1200px 600px at 50% -10%, color-mix(in srgb, var(--accent-bg) 16%, transparent), transparent 60%), var(--background); }
+.auth-screen { position: relative; overflow: hidden; min-height: 100dvh; display: grid; place-items: center; padding: 24px 16px; background: radial-gradient(1200px 600px at 50% -10%, color-mix(in srgb, var(--accent-bg) 16%, transparent), transparent 60%); }
 .auth-backdrop { position: absolute; inset: 0; pointer-events: none; }
 .auth-content { position: relative; z-index: 1; width: min(100%, 400px); }
 .auth-card { width: 100%; padding: 30px 28px 24px; box-shadow: var(--shadow-pop); background: color-mix(in srgb, var(--surface) 86%, transparent); backdrop-filter: blur(12px); }
 .auth-heading { margin-bottom: 24px; position: relative; }
 .auth-heading .lang-toggle { position: absolute; top: -12px; right: -12px; }
 .auth-heading > span { display: inline-flex; align-items: center; gap: 9px; color: var(--text); font-size: 16px; font-weight: 650; letter-spacing: -.02em; }
-.auth-heading > span::before { content: ""; width: 22px; height: 22px; border-radius: 7px; background: linear-gradient(135deg, var(--accent-bg), color-mix(in srgb, var(--accent-bg) 55%, #a855f7)); box-shadow: inset 0 0 0 1px rgb(255 255 255 / .14); }
+.auth-heading > span::before { content: ""; width: 26px; height: 26px; background: url(./logo.svg) center / contain no-repeat; }
+.auth-heading .slogan { font-size: 13px; margin-top: 10px; }
 .auth-heading h1 { font-size: 22px; font-weight: 650; letter-spacing: -.02em; margin: 20px 0 6px; }
 .auth-heading p, .auth-boundary { color: var(--muted); font-size: 13px; }
 .auth-card form { display: grid; gap: 16px; }

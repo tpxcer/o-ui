@@ -1,0 +1,28 @@
+/* 下载图标参照OUI：主色圆底、白色箭头与托盘；尺寸随字号缩放 */
+.download-icon { position: relative; display: inline-flex; flex: none; width: 1.45em; height: 1.45em; overflow: hidden; border-radius: 50%; background: linear-gradient(135deg, var(--accent-bg), color-mix(in srgb, var(--accent-bg) 55%, #a855f7)); box-shadow: inset 0 0 0 1px rgb(255 255 255 / .16); font-size: 11px; }
+.download-icon .download-arrow { position: absolute; top: .2em; left: 50%; width: .78em; height: .78em; transform: translateX(-50%); fill: none; stroke: #fff; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+.download-tray { position: absolute; bottom: .28em; left: 50%; width: .72em; height: .26em; border: .09em solid #fff; border-top: 0; border-radius: 0 0 .14em .14em; transform: translateX(-50%); }
+.download-icon.is-active .download-arrow { animation: download-arrow .9s cubic-bezier(.22, .61, .36, 1) infinite; }
+@keyframes download-arrow {
+  0% { transform: translate(-50%, -.14em); opacity: .35; }
+  70% { transform: translate(-50%, .1em); opacity: 1; }
+  100% { transform: translate(-50%, .1em); opacity: 0; }
+}
+/* 升级锁定卡片：模态弹窗让背景不可操作，失败前不能按Esc关闭 */
+.upgrade-dialog[open] { width: min(360px, calc(100% - 40px)); padding: 26px 24px 22px; display: grid; justify-items: center; gap: 12px; text-align: center; }
+.upgrade-dialog .download-icon { font-size: 30px; margin-bottom: 2px; }
+.upgrade-dialog strong { font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }
+.upgrade-progress { width: 100%; height: 8px; border-radius: 999px; overflow: hidden; background: var(--track); }
+.upgrade-progress > span { position: relative; display: block; height: 100%; border-radius: inherit; overflow: hidden; background: linear-gradient(90deg, var(--accent-bg), color-mix(in srgb, var(--accent-bg) 50%, #a855f7)); transition: width .6s ease; }
+.upgrade-progress > span::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgb(255 255 255 / .38), transparent); transform: translateX(-100%); animation: upgrade-shimmer 1.6s ease-in-out infinite; }
+@keyframes upgrade-shimmer { to { transform: translateX(100%); } }
+.upgrade-dialog small { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.upgrade-dialog p { color: var(--muted); font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
+.upgrade-dialog.is-failed .upgrade-progress > span { background: var(--danger); }
+.upgrade-dialog.is-failed .upgrade-progress > span::after { display: none; }
+.upgrade-dialog.is-failed p { color: var(--danger); }
+/* 首页“o-ui”卡片里的升级按钮沿用操作图标尺寸 */
+.action .download-icon { font-size: 11px; }
+@media (prefers-reduced-motion: reduce) {
+  .download-icon.is-active .download-arrow, .upgrade-progress > span::after { animation: none; }
+}

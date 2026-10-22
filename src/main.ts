@@ -15,6 +15,7 @@ import { initPanelSettings } from './panel-settings.ts';
 import { initServerInfo } from './server-info.ts';
 import { requireLogin } from './auth.ts';
 import { api, jsonBody } from './api.ts';
+import { downloadIcon, startUpgrade, type PanelVersion } from './upgrade.ts';
 import './style.css';
 import { languageButton, locale, setLang, t } from './i18n.ts';
 
@@ -72,14 +73,14 @@ app.innerHTML = `
   <div class="mobile-header"><button class="icon-button" id="mobile-menu" aria-label="${t('打开导航', 'Open navigation')}" aria-expanded="false" aria-controls="sidebar">${icon('menu')}</button><strong class="brand-name">o-ui</strong><span class="demo-label">${t('演示', 'Demo')}</span></div>
   <button class="menu-scrim" id="menu-scrim" aria-label="${t('关闭导航', 'Close navigation')}" hidden></button>
   <aside class="sidebar" id="sidebar" aria-label="${t('主导航', 'Main navigation')}">
-    <div class="brand"><strong class="brand-name">o-ui</strong><div class="brand-actions">${languageButton()}<button class="icon-button" id="theme-toggle" aria-label="${t('切换到浅色主题', 'Switch to light theme')}">${icon('moon')}</button><button class="icon-button mobile-close" id="mobile-close" aria-label="${t('关闭导航菜单', 'Close navigation menu')}">${icon('x')}</button></div></div>
+    <div class="brand"><div class="brand-title"><strong class="brand-name">o-ui</strong><small class="slogan">${t('让世界触手可及', 'World within reach')}</small></div><div class="brand-actions">${languageButton()}<button class="icon-button" id="theme-toggle" aria-label="${t('切换到浅色主题', 'Switch to light theme')}">${icon('moon')}</button><button class="icon-button mobile-close" id="mobile-close" aria-label="${t('关闭导航菜单', 'Close navigation menu')}">${icon('x')}</button></div></div>
     <nav>
       ${[[t('系统状态', 'Dashboard'), 'gauge', 'home'], [t('入站列表', 'Inbounds'), 'log-in', 'inbounds'], [t('客户端', 'Clients'), 'users', 'clients'], [t('面板设置', 'Panel settings'), 'settings', 'settings'], [t('Xray 设置', 'Xray settings'), 'wrench', 'xray']].map(([label, name, id]) =>
         `<button class="nav-item${id === 'home' ? ' active' : ''}" data-nav="${id}" aria-label="${label}"${id === 'home' ? ' aria-current="page"' : ''}>${icon(name)}<span>${label}</span></button>`).join('')}
     </nav>
-    <div class="sidebar-bottom"><span class="prototype-version">${t('本地开发版 · 非生产面板', 'Local build · not a production panel')}</span>
+    <a class="nav-item repo-link" href="https://github.com/tpxcer/o-ui" target="_blank" rel="noopener noreferrer" aria-label="${t('o-ui 项目主页（GitHub）', 'o-ui project home (GitHub)')}" title="${t('打开项目主页', 'Open the project home page')}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .3a12 12 0 0 0-3.8 23.38c.6.12.83-.26.83-.57L9 21.07c-3.34.72-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.08-.74.09-.73.09-.73 1.2.09 1.84 1.24 1.84 1.24 1.07 1.83 2.8 1.3 3.49 1 .1-.78.42-1.31.76-1.61-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.14-.3-.54-1.52.1-3.18 0 0 1-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.28-1.55 3.29-1.23 3.29-1.23.64 1.66.24 2.88.12 3.18a4.65 4.65 0 0 1 1.23 3.22c0 4.61-2.8 5.63-5.48 5.92.42.36.81 1.1.81 2.22l-.01 3.29c0 .31.2.69.82.57A12 12 0 0 0 12 .3"/></svg><span class="prototype-version">${t('本地开发版 · 非生产面板', 'Local build · not a production panel')}</span></a>
+    <div class="sidebar-bottom">
       ${authenticated ? `<button class="nav-item" id="logout">${icon('log-out')}<span>${t('退出登录', 'Sign out')}</span></button>` : ''}
-      <button class="nav-item" data-action="update" aria-label="${t('检测更新', 'Check for updates')}">${icon('refresh-cw')}<span>${t('检测更新', 'Check for updates')}</span></button>
       <button class="collapse-button" id="collapse-sidebar" aria-label="${t('收起侧栏', 'Collapse sidebar')}" aria-expanded="true">${icon('panel-left-close')}</button></div>
   </aside>
   <main id="main" tabindex="-1">
@@ -116,8 +117,8 @@ app.innerHTML = `
       <section class="card" aria-labelledby="xray-title"><header class="card-header"><h2 id="xray-title"><button class="core-title-trigger" data-action="core-open" aria-label="${t('Xray版本管理', 'Xray version management')}">Xray</button></h2><span class="core-stopped" id="core-home-status">${t('核心管理待连接 · 代理未启动', 'Core management not connected · proxy not started')}</span></header><div class="actions four-actions">
         ${action(t('日志', 'Logs'), 'list', 'xray-log')}${action(t('停止', 'Stop'), 'power', 'stop')}${action(t('重启', 'Restart'), 'rotate-cw', 'restart')}${action('v26.7.28', 'wrench', 'core-version')}
       </div></section>
-      <section class="card panel-card" aria-labelledby="panel-title"><header class="card-header"><h2 id="panel-title">o-ui <span class="version-tag">${t('原型', 'prototype')}</span></h2></header><div class="actions five-actions">
-        ${action(t('日志', 'Logs'), 'list', 'panel-log')}${action(t('配置', 'Config'), 'sliders-horizontal', 'config')}${action(t('备份和恢复', 'Backup and restore'), 'database-backup', 'backup')}${action(t('系统历史', 'System history'), 'chart-area', 'history')}${action(t('Xray 指标', 'Xray metrics'), 'chart-no-axes-combined', 'metrics')}
+      <section class="card panel-card" aria-labelledby="panel-title"><header class="card-header"><h2 id="panel-title">o-ui <span class="version-tag">${t('原型', 'prototype')}</span></h2></header><div class="actions six-actions">
+        ${action(t('日志', 'Logs'), 'list', 'panel-log')}${action(t('配置', 'Config'), 'sliders-horizontal', 'config')}${action(t('备份和恢复', 'Backup and restore'), 'database-backup', 'backup')}${action(t('系统历史', 'System history'), 'chart-area', 'history')}${action(t('Xray 指标', 'Xray metrics'), 'chart-no-axes-combined', 'metrics')}${action(t('检测更新', 'Check for updates'), 'refresh-cw', 'update')}
       </div></section>
     </div>
     <section class="card statistics" aria-label="${t('运行统计（演示）', 'Runtime statistics (demo)')}">
@@ -130,13 +131,14 @@ app.innerHTML = `
   </main>
   <dialog id="detail-dialog" aria-labelledby="dialog-title" aria-describedby="dialog-description"><div class="dialog-heading"><h2 id="dialog-title"></h2><button class="icon-button" id="close-dialog" aria-label="${t('关闭弹窗', 'Close dialog')}">${icon('x')}</button></div><div class="dialog-body"><p id="dialog-description"></p></div><footer><button class="secondary-button" id="dialog-action" hidden></button><button class="primary-button" id="confirm-dialog">${t('知道了', 'OK')}</button></footer></dialog>
 `;
-type PanelVersion = { current: string; latest?: string; url?: string; updateAvailable: boolean; issue?: string; canUpgrade?: boolean; update?: { state: string; from: string; to: string; code: number; at: number } };
+let release: PanelVersion | null = null;
 if (authenticated) {
   document.querySelector('.demo-label')!.remove();
   document.querySelector('.demo-notice')!.remove();
   const versionTag = document.querySelector('#panel-title .version-tag')!, sidebarVersion = document.querySelector('.prototype-version')!;
   versionTag.textContent = ''; sidebarVersion.textContent = 'o-ui';
-  void api<PanelVersion>('panel/version').then(version => { versionTag.textContent = version.current; sidebarVersion.textContent = `o-ui ${version.current}`; }).catch(() => {});
+  void api<PanelVersion>('panel/version').then(version => { versionTag.textContent = version.current; sidebarVersion.textContent = version.current; }).catch(() => {});
+  void api<PanelVersion>('panel/version?check=1').then(version => { release = version; paintUpdate(); }).catch(() => {});
   document.querySelector('.speed-readings')!.innerHTML = t('<p class="form-intro">网速尚未采集</p>', '<p class="form-intro">Network speed not sampled yet</p>');
   document.querySelector('.traffic-chart')!.innerHTML = t('<p class="form-intro">暂无真实历史记录</p>', '<p class="form-intro">No history yet</p>');
   document.querySelector('.traffic-chart')!.setAttribute('aria-label', t('暂无真实流量采样', 'No traffic samples yet'));
@@ -243,6 +245,7 @@ async function checkUpdate(): Promise<void> {
   let text: string, upgrade = '';
   try {
     const v = await api<PanelVersion>('panel/version?check=1');
+    release = v; paintUpdate();
     if (v.issue) text = v.issue;
     else if (v.updateAvailable) {
       text = `${t('发现新版本 ', 'New version ')}${v.latest}${t('（当前 ', ' is available (current ')}${v.current}${t('）。', '). ')}${v.canUpgrade ? t('点“立即升级”在线升级，数据和配置会保留，失败会自动回退。', 'Click Update now to upgrade online; data and settings are kept, and a failed update rolls back.') : t('请在服务器上运行一次 o-ui update 升级（之后即可在网页上一键升级），数据和配置会保留。', 'Run o-ui update on the server once (after that you can update from the web); data and settings are kept.')}`;
@@ -254,31 +257,22 @@ async function checkUpdate(): Promise<void> {
   if (upgrade) {
     const action = document.querySelector<HTMLButtonElement>('#dialog-action')!;
     action.textContent = t('立即升级', 'Update now'); action.hidden = false; action.disabled = false;
-    action.onclick = () => { void startUpgrade(upgrade); };
+    action.onclick = () => {
+      if (!window.confirm(`${t('升级到 ', 'Update to ')}${upgrade}${t('？升级期间面板与代理会中断约半分钟，数据和配置会保留，失败会自动回退到当前版本。', '? The panel and proxies stop for about half a minute; data and settings are kept, and a failed update rolls back to the current version.')}`)) return;
+      dialog.close();
+      void startUpgrade(upgrade, paintUpdate);
+    };
   }
 }
-// 参照OUI的网页更新：服务器在独立的临时服务里升级，面板会重启；页面轮询版本号直到换成新版本。
-async function startUpgrade(target: string): Promise<void> {
-  if (!window.confirm(`${t('升级到 ', 'Update to ')}${target}${t('？升级期间面板与代理会中断约半分钟，数据和配置会保留，失败会自动回退到当前版本。', '? The panel and proxies stop for about half a minute; data and settings are kept, and a failed update rolls back to the current version.')}`)) return;
-  const action = document.querySelector<HTMLButtonElement>('#dialog-action')!, description = document.querySelector('#dialog-description')!;
-  action.disabled = true;
-  description.textContent = t('正在启动升级…', 'Starting the update…');
-  const since = Math.floor(Date.now() / 1000) - 5;
-  try { await api('panel/update', jsonBody('POST', { confirm: true })); }
-  catch (reason) { description.textContent = (reason as Error).message; action.disabled = false; return; }
-  action.hidden = true;
-  description.textContent = `${t('正在升级到 ', 'Updating to ')}${target}${t('，面板会重启，约需 1 分钟，请勿关闭页面…', '; the panel will restart, which takes about a minute. Keep this page open…')}`;
-  const started = Date.now();
-  const poll = async (): Promise<void> => {
-    try {
-      const v = await api<PanelVersion>('panel/version');
-      if (v.current === target) { description.textContent = `${t('已升级到 ', 'Updated to ')}${target}${t('，正在刷新页面…', '; reloading…')}`; setTimeout(() => location.reload(), 1500); return; }
-      if (v.update && v.update.state === 'failed' && v.update.at >= since) { description.textContent = `${t('升级失败（代码 ', 'The update failed (code ')}${v.update.code}${t('），仍在使用 ', '); still on ')}${v.current}${t('。请在服务器上查看 /var/lib/o-ui-update/output.log，或运行 o-ui update。', '. Check /var/lib/o-ui-update/output.log on the server, or run o-ui update.')}`; return; }
-    } catch { /* 面板重启期间暂时不可达 */ }
-    if (Date.now() - started < 5 * 60_000) setTimeout(() => { void poll(); }, 3000);
-    else description.textContent = t('5 分钟内没有完成升级。请在服务器上查看 /var/lib/o-ui-update/output.log，或运行 o-ui update。', 'The update did not finish within 5 minutes. Check /var/lib/o-ui-update/output.log on the server, or run o-ui update.');
-  };
-  setTimeout(() => { void poll(); }, 3000);
+// 首页“o-ui”卡片的升级按钮（参照OUI）：发现新版本时变为橙色“立即升级”，升级中显示进度；失败后恢复。
+function paintUpdate(progress: number | null = null): void {
+  const button = document.querySelector<HTMLButtonElement>('.panel-card [data-action="update"]');
+  if (!button || !release?.updateAvailable || !release.latest) return;
+  const label = progress !== null ? `${t('升级中 ', 'Updating ')}${progress}%` : release.canUpgrade ? t('立即升级', 'Update now') : t('有新版本', 'New version');
+  button.classList.add('is-update');
+  button.disabled = progress !== null;
+  button.title = `${t('新版本 ', 'New version ')}${release.latest}`;
+  button.innerHTML = `${downloadIcon(progress !== null)}<span>${label}</span>`;
 }
 async function quickRuntime(action: 'restart' | 'stop'): Promise<void> {
   const stop = action === 'stop';
