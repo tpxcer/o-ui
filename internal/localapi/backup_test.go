@@ -115,10 +115,18 @@ func TestBusinessBackupAPI(t *testing.T) {
 	if strings.Contains(w.Body.String(), "password_hash") || strings.Contains(string(file), b.Identities.Clients["client-one"].Auth) {
 		t.Fatal("sensitive output")
 	}
-	for _, bad := range []restoreRequest{{Archive: request.Archive, Password: "incorrect-backup-passphrase"}, {Archive: "invalid", Password: password}} {
+	for _, bad := range []restoreRequest{{Archive: request.Archive, Password: "incorrect-backup-passphrase"}, {Archive: "invalid", Password: password}, {Archive: request.Archive}} {
 		if w = call("preview", bad, true, origin); w.Code != 422 {
 			t.Fatal("invalid preview", w.Code)
 		}
+	}
+	// 口令可选（用户2026-10-22要求）：不填口令导出不加密的.json，不填口令即可校验。
+	var plainExport struct{ Archive, Filename string }
+	if w = call("export", map[string]string{"password": ""}, true, origin); w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &plainExport) != nil || !strings.HasSuffix(plainExport.Filename, ".json") {
+		t.Fatal("plain export", w.Code, plainExport.Filename)
+	}
+	if pb, _, err := openBackup(restoreRequest{Archive: plainExport.Archive}); err != nil || pb.Traffic.Totals["client-one"].Total() != 303 || len(pb.Certificates) != 1 {
+		t.Fatal("plain backup should open without a password", err)
 	}
 	unchanged, _ := s.ReadDocuments(ctx, backupDocuments)
 	a, _ := json.Marshal(before)

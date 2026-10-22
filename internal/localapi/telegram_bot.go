@@ -459,10 +459,6 @@ func (rt *Runtime) telegramAction(ctx context.Context, s telegramSettings, chat,
 		}
 		reply(say("✅ 已创建 ", "✅ Created ")+"<b>"+html.EscapeString(name)+"</b>\n"+appliedText(result, lang), append([][]tgButton{{{say("🔗 节点链接", "🔗 Node link"), "cn:" + clientID}}}, backButton(lang)...))
 	case "bk":
-		if s.BackupPassword == "" {
-			reply(say("🔑 请先在“面板设置 → Telegram”设置备份加密口令", "🔑 Set a backup password under Panel settings → Telegram first"), backButton(lang))
-			return
-		}
 		if !rt.backupMu.TryLock() {
 			reply(say("⏳ 备份正在进行，请稍后再试", "⏳ A backup is running; try again later"), backButton(lang))
 			return
@@ -476,7 +472,7 @@ func (rt *Runtime) telegramAction(ctx context.Context, s telegramSettings, chat,
 			failed(say("备份失败：", "Backup failed: "), err)
 			return
 		}
-		if err := telegramDocumentSend(ctx, s.Token, chat, name, file, backupCaption(time.Now(), lang), backButton(lang)); err != nil {
+		if err := telegramDocumentSend(ctx, s.Token, chat, name, file, backupCaption(time.Now(), s.BackupPassword != "", lang), backButton(lang)); err != nil {
 			failed(say("备份文件发送失败：", "Failed to send the backup file: "), err)
 		}
 	case "rx":

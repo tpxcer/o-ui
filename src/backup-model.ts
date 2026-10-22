@@ -7,11 +7,6 @@ export interface BackupPreview {
   removedInbounds: BackupRecord[]; removedClients: BackupRecord[];
 }
 
-export function validateBackupPassword(password: string): void {
-  // 备份密码不限长度（用户2026-10-22要求），只要求非空。
-  if (!password) throw new Error(t('请填写备份密码；请妥善保存，遗忘无法恢复。', 'Enter a backup password; keep it safe, it cannot be recovered.'));
-}
-
 export function encodeBackup(data: Uint8Array): string {
   if (!data.length || data.length > maxBackupFile) throw new Error(t('请选择有效的备份文件（最大约8 MiB）。', 'Choose a valid backup file (up to about 8 MiB).'));
   let binary = '';

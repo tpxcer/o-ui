@@ -240,9 +240,10 @@ func TestTelegramBotBackupKeepsMenu(t *testing.T) {
 	_, rt, _, _ := subscriptionFixture(t)
 	s := saveBotSettings(t, rt)
 	ctx := context.Background()
+	// 未设口令时发送不加密备份（用户2026-10-22要求口令可选），说明里提醒含私钥。
 	rt.telegramAction(ctx, s, "1001", "bk", "zh")
-	if text, keyboard := lastReply(t, calls()); !strings.Contains(text, "备份加密口令") || !strings.Contains(keyboard, `"m"`) {
-		t.Fatal("backup without a password should ask for one", text, keyboard)
+	if plain := calls()[len(calls())-1]; plain.method != "sendDocument" || !strings.Contains(plain.body["caption"].(string), "未加密") {
+		t.Fatal("backup without a password should send a plain backup", plain)
 	}
 	s.BackupPassword = "backup-passphrase-for-tests"
 	rt.telegramAction(ctx, s, "1001", "bk", "zh")

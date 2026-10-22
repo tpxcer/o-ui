@@ -106,7 +106,7 @@ func TestTelegramSettingsAndNotifications(t *testing.T) {
 		{"chatIds": "12a"},
 		{"reportTime": "24:00"},
 		{"cpuThreshold": 101},
-		{"backupEnabled": true, "reportTime": "09:00"},
+		{"backupEnabled": true},
 	} {
 		put(0, bad, 400)
 	}
@@ -174,6 +174,22 @@ func TestTelegramSettingsAndNotifications(t *testing.T) {
 	}
 	if _, err := backup.Open(got[2].file, "backup-passphrase-for-tests"); err != nil {
 		t.Fatal("sent backup does not decrypt with the configured password", err)
+	}
+	// 口令可选（用户2026-10-22要求）：清除后Telegram备份为不加密的JSON，说明里提醒含私钥。
+	if view := put(2, map[string]any{"enabled": true, "chatIds": "1001,-2002", "reportTime": "09:00", "backupEnabled": true, "clearBackupPassword": true}, 200)["data"].(map[string]any); view["backupPasswordSet"] != false {
+		t.Fatal("clearBackupPassword should remove the saved password", view)
+	}
+	if settings, _, err = readTelegram(context.Background(), s); err != nil || settings.BackupPassword != "" || settings.ClearBackupPassword {
+		t.Fatal("cleared password must not be stored", settings, err)
+	}
+	before = len(sent())
+	rt.sendTelegramReport(context.Background(), settings, time.Now())
+	got = sent()[before:]
+	if len(got) != 4 || !strings.HasSuffix(got[2].document, ".json") || !strings.Contains(got[2].text, "未加密") {
+		t.Fatal("plain backup", got)
+	}
+	if _, err := backup.Open(got[2].file, ""); err != nil || backup.Encrypted(got[2].file) {
+		t.Fatal("plain backup should open without a password", err)
 	}
 }
 

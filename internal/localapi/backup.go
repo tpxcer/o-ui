@@ -314,7 +314,7 @@ func (rt *Runtime) restore(ctx context.Context, b businessBackup, current busine
 	if err != nil {
 		return "", nil, i18n.New("无法创建恢复目录，未改变数据", "Cannot create the restore directory; data unchanged")
 	}
-	name := filepath.Base(dir) + "-rollback.ixpb"
+	name := filepath.Base(dir) + "-rollback" + backupExt(password)
 	if err = writePrivate(filepath.Join(dir, name), rollback); err != nil {
 		return "", nil, i18n.New("无法保存回退副本，未改变数据", "Cannot save the rollback copy; data unchanged")
 	}
@@ -378,7 +378,15 @@ func (rt *Runtime) restore(ctx context.Context, b businessBackup, current busine
 	return name, rollback, nil
 }
 
-// exportBackup生成加密业务备份；调用方须持有backupMu与rt.mu（网页导出与Telegram定时备份共用）。
+// backupExt：填口令的备份为加密的.ixpb，口令为空时为不加密的.json。
+func backupExt(password string) string {
+	if password == "" {
+		return ".json"
+	}
+	return ".ixpb"
+}
+
+// exportBackup生成业务备份（填口令时加密）；调用方须持有backupMu与rt.mu（网页导出与Telegram定时备份共用）。
 func (rt *Runtime) exportBackup(ctx context.Context, password string) (string, []byte, error) {
 	if err := rt.checkpointCurrent(ctx); err != nil {
 		return "", nil, err
@@ -402,7 +410,7 @@ func (rt *Runtime) exportBackup(ctx context.Context, password string) (string, [
 	if err != nil {
 		return "", nil, err
 	}
-	return "xray-panel-" + b.CreatedAt.Format("20060102-150405") + ".ixpb", file, nil
+	return "xray-panel-" + b.CreatedAt.Format("20060102-150405") + backupExt(password), file, nil
 }
 
 func registerBackup(mux *http.ServeMux, rt *Runtime) {
@@ -414,10 +422,6 @@ func registerBackup(mux *http.ServeMux, rt *Runtime) {
 			}
 			var request restoreRequest
 			if !readJSON(w, r, &request, 12<<20) {
-				return
-			}
-			if err := backup.ValidatePassword(request.Password); err != nil {
-				respond(w, 400, map[string]string{"error": err.Error()})
 				return
 			}
 			// 固定KDF耗内存；与核心操作串行，禁止并发解密堆积内存。

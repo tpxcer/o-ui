@@ -101,26 +101,26 @@ func ouiTraffic(n uint64) string {
 	return fmt.Sprintf("%.2f%s", value, units[unit])
 }
 
-// onlineMessages的字段、顺序与写法照OUI的上线/下线通知（用户2026-10-22提供截图）：每个IP一条，其余内容相同；没有采到IP时发一条不含IP。
-func onlineMessages(event onlineEvent, inbound string, ips []string, lang string) []string {
+// onlineMessages的字段、顺序与写法照OUI的上线/下线通知（用户2026-10-22提供截图）：每个IP一条，其余内容相同；没有采到IP时发一条不含IP。不含“节点名称”行（用户2026-10-22要求去掉）。
+func onlineMessages(event onlineEvent, ips []string, lang string) []string {
 	if len(ips) == 0 {
-		return []string{onlineMessage(event, inbound, "", lang)}
+		return []string{onlineMessage(event, "", lang)}
 	}
 	messages := []string{}
 	for _, ip := range ips {
-		messages = append(messages, onlineMessage(event, inbound, ip, lang))
+		messages = append(messages, onlineMessage(event, ip, lang))
 	}
 	return messages
 }
 
-func onlineMessage(event onlineEvent, inbound, ip, lang string) string {
+func onlineMessage(event onlineEvent, ip, lang string) string {
 	say := func(zh, en string) string { return i18n.Pick(lang, zh, en) }
 	code := func(value string) string { return "<code>" + html.EscapeString(value) + "</code>" }
 	lines := []string{say("💎 <b>o-ui 用户通知</b>", "💎 <b>o-ui client alert</b>"), say("📴 <b>客户端下线</b>", "📴 <b>Client offline</b>")}
 	if event.online {
 		lines[1] = say("🚀 <b>客户端上线</b>", "🚀 <b>Client online</b>")
 	}
-	lines = append(lines, say("📧 用户/节点：", "📧 Client: ")+code(event.client.Name), say("🧩 节点名称：", "🧩 Inbound: ")+code(inbound))
+	lines = append(lines, say("📧 用户/节点：", "📧 Client: ")+code(event.client.Name))
 	if ip != "" {
 		label := say("🌐 IP 地址：", "🌐 IP: ")
 		if !event.online {
@@ -280,10 +280,6 @@ func (rt *Runtime) notifyOnline(ctx context.Context, s telegramSettings, session
 			clients = append(clients, client)
 		}
 	}
-	inbounds := map[string]string{}
-	for _, in := range draft.Inbounds {
-		inbounds[in.ID] = in.Name
-	}
 	lang := telegramLang()
 	events := onlineChanges(sessions, clients, traffic, now)
 	for id, session := range sessions {
@@ -295,7 +291,7 @@ func (rt *Runtime) notifyOnline(ctx context.Context, s telegramSettings, session
 		if event.online {
 			ips = mergeIPs(slices.Clone(ips), rt.onlineIPs(event.client.ID))
 		}
-		for _, text := range onlineMessages(event, inbounds[event.client.InboundID], ips, lang) {
+		for _, text := range onlineMessages(event, ips, lang) {
 			_, _ = telegramBroadcast(ctx, s, text)
 		}
 	}

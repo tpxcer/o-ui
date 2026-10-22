@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"html"
-	"independent-panel/internal/backup"
 	"independent-panel/internal/i18n"
 	"independent-panel/internal/store"
 	"io"
@@ -46,6 +45,8 @@ type telegramSettings struct {
 	CPUThreshold   int    `json:"cpuThreshold"`
 	BackupEnabled  bool   `json:"backupEnabled"`
 	BackupPassword string `json:"backupPassword"`
+	// ClearBackupPassword只在保存请求中出现：清除已设置的备份口令，之后Telegram备份不加密；不落库。
+	ClearBackupPassword bool `json:"clearBackupPassword,omitempty"`
 }
 
 // telegramView是返回网页的设置：机器人令牌与备份口令只写不读，只显示是否已设置。
@@ -86,17 +87,17 @@ func readTelegram(ctx context.Context, state *store.Store) (telegramSettings, in
 	return s, doc.Revision, nil
 }
 
-// 令牌或备份口令留空表示保留已保存的值。
+// 令牌或备份口令留空表示保留已保存的值；备份口令可选（用户2026-10-22要求），可显式清除。
 func validateTelegram(next, current telegramSettings) (telegramSettings, error) {
 	if next.Token == "" {
 		next.Token = current.Token
 	} else if !telegramToken.MatchString(next.Token) {
 		return next, i18n.New("Bot Token格式无效（应为“数字:字母数字串”，从@BotFather获取）", "Invalid bot token (it looks like digits:letters, from @BotFather)")
 	}
-	if next.BackupPassword == "" {
+	if next.ClearBackupPassword {
+		next.BackupPassword, next.ClearBackupPassword = "", false
+	} else if next.BackupPassword == "" {
 		next.BackupPassword = current.BackupPassword
-	} else if err := backup.ValidatePassword(next.BackupPassword); err != nil {
-		return next, err
 	}
 	chats := next.chats()
 	if len(chats) > 10 {
@@ -117,8 +118,8 @@ func validateTelegram(next, current telegramSettings) (telegramSettings, error) 
 	if next.Enabled && (next.Token == "" || len(chats) == 0) {
 		return next, i18n.New("启用机器人须填写Bot Token和至少一个Chat ID", "Enabling the bot needs a bot token and at least one chat ID")
 	}
-	if next.BackupEnabled && (next.BackupPassword == "" || next.ReportTime == "") {
-		return next, i18n.New("发送备份须设置备份加密口令和每日报告时间", "Sending backups needs a backup password and a daily report time")
+	if next.BackupEnabled && next.ReportTime == "" {
+		return next, i18n.New("发送备份须设置每日报告时间", "Sending backups needs a daily report time")
 	}
 	return next, nil
 }
@@ -338,7 +339,7 @@ func (rt *Runtime) sendTelegramReport(ctx context.Context, s telegramSettings, n
 	report := rt.telegramReport(ctx, now)
 	rt.mu.Unlock()
 	_, _ = telegramBroadcast(ctx, s, report)
-	if !s.BackupEnabled || s.BackupPassword == "" {
+	if !s.BackupEnabled {
 		return
 	}
 	// 与网页备份、核心操作串行；正在忙时跳过本次，不排队占用内存。
@@ -355,13 +356,18 @@ func (rt *Runtime) sendTelegramReport(ctx context.Context, s telegramSettings, n
 		return
 	}
 	for _, chat := range s.chats() {
-		if err := telegramDocumentSend(ctx, s.Token, chat, name, file, backupCaption(now, lang), nil); err != nil {
+		if err := telegramDocumentSend(ctx, s.Token, chat, name, file, backupCaption(now, s.BackupPassword != "", lang), nil); err != nil {
 			_ = telegramMessage(ctx, s.Token, chat, i18n.Pick(lang, "❌ 备份文件发送失败：", "❌ Failed to send the backup file: ")+html.EscapeString(i18n.Translate(err.Error(), lang)))
 		}
 	}
 }
 
-func backupCaption(at time.Time, lang string) string {
+// backupCaption：未设口令时为不加密备份，提醒文件含节点密钥与私钥。
+func backupCaption(at time.Time, encrypted bool, lang string) string {
+	if !encrypted {
+		return i18n.Pick(lang, "🗄 <b>o-ui 备份（未加密）</b>\n⏰ 备份时间：", "🗄 <b>o-ui backup (not encrypted)</b>\n⏰ Backup time: ") + at.Format("2006-01-02 15:04:05") +
+			i18n.Pick(lang, "\n⚠️ 含节点密钥和私钥，请妥善保管；在面板“备份和恢复”中恢复", "\n⚠️ Contains node keys and private keys; keep it safe. Restore it under Backup and restore")
+	}
 	return i18n.Pick(lang, "🗄 <b>o-ui 加密备份</b>\n⏰ 备份时间：", "🗄 <b>o-ui encrypted backup</b>\n⏰ Backup time: ") + at.Format("2006-01-02 15:04:05") +
 		i18n.Pick(lang, "\n🔑 用设置的备份口令在面板“备份和恢复”中恢复", "\n🔑 Restore it under Backup and restore with the configured password")
 }

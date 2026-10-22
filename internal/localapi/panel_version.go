@@ -114,7 +114,9 @@ func releaseHighlights(body string) []releaseNote {
 	return notes
 }
 
-func hasHan(s string) bool { return strings.IndexFunc(s, func(r rune) bool { return unicode.Is(unicode.Han, r) }) >= 0 }
+func hasHan(s string) bool {
+	return strings.IndexFunc(s, func(r rune) bool { return unicode.Is(unicode.Han, r) }) >= 0
+}
 
 func clip(s string, n int) string {
 	if r := []rune(s); len(r) > n {

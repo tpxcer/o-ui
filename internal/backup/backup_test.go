@@ -46,8 +46,19 @@ func TestAuthenticatedEncryption(t *testing.T) {
 			t.Fatal("tamper accepted", index)
 		}
 	}
-	if _, err = Seal(plaintext, ""); err == nil {
-		t.Fatal("empty password accepted")
+	// 口令可选（用户2026-10-22要求）：空口令得到不加密的JSON，可不填口令打开；加密备份不填口令时拒绝。
+	plain, err := Seal(plaintext, "")
+	if err != nil || !bytes.Equal(plain, plaintext) || Encrypted(plain) {
+		t.Fatal("empty password should produce a plain backup", err)
+	}
+	if got, err := Open(plain, ""); err != nil || !bytes.Equal(got, plaintext) {
+		t.Fatal("plain backup should open without a password", err)
+	}
+	if _, err := Open(file, ""); err == nil || !Encrypted(file) {
+		t.Fatal("encrypted backup opened without a password")
+	}
+	if _, err := Open([]byte("not json"), ""); err == nil {
+		t.Fatal("non-JSON plain file accepted")
 	}
 	if _, err = Seal(plaintext, "x"); err != nil {
 		t.Fatal("backup passwords have no length limit", err)
