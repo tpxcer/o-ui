@@ -1,5 +1,6 @@
 /* 设计令牌：透明磨砂——固定的柔和极光底色上，卡片、侧栏与弹窗用半透明面加背景模糊；深浅两套各自调校，组件只引用令牌。
-   --overlay是浮在内容上的弹窗与菜单，更不透明以保证可读；--menu是原生下拉选项，必须不透明。 */
+   弹窗（二级窗口）用--panel：与首页同一套极光色调的半透明面，加更强的背景模糊，复杂背景上也清晰；
+   --overlay是菜单、提示等小浮层，更不透明以保证可读；--menu是原生下拉选项，必须不透明。 */
 :root {
   font-family: Inter, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
   font-size: 14px;
@@ -12,8 +13,11 @@
   --surface: rgb(255 255 255 / .045);
   --sidebar: rgb(255 255 255 / .03);
   --overlay: rgb(22 24 31 / .82);
+  --panel: linear-gradient(155deg, rgb(58 110 232 / .2), rgb(139 92 246 / .12) 50%, rgb(20 184 166 / .1)), rgb(16 18 26 / .5);
+  --scrim: rgb(0 0 0 / .32);
   --menu: #1a1c24;
   --glass: blur(24px) saturate(160%);
+  --glass-strong: blur(40px) saturate(180%);
   --raised: rgb(255 255 255 / .06);
   --border: rgb(255 255 255 / .09);
   --border-strong: rgb(255 255 255 / .15);
@@ -50,6 +54,8 @@
   --surface: rgb(255 255 255 / .58);
   --sidebar: rgb(255 255 255 / .45);
   --overlay: rgb(255 255 255 / .84);
+  --panel: linear-gradient(155deg, rgb(59 130 246 / .12), rgb(168 85 247 / .08) 50%, rgb(20 184 166 / .1)), rgb(255 255 255 / .62);
+  --scrim: rgb(15 23 42 / .2);
   --menu: #fff;
   --raised: rgb(15 23 42 / .045);
   --border: rgb(15 23 42 / .08);
@@ -78,7 +84,7 @@
 body { margin: 0; }
 /* 极光底色固定在视口上，滚动时不变形；磨砂面板模糊的就是这一层 */
 body::before { content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none; background: var(--aurora); }
-.card, .sidebar, dialog { -webkit-backdrop-filter: var(--glass); backdrop-filter: var(--glass); }
+.card, .sidebar { -webkit-backdrop-filter: var(--glass); backdrop-filter: var(--glass); }
 ::selection { background: color-mix(in srgb, var(--blue) 30%, transparent); }
 button, a { -webkit-tap-highlight-color: transparent; }
 button { font: inherit; color: inherit; cursor: pointer; }
@@ -199,8 +205,8 @@ main { margin-left: var(--sidebar-width); padding: 20px 28px 40px; outline: none
 .sidebar-collapsed .brand { padding: 8px 10px; justify-content: center; }
 .sidebar-collapsed .brand-title, .sidebar-collapsed .nav-item span, .sidebar-collapsed .prototype-version { display: none; }
 .sidebar-collapsed .nav-item { justify-content: center; padding: 8px; }
-dialog { border: 1px solid var(--border-strong); border-radius: 16px; width: min(500px, calc(100% - 32px)); padding: 0; color: var(--text); background: var(--overlay); box-shadow: var(--shadow-pop); max-height: calc(100dvh - 40px); }
-dialog::backdrop { background: rgb(0 0 0 / .32); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+dialog { border: 1px solid var(--border-strong); border-radius: 16px; width: min(500px, calc(100% - 32px)); padding: 0; color: var(--text); background: var(--panel); -webkit-backdrop-filter: var(--glass-strong); backdrop-filter: var(--glass-strong); box-shadow: var(--shadow), var(--shadow-pop); max-height: calc(100dvh - 40px); }
+dialog::backdrop { background: var(--scrim); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
 .dialog-heading { padding: 12px 12px 12px 22px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--border); }
 .dialog-heading h2 { font-size: 16px; }
 .dialog-body { padding: 20px 22px; line-height: 1.8; color: var(--muted); }
