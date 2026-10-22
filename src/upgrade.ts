@@ -2,7 +2,7 @@ import { api, jsonBody } from './api.ts';
 import { t } from './i18n.ts';
 import './upgrade.css';
 
-export type PanelVersion = { current: string; latest?: string; url?: string; updateAvailable: boolean; issue?: string; canUpgrade?: boolean; update?: { state: string; from: string; to: string; code: number; at: number } };
+export type PanelVersion = { current: string; latest?: string; url?: string; notes?: { zh: string; en: string }[]; updateAvailable: boolean; issue?: string; canUpgrade?: boolean; update?: { state: string; from: string; to: string; code: number; at: number } };
 
 // 下载图标（参照OUI）：圆底白箭头落入托盘，升级进行中箭头循环落下。
 export const downloadIcon = (active: boolean) => `<span class="download-icon${active ? ' is-active' : ''}" aria-hidden="true"><svg class="download-arrow" viewBox="0 0 24 24"><path d="M12 4v12M6.5 10.5 12 16l5.5-5.5"/></svg><span class="download-tray"></span></span>`;

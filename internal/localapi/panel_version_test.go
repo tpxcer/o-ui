@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -30,14 +31,14 @@ func TestPanelVersionComparesReleasesOnly(t *testing.T) {
 func TestPanelVersionChecksOnlyOnRequestAndCaches(t *testing.T) {
 	calls, clock := 0, time.Unix(1_800_000_000, 0)
 	latest := "v0.2.0"
-	p := &panelUpdates{current: "v0.1.0", now: func() time.Time { return clock }, fetch: func(context.Context) (string, string, error) {
+	p := &panelUpdates{current: "v0.1.0", now: func() time.Time { return clock }, fetch: func(context.Context) (latestRelease, error) {
 		calls++
-		return latest, "https://github.com/tpxcer/o-ui/releases/tag/" + latest, nil
+		return latestRelease{tag: latest, url: "https://github.com/tpxcer/o-ui/releases/tag/" + latest, notes: []releaseNote{{Zh: "新功能", En: "New feature"}}}, nil
 	}}
 	if v := p.get(context.Background(), false); calls != 0 || v.UpdateAvailable || v.Current != "v0.1.0" {
 		t.Fatal("loading the page must not contact GitHub", v)
 	}
-	if v := p.get(context.Background(), true); calls != 1 || !v.UpdateAvailable || v.Latest != "v0.2.0" {
+	if v := p.get(context.Background(), true); calls != 1 || !v.UpdateAvailable || v.Latest != "v0.2.0" || len(v.Notes) != 1 || v.Notes[0].Zh != "新功能" {
 		t.Fatal("check must report the newer release", v)
 	}
 	clock = clock.Add(59 * time.Second)
@@ -49,9 +50,40 @@ func TestPanelVersionChecksOnlyOnRequestAndCaches(t *testing.T) {
 	if v := p.get(context.Background(), true); calls != 2 || v.Latest != "2026-10-21-v1" || !v.UpdateAvailable {
 		t.Fatal("a check after a minute must fetch again", v)
 	}
-	failing := &panelUpdates{current: "v0.1.0", fetch: func(context.Context) (string, string, error) { return "", "", errors.New("offline") }}
+	failing := &panelUpdates{current: "v0.1.0", fetch: func(context.Context) (latestRelease, error) { return latestRelease{}, errors.New("offline") }}
 	if v := failing.get(context.Background(), true); v.Issue == "" || v.UpdateAvailable {
 		t.Fatal("failure must be reported, not treated as up to date", v)
+	}
+}
+
+// 检测到新版本时展示本次更新的主要内容（用户2026-10-22要求）：取发布说明开头的要点，按“中文 / English”拆成两种语言。
+func TestReleaseHighlights(t *testing.T) {
+	body := "- 弹窗改为磨砂材质 / Dialogs are frosted.\r\n" +
+		"- 下拉列表改为圆角菜单（Chrome / Edge 135 及以上） / Dropdowns are rounded menus in Chrome / Edge 135+.\n" +
+		"- **删除入站会一并删除其客户端**，运行 `o-ui update` / **Deleting an inbound deletes its clients**; run `o-ui update`.\n" +
+		"- 只有一种语言的要点\n\n升级：在面板点“立即升级” / Upgrade: click Update now.\n- 平台 / Platforms: linux-amd64\n"
+	notes := releaseHighlights(body)
+	want := []releaseNote{
+		{Zh: "弹窗改为磨砂材质", En: "Dialogs are frosted."},
+		{Zh: "下拉列表改为圆角菜单（Chrome / Edge 135 及以上）", En: "Dropdowns are rounded menus in Chrome / Edge 135+."},
+		{Zh: "删除入站会一并删除其客户端，运行 o-ui update", En: "Deleting an inbound deletes its clients; run o-ui update."},
+		{Zh: "只有一种语言的要点", En: "只有一种语言的要点"},
+	}
+	if fmt.Sprint(notes) != fmt.Sprint(want) {
+		t.Fatalf("got %q", notes)
+	}
+	many := strings.Repeat("- 要点 / Point\n", 15)
+	if notes := releaseHighlights(many); len(notes) != 10 {
+		t.Fatal("at most 10 highlights", len(notes))
+	}
+	if notes := releaseHighlights("Plain text without a list"); len(notes) != 0 {
+		t.Fatal("no list means no highlights", notes)
+	}
+	if text := releaseChanges(want[:1], "zh"); text != "\n📝 <b>本次更新</b>\n• 弹窗改为磨砂材质" {
+		t.Fatalf("bot section %q", text)
+	}
+	if releaseChanges(nil, "zh") != "" {
+		t.Fatal("no highlights, no section")
 	}
 }
 
@@ -65,8 +97,8 @@ func TestPanelWebUpgrade(t *testing.T) {
 	runUpgrade = func(context.Context) (string, error) { started++; return "已开始升级", nil }
 	upgradeStatusFile = status
 	mux := http.NewServeMux()
-	registerPanelUpdates(mux, &panelUpdates{current: "2026-10-21", fetch: func(context.Context) (string, string, error) {
-		return latest, "https://github.com/tpxcer/o-ui/releases/tag/" + latest, nil
+	registerPanelUpdates(mux, &panelUpdates{current: "2026-10-21", fetch: func(context.Context) (latestRelease, error) {
+		return latestRelease{tag: latest, url: "https://github.com/tpxcer/o-ui/releases/tag/" + latest}, nil
 	}})
 	call := func(method, path, body string, want int) map[string]any {
 		t.Helper()

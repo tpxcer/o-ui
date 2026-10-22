@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 )
 
 const releaseAPI = "https://api.github.com/repos/tpxcer/o-ui/releases/latest"
@@ -60,10 +61,66 @@ type panelUpdates struct {
 	current string
 	latest  string
 	url     string
+	notes   []releaseNote
 	issue   string
 	checked time.Time
-	fetch   func(context.Context) (string, string, error)
+	fetch   func(context.Context) (latestRelease, error)
 	now     func() time.Time
+}
+
+type latestRelease struct {
+	tag, url string
+	notes    []releaseNote
+}
+
+// releaseNote是发布说明里的一条要点，分中英两种语言，网页与机器人按界面语言取用。
+type releaseNote struct {
+	Zh string `json:"zh"`
+	En string `json:"en"`
+}
+
+// releaseHighlights取发布说明开头的要点（“- ”开头，到第一个空行为止），即本次更新的主要内容；最多10条。
+// 每条按“中文 / English”拆开：取其后不再出现汉字的那个“ / ”，中文部分里的“Chrome / Edge”之类不会被拆错。
+func releaseHighlights(body string) []releaseNote {
+	notes := []releaseNote{}
+	plain := strings.NewReplacer("**", "", "`", "")
+	for _, line := range strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n") {
+		text, ok := strings.CutPrefix(strings.TrimSpace(line), "- ")
+		if !ok {
+			if len(notes) > 0 {
+				break
+			}
+			continue
+		}
+		text = plain.Replace(strings.TrimSpace(text))
+		note := releaseNote{Zh: text, En: text}
+		for from := 0; ; {
+			at := strings.Index(text[from:], " / ")
+			if at < 0 {
+				break
+			}
+			at += from
+			if zh, en := strings.TrimSpace(text[:at]), strings.TrimSpace(text[at+3:]); hasHan(zh) && !hasHan(en) {
+				note = releaseNote{Zh: zh, En: en}
+				break
+			}
+			from = at + 3
+		}
+		notes = append(notes, releaseNote{Zh: clip(note.Zh, 300), En: clip(note.En, 300)})
+		if len(notes) == 10 {
+			break
+		}
+	}
+	return notes
+}
+
+func hasHan(s string) bool { return strings.IndexFunc(s, func(r rune) bool { return unicode.Is(unicode.Han, r) }) >= 0 }
+
+func clip(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n]) + "…"
+	}
+	return s
 }
 
 // 只有手动点“检测更新”才访问GitHub；1分钟内重复点击用上次结果，避免触发GitHub未登录每小时60次的限制。
@@ -73,6 +130,7 @@ type panelVersion struct {
 	Current         string         `json:"current"`
 	Latest          string         `json:"latest,omitempty"`
 	URL             string         `json:"url,omitempty"`
+	Notes           []releaseNote  `json:"notes,omitempty"`
 	UpdateAvailable bool           `json:"updateAvailable"`
 	Issue           string         `json:"issue,omitempty"`
 	CanUpgrade      bool           `json:"canUpgrade"`
@@ -142,30 +200,31 @@ func newerVersion(latest, current string) bool {
 	return b.prerelease
 }
 
-func fetchLatestRelease(ctx context.Context) (string, string, error) {
+func fetchLatestRelease(ctx context.Context) (latestRelease, error) {
 	client := &http.Client{Timeout: 8 * time.Second, Transport: &http.Transport{Proxy: nil, TLSHandshakeTimeout: 5 * time.Second, ResponseHeaderTimeout: 5 * time.Second, MaxResponseHeaderBytes: 16 << 10}}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, releaseAPI, nil)
 	if err != nil {
-		return "", "", err
+		return latestRelease{}, err
 	}
 	request.Header.Set("Accept", "application/vnd.github+json")
 	request.Header.Set("User-Agent", "o-ui")
 	response, err := client.Do(request)
 	if err != nil {
-		return "", "", err
+		return latestRelease{}, err
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return "", "", i18n.New("GitHub 返回异常状态", "GitHub returned an error status")
+		return latestRelease{}, i18n.New("GitHub 返回异常状态", "GitHub returned an error status")
 	}
 	var release struct {
-		Tag string `json:"tag_name"`
-		URL string `json:"html_url"`
+		Tag  string `json:"tag_name"`
+		URL  string `json:"html_url"`
+		Body string `json:"body"`
 	}
 	if json.NewDecoder(io.LimitReader(response.Body, 256<<10)).Decode(&release) != nil || !validVersion(release.Tag) || !strings.HasPrefix(release.URL, "https://github.com/") {
-		return "", "", i18n.New("GitHub 返回的版本信息无效", "GitHub returned invalid release information")
+		return latestRelease{}, i18n.New("GitHub 返回的版本信息无效", "GitHub returned invalid release information")
 	}
-	return release.Tag, release.URL, nil
+	return latestRelease{tag: release.Tag, url: release.URL, notes: releaseHighlights(release.Body)}, nil
 }
 
 func (p *panelUpdates) get(ctx context.Context, check bool) panelVersion {
@@ -176,15 +235,15 @@ func (p *panelUpdates) get(ctx context.Context, check bool) panelVersion {
 		now = p.now
 	}
 	if check && (p.checked.IsZero() || now().Sub(p.checked) >= updateCheckCache) {
-		latest, url, err := p.fetch(ctx)
+		release, err := p.fetch(ctx)
 		p.checked, p.issue = now(), ""
 		if err != nil {
 			p.issue = i18n.T("无法连接 GitHub 检查更新", "Cannot reach GitHub to check for updates")
 		} else {
-			p.latest, p.url = latest, url
+			p.latest, p.url, p.notes = release.tag, release.url, release.notes
 		}
 	}
-	return panelVersion{Current: p.current, Latest: p.latest, URL: p.url, UpdateAvailable: newerVersion(p.latest, p.current), Issue: p.issue}
+	return panelVersion{Current: p.current, Latest: p.latest, URL: p.url, Notes: p.notes, UpdateAvailable: newerVersion(p.latest, p.current), Issue: p.issue}
 }
 
 func registerPanelVersion(mux *http.ServeMux) {
@@ -213,13 +272,14 @@ func registerPanelUpdates(mux *http.ServeMux, updates *panelUpdates) {
 			respond(w, 409, map[string]string{"error": i18n.T("服务器上还没有网页升级助手，请先在服务器上运行一次 o-ui update", "The web update helper is not installed yet; run o-ui update on the server once")})
 			return
 		}
-		latest, url, err := updates.fetch(r.Context())
+		release, err := updates.fetch(r.Context())
+		latest := release.tag
 		if err != nil {
 			respond(w, 502, map[string]string{"error": i18n.T("无法连接 GitHub 检查更新", "Cannot reach GitHub to check for updates")})
 			return
 		}
 		updates.mu.Lock()
-		updates.latest, updates.url, updates.issue, updates.checked = latest, url, "", time.Now()
+		updates.latest, updates.url, updates.notes, updates.issue, updates.checked = release.tag, release.url, release.notes, "", time.Now()
 		current := updates.current
 		updates.mu.Unlock()
 		if !newerVersion(latest, current) {

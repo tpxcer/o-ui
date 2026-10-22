@@ -493,22 +493,23 @@ func (rt *Runtime) telegramAction(ctx context.Context, s telegramSettings, chat,
 		reply(fmt.Sprintf(say("✅ <b>Xray 已重启</b>\n📡 版本：%s\n📋 代理入站：%d 条", "✅ <b>Xray restarted</b>\n📡 Version: %s\n📋 Proxy inbounds: %d"), html.EscapeString(status.Version), status.Inbounds), backButton(lang))
 	case "up", "upc":
 		current := html.EscapeString(installedVersion())
-		latest, _, err := fetchLatestRelease(ctx)
+		release, err := fetchLatestRelease(ctx)
 		if err != nil {
 			reply(say("❌ 无法连接 GitHub 检查更新", "❌ Cannot reach GitHub to check for updates"), backButton(lang))
 			return
 		}
+		latest, changes := release.tag, releaseChanges(release.notes, lang)
 		if !newerVersion(latest, installedVersion()) {
 			reply(fmt.Sprintf(say("✅ 当前已是最新版本 <code>%s</code>", "✅ Already on the latest version <code>%s</code>"), current), backButton(lang))
 			return
 		}
 		latest = html.EscapeString(latest)
 		if !upgradeReady() {
-			reply(fmt.Sprintf(say("⬆️ 发现新版本 <b>%s</b>（当前 %s）\n🛠 服务器上还没有网页升级助手，请先在服务器上运行一次 <code>o-ui update</code>", "⬆️ New version <b>%s</b> (current %s)\n🛠 The web update helper is not installed; run <code>o-ui update</code> on the server once"), latest, current), backButton(lang))
+			reply(fmt.Sprintf(say("⬆️ 发现新版本 <b>%s</b>（当前 %s）\n🛠 服务器上还没有网页升级助手，请先在服务器上运行一次 <code>o-ui update</code>", "⬆️ New version <b>%s</b> (current %s)\n🛠 The web update helper is not installed; run <code>o-ui update</code> on the server once"), latest, current)+changes, backButton(lang))
 			return
 		}
 		if action == "up" {
-			reply(fmt.Sprintf(say("⬆️ 发现新版本 <b>%s</b>（当前 %s）\n⚠️ 升级期间面板与代理会短暂中断，要立即升级吗？", "⬆️ New version <b>%s</b> (current %s)\n⚠️ The panel and proxies drop briefly during the update. Update now?"), latest, current), [][]tgButton{{{say("🚀 立即升级", "🚀 Update now"), "upc"}, {say("✖️ 取消", "✖️ Cancel"), "m"}}})
+			reply(fmt.Sprintf(say("⬆️ 发现新版本 <b>%s</b>（当前 %s）\n⚠️ 升级期间面板与代理会短暂中断，要立即升级吗？", "⬆️ New version <b>%s</b> (current %s)\n⚠️ The panel and proxies drop briefly during the update. Update now?"), latest, current)+changes, [][]tgButton{{{say("🚀 立即升级", "🚀 Update now"), "upc"}, {say("✖️ 取消", "✖️ Cancel"), "m"}}})
 			return
 		}
 		if output, err := runUpgrade(ctx); err != nil {
@@ -517,6 +518,18 @@ func (rt *Runtime) telegramAction(ctx context.Context, s telegramSettings, chat,
 		}
 		reply(fmt.Sprintf(say("🚀 已开始升级到 <b>%s</b>，约一分钟后面板恢复。", "🚀 Updating to <b>%s</b>; the panel is back in about a minute."), latest), nil)
 	}
+}
+
+// releaseChanges把本次更新的主要内容排成机器人消息的一段，按界面语言取用；没有要点时为空。
+func releaseChanges(notes []releaseNote, lang string) string {
+	if len(notes) == 0 {
+		return ""
+	}
+	lines := []string{"", i18n.Pick(lang, "📝 <b>本次更新</b>", "📝 <b>In this release</b>")}
+	for _, note := range notes {
+		lines = append(lines, "• "+html.EscapeString(i18n.Pick(lang, note.Zh, note.En)))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func findClient(draft workspaceDraft, id string) (clientDraft, bool) {

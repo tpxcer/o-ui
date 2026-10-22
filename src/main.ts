@@ -17,7 +17,7 @@ import { requireLogin } from './auth.ts';
 import { api, jsonBody } from './api.ts';
 import { downloadIcon, startUpgrade, type PanelVersion } from './upgrade.ts';
 import './style.css';
-import { languageButton, locale, setLang, t } from './i18n.ts';
+import { lang, languageButton, locale, setLang, t } from './i18n.ts';
 
 document.documentElement.lang = locale;
 document.querySelector('.skip-link')!.textContent = t('跳到主要内容', 'Skip to main content');
@@ -242,10 +242,11 @@ const descriptions: Record<string, [string, string]> = {
 };
 async function checkUpdate(): Promise<void> {
   showDetail(t('检测更新', 'Check for updates'), t('正在检查 GitHub 最新版本…', 'Checking GitHub for the latest release…'));
-  let text: string, upgrade = '';
+  let text: string, upgrade = '', notes: string[] = [];
   try {
     const v = await api<PanelVersion>('panel/version?check=1');
     release = v; paintUpdate();
+    if (v.updateAvailable) notes = (v.notes ?? []).map(note => lang === 'en' ? note.en : note.zh);
     if (v.issue) text = v.issue;
     else if (v.updateAvailable) {
       text = `${t('发现新版本 ', 'New version ')}${v.latest}${t('（当前 ', ' is available (current ')}${v.current}${t('）。', '). ')}${v.canUpgrade ? t('点“立即升级”在线升级，数据和配置会保留，失败会自动回退。', 'Click Update now to upgrade online; data and settings are kept, and a failed update rolls back.') : t('请在服务器上运行一次 o-ui update 升级（之后即可在网页上一键升级），数据和配置会保留。', 'Run o-ui update on the server once (after that you can update from the web); data and settings are kept.')}`;
@@ -254,6 +255,14 @@ async function checkUpdate(): Promise<void> {
   } catch (reason) { text = (reason as Error).message; }
   if (!dialog.open) return;
   document.querySelector('#dialog-description')!.textContent = text;
+  // 发现新版本时展示本次更新的主要内容（GitHub发布说明开头的要点）。
+  if (notes.length) {
+    const box = document.createElement('div'), list = document.createElement('ul'), title = document.createElement('strong');
+    box.className = 'release-notes'; title.textContent = t('本次更新', 'In this release');
+    for (const note of notes) { const item = document.createElement('li'); item.textContent = note; list.append(item); }
+    box.append(title, list);
+    document.querySelector('#dialog-description')!.after(box);
+  }
   if (upgrade) {
     const action = document.querySelector<HTMLButtonElement>('#dialog-action')!;
     action.textContent = t('立即升级', 'Update now'); action.hidden = false; action.disabled = false;
@@ -293,6 +302,7 @@ function showDetail(title: string, description: string): void {
   if (action) { action.hidden = true; action.onclick = null; }
   document.querySelector('#dialog-title')!.textContent = title;
   document.querySelector('#dialog-description')!.textContent = description;
+  dialog.querySelector('.release-notes')?.remove();
   dialog.showModal();
 }
 document.querySelectorAll<HTMLButtonElement>('[data-action]').forEach(button => {

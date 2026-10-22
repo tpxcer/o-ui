@@ -21,6 +21,10 @@
 .upgrade-dialog.is-failed .upgrade-progress > span { background: var(--danger); }
 .upgrade-dialog.is-failed .upgrade-progress > span::after { display: none; }
 .upgrade-dialog.is-failed p { color: var(--danger); }
+/* 检测更新弹窗里的“本次更新”要点 */
+.release-notes { margin-top: 14px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--raised); }
+.release-notes strong { display: block; margin-bottom: 6px; color: var(--text); font-size: 13px; font-weight: 600; }
+.release-notes ul { display: grid; gap: 6px; max-height: 40dvh; margin: 0; padding-left: 18px; overflow-y: auto; font-size: 13px; line-height: 1.65; }
 /* 首页“o-ui”卡片里的升级按钮沿用操作图标尺寸 */
 .action .download-icon { font-size: 11px; }
 @media (prefers-reduced-motion: reduce) {
