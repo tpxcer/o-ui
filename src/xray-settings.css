@@ -2,11 +2,12 @@
 .xray-settings-actions button:disabled { opacity: .5; cursor: not-allowed; }
 .xray-settings-card { min-width: 0; padding: 6px 20px 20px; }
 #panel-view > .xray-settings-card { margin-top: 16px; }
-.xray-settings-tabs { display: flex; gap: 22px; border-bottom: 1px solid var(--border); margin: 0 -20px 18px; padding: 0 20px; overflow-x: auto; scrollbar-width: none; }
-.xray-settings-tabs button { display: flex; align-items: center; justify-content: center; gap: 8px; white-space: nowrap; min-height: 48px; padding: 10px 0; margin-bottom: -1px; background: none; color: var(--muted); border: 0; border-bottom: 2px solid transparent; font-size: 13px; font-weight: 500; }
-.xray-settings-tabs button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--blue); }
-.xray-settings-tabs button:hover { color: var(--text); }
-.xray-settings-tabs svg { width: 16px; height: 16px; }
+/* 标签栏字号与间距参照OUI（antd Tabs默认）：14px常规字重、标签间距32px、上下内边距12px、选中蓝色加2px下划线、下方留16px */
+.xray-settings-tabs { display: flex; gap: 32px; border-bottom: 1px solid var(--border); margin: 0 -20px 16px; padding: 0 20px; overflow-x: auto; scrollbar-width: none; }
+.xray-settings-tabs button { display: flex; align-items: center; justify-content: center; gap: 8px; white-space: nowrap; min-height: 46px; padding: 12px 0; margin-bottom: -1px; background: none; color: var(--text); border: 0; border-bottom: 2px solid transparent; font-size: 14px; font-weight: 400; line-height: 22px; }
+.xray-settings-tabs button[aria-selected="true"] { color: var(--blue); border-bottom-color: var(--blue); text-shadow: 0 0 .25px currentColor; }
+.xray-settings-tabs button:hover { color: color-mix(in srgb, var(--blue) 80%, #fff); }
+.xray-settings-tabs svg { width: 14px; height: 14px; }
 .xray-setting-section { border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; margin-bottom: 12px; }
 .xray-setting-section:last-child { margin-bottom: 0; }
 .xray-setting-section summary { min-height: 46px; padding: 12px 16px; font-size: 14px; font-weight: 600; }
@@ -27,7 +28,7 @@
   .xray-settings-actions, .xray-settings-card { padding: 16px; }
   .xray-settings-actions { gap: 8px; }
   .xray-settings-actions button { font-size: 12px; padding: 0 12px; }
-  .xray-settings-tabs { gap: 18px; margin: 0 -16px 16px; padding: 0 16px; }
+  .xray-settings-tabs { gap: 24px; margin: 0 -16px 16px; padding: 0 16px; }
   .xray-setting-row { grid-template-columns: 1fr; gap: 10px; }
   .xray-setting-content { padding: 4px 12px; }
   .xray-settings-preview { padding: 16px; }
