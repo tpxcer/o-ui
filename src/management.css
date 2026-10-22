@@ -39,6 +39,29 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent-bg); wi
 .data-table tbody tr:last-child td { border-bottom: 0; }
 .data-table th:first-child { width: 30%; }
 .data-table th:last-child { width: 168px; }
+.data-table th.select-cell, .data-table td.select-cell { width: 44px; padding-right: 0; }
+.data-table th.select-cell + th { width: 26%; }
+.clients-table th:nth-child(3) { width: 132px; }
+.clients-table th:nth-child(4) { width: 18%; }
+.clients-table th:nth-child(6) { width: 96px; }
+.clients-table th:last-child { width: 132px; }
+.inbounds-table th:nth-child(6) { width: 110px; }
+.select-cell input { margin: 0; vertical-align: middle; }
+.status-cell { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.status-badge.is-online { color: var(--green); }
+.status-badge.is-online b { box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 25%, transparent); }
+.speed-pair { display: flex; gap: 10px; font-variant-numeric: tabular-nums; }
+.muted-text { color: var(--muted); }
+/* 每种入站类型一种颜色 */
+.tag.preset-hy2 { color: var(--orange); background: color-mix(in srgb, var(--orange) 12%, transparent); border-color: color-mix(in srgb, var(--orange) 30%, transparent); }
+.tag.preset-reality { color: var(--blue); background: color-mix(in srgb, var(--blue) 12%, transparent); border-color: color-mix(in srgb, var(--blue) 30%, transparent); }
+.tag.preset-xhttp-tls { color: var(--purple); background: color-mix(in srgb, var(--purple) 12%, transparent); border-color: color-mix(in srgb, var(--purple) 30%, transparent); }
+.tag.preset-xhttp-reality { color: var(--cyan); background: color-mix(in srgb, var(--cyan) 12%, transparent); border-color: color-mix(in srgb, var(--cyan) 30%, transparent); }
+.data-table .tag { font-weight: 600; margin-bottom: 0; }
+.icon-button.bordered { border: 1px solid var(--border-strong); background: var(--surface); }
+.danger-button.is-solid { border-color: transparent; background: var(--danger); color: #fff; }
+.danger-button.is-solid:hover:not(:disabled) { background: color-mix(in srgb, var(--danger) 88%, #000); }
+.danger-button svg { width: 16px; height: 16px; }
 .data-table tbody tr { transition: background-color .12s; }
 .data-table tbody tr:hover { background: color-mix(in srgb, var(--raised) 70%, transparent); }
 .record-name { font-weight: 600; overflow-wrap: anywhere; }
@@ -124,6 +147,13 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent-bg); wi
   .data-table td .mini-meter { max-width: none; }
   .data-table td { display: flex; justify-content: space-between; align-items: center; gap: 6px 16px; flex-wrap: wrap; border: 0; padding: 7px 0; }
   .data-table td::before { content: attr(data-label); color: var(--muted); font-size: 12px; flex: 0 0 78px; }
+  .data-table tr { position: relative; }
+  .data-table td.select-cell { position: absolute; top: 12px; right: 12px; width: auto; padding: 0; }
+  .data-table td.select-cell::before { display: none; }
+  .data-table td.select-cell + td { display: block; border-bottom: 1px solid var(--border); padding: 0 32px 13px 0; margin-bottom: 7px; }
+  .data-table td.select-cell + td::before { display: none; }
+  .data-table td.select-cell + td .table-secondary { text-align: left; }
+  .data-table td.select-cell + td > :last-child { text-align: left; }
   .data-table td:first-child { display: block; border-bottom: 1px solid var(--border); padding-bottom: 13px; margin-bottom: 7px; }
   .data-table td:first-child::before { display: none; }
   .data-table td .table-secondary { flex-basis: 100%; text-align: right; margin-top: -3px; }

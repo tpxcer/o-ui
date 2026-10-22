@@ -2,6 +2,7 @@ import { api, APIError, jsonBody } from './api.ts';
 import { escapeHtml as esc } from './workspace.ts';
 import './auth.css';
 import { languageButton, t } from './i18n.ts';
+import { startBackdrop } from './auth-backdrop.ts';
 
 interface AuthStatus { initialized: boolean; authenticated: boolean; username: string; twoFactor?: boolean }
 
@@ -12,12 +13,16 @@ export function requireLogin(): Promise<boolean> {
     const root = document.createElement('section');
     root.className = 'auth-screen'; root.setAttribute('aria-label', t('管理员登录', 'Administrator sign-in'));
     document.body.append(root);
+    const content = document.createElement('div');
+    content.className = 'auth-content';
+    root.append(content);
+    const stopBackdrop = startBackdrop(root);
     let status: AuthStatus | null = null;
     let error = '', busy = false, disposed = false;
     function paint(): void {
       const setup = status && !status.initialized;
       document.title = `o-ui · ${status ? setup ? t('设置管理员', 'Set up administrator') : t('管理员登录', 'Administrator sign-in') : t('连接本机面板', 'Connect to the panel')}`;
-      root.innerHTML = `<div class="card auth-card"><div class="auth-heading">${languageButton()}<span>o-ui</span><h1>${status ? setup ? t('设置管理员', 'Set up administrator') : t('管理员登录', 'Administrator sign-in') : t('连接本机面板', 'Connect to the panel')}</h1><p>${setup ? t('首次使用请设置账号密码。没有默认密码，不导入旧 OUI 数据。', 'Set a username and password on first use. There is no default password.') : t('登录以管理 Xray 节点。', 'Sign in to manage your Xray nodes.')}</p></div>
+      content.innerHTML = `<div class="card auth-card"><div class="auth-heading">${languageButton()}<span>o-ui</span><h1>${status ? setup ? t('设置管理员', 'Set up administrator') : t('管理员登录', 'Administrator sign-in') : t('连接本机面板', 'Connect to the panel')}</h1><p>${setup ? t('首次使用请设置账号密码。没有默认密码，不导入旧 OUI 数据。', 'Set a username and password on first use. There is no default password.') : t('登录以管理 Xray 节点。', 'Sign in to manage your Xray nodes.')}</p></div>
         ${status ? `<form id="auth-form"><label class="form-field" for="auth-username">${t('管理员名称', 'Administrator name')}<input id="auth-username" name="username" autocomplete="username" required minlength="3" maxlength="64" pattern="[a-zA-Z0-9_.\\-]+" ${busy ? 'disabled' : ''}></label>
         <label class="form-field" for="auth-password">${t('密码', 'Password')}<input id="auth-password" name="password" type="password" autocomplete="${setup ? 'new-password' : 'current-password'}" required maxlength="72" ${busy ? 'disabled' : ''}></label>
         ${!setup && status.twoFactor ? `<label class="form-field" for="auth-code">${t('验证码', 'Code')}<input id="auth-code" name="code" inputmode="numeric" autocomplete="one-time-code" required minlength="6" maxlength="6" pattern="[0-9]{6}" ${busy ? 'disabled' : ''}></label>` : ''}
@@ -43,7 +48,7 @@ export function requireLogin(): Promise<boolean> {
         form.querySelectorAll<HTMLInputElement>('input').forEach(input => { input.disabled = true; });
         const code = String(data.get('code') ?? '').trim();
         void api('auth/' + (setup ? 'setup' : 'login'), jsonBody('POST', { username: data.get('username'), password, ...(code ? { code } : {}) })).then(() => {
-          disposed = true; root.remove(); resolve(true);
+          disposed = true; stopBackdrop(); root.remove(); resolve(true);
         }).catch(reason => { error = (reason as Error).message; if (setup && reason instanceof APIError && reason.status === 409 && status) status.initialized = true; busy = false; paint(); root.querySelector<HTMLElement>('#auth-error')?.focus(); });
       });
     }
@@ -51,7 +56,7 @@ export function requireLogin(): Promise<boolean> {
       error = ''; paint();
       try {
         status = await api<AuthStatus>('auth/status');
-        if (status.authenticated) { disposed = true; root.remove(); resolve(true); return; }
+        if (status.authenticated) { disposed = true; stopBackdrop(); root.remove(); resolve(true); return; }
       } catch (reason) { error = (reason as Error).message; }
       if (!disposed) { paint(); root.querySelector<HTMLInputElement>('#auth-username')?.focus(); }
     }

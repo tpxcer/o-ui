@@ -1,19 +1,19 @@
-import { addClient, chineseDate, clientStatus, createQuick, defaultConnection, defaultSniffing, deleteInbound, editClient,
-  editInbound, escapeHtml as esc, inboundName, presets, randomName, seedWorkspace } from './workspace.ts';
+import { addClient, chineseDate, clientStatus, createQuick, defaultConnection, defaultSniffing, deleteRecords, editClient,
+  editInbound, escapeHtml as esc, inboundName, presets, quickInboundName, randomName, seedWorkspace } from './workspace.ts';
 import type { Client, ClientInput, Connection, Inbound, Preset, Workspace } from './workspace.ts';
 import { api, APIError, confirmSaved, jsonBody, uncertainSave } from './api.ts';
 import { initCalendar } from './calendar.ts';
 import { initConnections } from './connections.ts';
-import { formatTrafficGB, trafficStatus, usedBytes } from './traffic.ts';
+import { expiryLeft, formatBytes, onlineWindowMs, relativeTime, trafficStatus, usedBytes } from './traffic.ts';
 import type { TrafficSnapshot } from './traffic.ts';
 import { newRealityConnection, nextRealityTarget, realityServerName, realityTargets, readSniffing, sniffingLabels } from './inbound-options.ts';
 import type { PanelTLSStatus } from './panel-settings.ts';
 import { readProxyEndpoint } from './proxy-endpoint.ts';
 import type { RuntimeStatus } from './runtime.ts';
 import { workspaceStatusText } from './workspace-status.ts';
-import { regionLabel, type PublicInfo } from './server-plan-model.ts';
+import { regionLabel, regionName, type PublicInfo } from './server-plan-model.ts';
 import './management.css';
-import { lang, t } from './i18n.ts';
+import { lang, locale, t } from './i18n.ts';
 
 const icon = (name: string) => `<i data-lucide="${name}" aria-hidden="true"></i>`;
 // 一键创建菜单沿用OUI的四个预设名称。
@@ -22,7 +22,7 @@ const input = (label: string, name: string, value: string | number, attrs = '', 
 const check = (label: string, name: string, checked: boolean) => `<label class="check-field"><input type="checkbox" name="${name}"${checked ? ' checked' : ''}><span>${label}</span></label>`;
 const badge = (text: string, ok: boolean) => `<span class="status-badge ${ok ? 'is-good' : 'is-muted'}"><b></b>${esc(text)}</span>`;
 
-export function initManagement(root: HTMLElement, refreshIcons: () => void, navigate: (page: string) => void, showDetail: (title: string, text: string) => void, persistent = false, onApply: () => void = () => {}, onSaved: () => void = () => {}): { render: (page: 'inbounds' | 'clients') => void; setRuntime: (status: RuntimeStatus | null, at: number) => void } {
+export function initManagement(root: HTMLElement, refreshIcons: () => void, navigate: (page: string) => void, showDetail: (title: string, text: string) => void, persistent = false, onSaved: () => void = () => {}): { render: (page: 'inbounds' | 'clients') => void; setRuntime: (status: RuntimeStatus | null, at: number) => void } {
   let state: Workspace = persistent ? { inbounds: [], clients: [] } : seedWorkspace();
   let revision = 0, loaded = !persistent, loading = false, loadError = '', submitting = false, pendingNotice = '', reloadRequired = false;
   let page: 'inbounds' | 'clients' = 'inbounds';
@@ -31,6 +31,9 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
   type IPLimitView = { enforced: boolean; issue: string; clients: Record<string, { online: { ip: string; lastSeen: string }[]; banned: { ip: string; until: string }[]; exempt: { ip: string; until: string }[] }> };
   let ipView: IPLimitView | null = null;
   let subscriptionService: boolean | null = null;
+  // 多选删除：选中项只保留在当前页可见的行里；客户端实时网速由相邻两次累计差值算出。
+  const selected = new Set<string>();
+  let speeds: Record<string, { up: number; down: number }> = {};
   let runtime: RuntimeStatus | null = null, runtimeAt = 0;
   let region = t('未知地区', 'Unknown region');
   const viewClient = (client: Client): Client => persistent ? { ...client, usedGB: Number(usedBytes(traffic, client.id) ?? 0n) / 1e9 } : client;
@@ -52,7 +55,7 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
     returnFocus = document.activeElement as HTMLElement;
     modal.innerHTML = `<form novalidate><header class="dialog-heading"><h2 id="edit-title">${esc(title)}</h2><button type="button" class="icon-button" data-close aria-label="${t('关闭弹窗', 'Close dialog')}">${icon('x')}</button></header>
       <div class="edit-body">${body}<p id="edit-error" class="form-error" role="alert" tabindex="-1" hidden></p></div>
-      <footer><button type="button" class="secondary-button" data-close>${t('取消', 'Cancel')}</button>${persistent ? t('<button type="button" class="secondary-button" data-reload>重新读取…</button>', '<button type="button" class="secondary-button" data-reload>Reload…</button>') : ''}<button class="primary-button" type="submit">${esc(submitLabel)}</button></footer></form>`;
+      <footer><button type="button" class="secondary-button" data-close>${t('取消', 'Cancel')}</button>${persistent ? `<button type="button" class="secondary-button" data-reload ${reloadRequired ? '' : 'hidden'}>${t('重新读取…', 'Reload…')}</button>` : ''}<button class="primary-button" type="submit">${esc(submitLabel)}</button></footer></form>`;
     const form = modal.querySelector('form')!;
     modal.querySelectorAll('[data-close]').forEach(button => button.addEventListener('click', () => { if (!submitting && !loading) modal.close(); }));
     modal.querySelector('[data-reload]')?.addEventListener('click', () => { void load(true); });
@@ -100,6 +103,7 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
         controls.forEach((control, index) => { control.disabled = disabled[index]; });
         form.querySelector<HTMLButtonElement>('[type="submit"]')!.disabled = reloadRequired;
         form.querySelector<HTMLButtonElement>('[type="submit"]')!.textContent = submitLabel;
+        if (reloadRequired) modal.querySelector<HTMLElement>('[data-reload]')?.removeAttribute('hidden');
         error.textContent = (reason instanceof Error ? reason.message : t('未保存，请检查输入后重试。', 'Not saved; check the input and retry.')) + (reloadRequired ? t(' 上次保存失败或结果未确认，输入已保留。请先复制需要保留的修改，再重新读取草稿；不会自动合并或覆盖其它页面的数据。', ' The last save failed or was not confirmed; your input is kept. Copy any changes you need, then reload the draft. Data from other pages is never merged or overwritten automatically.') : ''); error.hidden = false; error.focus();
         updateApplicationStatus();
       }
@@ -208,9 +212,10 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
       const shareHost = domain || info?.ipv4?.ip || info?.ipv6?.ip || '';
       if (!shareHost) throw new Error(t('面板没有证书域名，也未查询到服务器公网 IP，请用“添加入站”手动填写分享主机。', 'There is no certificate domain and the public IP is unknown; use Add inbound and enter the share host manually.'));
       const client = { name: randomName(), quotaGB: 0, ipLimit: 0, expiresAt: null, subscription: true };
+      const name = quickInboundName(regionName(info), presets[preset].label, new Date(), state.inbounds.map(item => item.name));
       state = createQuick(state, { ...client, preset, port: free.port, sniffing: defaultSniffing() }, crypto.randomUUID());
       const inbound = state.inbounds.at(-1)!;
-      Object.assign(inbound, { name: `${regionLabel(info)}-${presets[preset].label}-${client.name}`, connection: tls ? { ...defaultConnection(), usePanelCertificate: true } : newRealityConnection(), listen: '0.0.0.0', shareHost, portHopping: free.portHopping });
+      Object.assign(inbound, { name, connection: tls ? { ...defaultConnection(), usePanelCertificate: true } : newRealityConnection(), listen: '0.0.0.0', shareHost, portHopping: free.portHopping });
       writing = true; sent = state; created = inbound.name;
       const document = await api<{ revision: number; data: Workspace; applied?: boolean; applyError?: string; firewall?: string }>('workspace', jsonBody('PUT', { revision, data: state }));
       revision = document.revision; state = document.data; submitting = false; search = ''; filter = 'all'; renderList(); onSaved();
@@ -340,8 +345,8 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
       state = editClient(state, id, { ...client, enabled: !client.enabled });
     });
     if (action === 'delete-inbound' && inbound) {
-      if (state.clients.some(item => item.inboundId === id)) { showDetail(t('暂不能删除入站', 'Cannot delete inbound yet'), t('该入站仍有关联客户端。请逐个处理客户端后再删除入站，不会自动删除关联数据。', 'This inbound still has linked clients. Handle them one by one before deleting it; linked data is never deleted automatically.')); return; }
-      confirm(t('删除一个演示入站', 'Delete a demo inbound'), `${t('仅删除“', 'Deletes only “')}${inbound.name}${t('”。', '”.')}`, t('确认删除', 'Confirm delete'), () => { state = deleteInbound(state, id); });
+      const linked = state.clients.filter(item => item.inboundId === id).length;
+      confirm(t('删除一个演示入站', 'Delete a demo inbound'), `${t('删除“', 'Deletes “')}${inbound.name}${t('”', '”')}${linked ? `${t('及其 ', ' and its ')}${linked}${t(' 个客户端，客户端的连接与订阅随之失效。', ' clients; their connections and subscriptions stop working.')}` : t('。', '.')}`, t('确认删除', 'Confirm delete'), () => { state = deleteRecords(state, [id]); });
     }
     if (action === 'delete-client' && client) confirm(t('删除一个演示客户端', 'Delete a demo client'), `${t('仅删除客户端“', 'Deletes only client “')}${client.name}${t('”，保留其关联入站及其他客户端。', '”; its linked inbound and other clients are kept.')}`, t('确认删除', 'Confirm delete'), () => {
       state = { ...state, clients: state.clients.filter(item => item.id !== id) };
@@ -355,7 +360,54 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
     const view = ipView?.clients[item.id], online = view?.online.length ?? 0, banned = view?.banned.length ?? 0;
     return `<button class="text-button" data-op="iplimit" data-id="${esc(item.id)}">${online} / ${item.ipLimit || '∞'} ${t('在线 IP', 'online IPs')}</button>${banned ? `<small class="table-secondary danger-text">${t('已封禁 ', 'Banned ')}${banned}</small>` : ''}`;
   };
-  const rowActions = (item: Client | Inbound, type: 'inbound' | 'client') => `<div class="row-actions">${type === 'client' && persistent ? `<button class="icon-button" data-op="connection" data-id="${esc(item.id)}" aria-label="${t('连接信息', 'Connection info')} ${esc(item.name)}" title="${t('连接信息', 'Connection info')}" ${loading || reloadRequired ? 'disabled' : ''}>${icon('qr-code')}</button>` : ''}<button class="icon-button" data-op="edit-${type}" data-id="${esc(item.id)}" aria-label="${type === 'inbound' ? t('编辑入站', 'Edit inbound') : t('编辑客户端', 'Edit client')} ${esc(item.name)}" title="${t('编辑', 'Edit')}" ${loading || reloadRequired ? 'disabled' : ''}>${icon('pencil')}</button><button class="icon-button" data-op="toggle-${type}" data-id="${esc(item.id)}" aria-label="${item.enabled ? t('停用', 'Disable') : t('启用', 'Enable')} ${esc(item.name)}" title="${item.enabled ? t('停用', 'Disable') : t('启用', 'Enable')}" ${loading || reloadRequired ? 'disabled' : ''}>${icon('power')}</button><button class="icon-button danger-icon" data-op="delete-${type}" data-id="${esc(item.id)}" aria-label="${type === 'inbound' ? t('删除入站', 'Delete inbound') : t('删除客户端', 'Delete client')} ${esc(item.name)}" title="${t('删除', 'Delete')}" ${loading || reloadRequired ? 'disabled' : ''}>${icon('trash-2')}</button></div>`;
+  const rowActions = (item: Client | Inbound, type: 'inbound' | 'client') => `<div class="row-actions">${type === 'client' && persistent ? `<button class="icon-button" data-op="connection" data-id="${esc(item.id)}" aria-label="${t('连接信息', 'Connection info')} ${esc(item.name)}" title="${t('连接信息', 'Connection info')}" ${loading || reloadRequired ? 'disabled' : ''}>${icon('qr-code')}</button>` : ''}<button class="icon-button" data-op="edit-${type}" data-id="${esc(item.id)}" aria-label="${type === 'inbound' ? t('编辑入站', 'Edit inbound') : t('编辑客户端', 'Edit client')} ${esc(item.name)}" title="${t('编辑', 'Edit')}" ${loading || reloadRequired ? 'disabled' : ''}>${icon('pencil')}</button>${type === 'inbound' ? `<button class="icon-button" data-op="toggle-${type}" data-id="${esc(item.id)}" aria-label="${item.enabled ? t('停用', 'Disable') : t('启用', 'Enable')} ${esc(item.name)}" title="${item.enabled ? t('停用', 'Disable') : t('启用', 'Enable')}" ${loading || reloadRequired ? 'disabled' : ''}>${icon('power')}</button>` : ''}<button class="icon-button danger-icon" data-op="delete-${type}" data-id="${esc(item.id)}" aria-label="${type === 'inbound' ? t('删除入站', 'Delete inbound') : t('删除客户端', 'Delete client')} ${esc(item.name)}" title="${t('删除', 'Delete')}" ${loading || reloadRequired ? 'disabled' : ''}>${icon('trash-2')}</button></div>`;
+  // OUI的在线判定：启用且最近2分钟内有流量；核心未采集时一律离线。
+  const isOnline = (item: Client) => {
+    const at = traffic?.lastOnline?.[item.id];
+    return persistent && !!at && !!traffic?.collecting && Date.now() - Date.parse(at) <= onlineWindowMs;
+  };
+  const clientState = (item: Client, inbound: Inbound | undefined, now = Date.now()) => {
+    const status = clientStatus(viewClient(item), inbound, now);
+    if (status !== t('可用', 'Available')) return badge(status, false);
+    if (!persistent) return badge(status, true);
+    return isOnline(item) ? `<span class="status-badge is-online"><b></b>${t('在线', 'Online')}</span>` : badge(t('离线', 'Offline'), false);
+  };
+  const trafficCell = (item: Client) => {
+    const bytes = persistent ? usedBytes(traffic, item.id) : BigInt(Math.round(item.usedGB * 1e9));
+    const percent = item.quotaGB > 0 ? Math.min(100, viewClient(item).usedGB / item.quotaGB * 100) : 0;
+    const speed = isOnline(item) && speeds[item.id] ? `<small class="table-secondary speed-pair"><span>↑ ${formatBytes(speeds[item.id].up)}/s</span><span>↓ ${formatBytes(speeds[item.id].down)}/s</span></small>` : '';
+    return `<span>${formatBytes(bytes)} / ${item.quotaGB ? formatBytes(item.quotaGB * 1e9) : t('不限', 'Unlimited')}</span>${item.quotaGB && bytes !== null ? `<div class="mini-meter" aria-hidden="true"><span style="width:${percent}%"></span></div>` : ''}${speed}`;
+  };
+  const lastOnlineCell = (item: Client) => {
+    const at = traffic?.lastOnline?.[item.id];
+    return at ? `<span class="date-value" title="${esc(new Date(at).toLocaleString(locale))}">${relativeTime(Date.parse(at))}</span>` : `<span class="date-value muted-text">${persistent ? t('从未', 'Never') : '—'}</span>`;
+  };
+  const inboundTraffic = (id: string) => {
+    let total = 0n;
+    for (const client of state.clients.filter(item => item.inboundId === id)) {
+      const bytes = persistent ? usedBytes(traffic, client.id) : BigInt(Math.round(client.usedGB * 1e9));
+      if (bytes === null) return t('未采集', 'Not collected');
+      total += bytes;
+    }
+    return formatBytes(total);
+  };
+  const selectCell = (item: Client | Inbound) => `<td class="select-cell"><input type="checkbox" data-select="${esc(item.id)}" ${selected.has(item.id) ? 'checked' : ''} aria-label="${t('选择', 'Select')} ${esc(item.name)}"></td>`;
+  function updateSelection(): void {
+    const boxes = [...root.querySelectorAll<HTMLInputElement>('[data-select]')], all = root.querySelector<HTMLInputElement>('[data-select-all]');
+    if (all) { all.checked = boxes.length > 0 && boxes.every(box => box.checked); all.indeterminate = !all.checked && boxes.some(box => box.checked); }
+    const button = root.querySelector<HTMLButtonElement>('[data-delete-selected]');
+    if (button) { button.hidden = selected.size === 0; button.querySelector('span')!.textContent = `${t('删除所选', 'Delete selected')} (${selected.size})`; }
+  }
+  function deleteSelected(): void {
+    const ids = [...selected];
+    if (page === 'inbounds') {
+      const names = state.inbounds.filter(item => selected.has(item.id)).map(item => item.name), linked = state.clients.filter(item => selected.has(item.inboundId)).length;
+      confirm(t('删除所选入站', 'Delete selected inbounds'), `${t('将删除 ', 'Deletes ')}${names.length}${t(' 个入站', ' inbounds')}${linked ? `${t('及其 ', ' and their ')}${linked}${t(' 个客户端', ' clients')}` : ''}${t('：', ': ')}${names.join(t('、', ', '))}${t('。', '.')}`, t('确认删除', 'Confirm delete'), () => { state = deleteRecords(state, ids); selected.clear(); });
+    } else {
+      const names = state.clients.filter(item => selected.has(item.id)).map(item => item.name);
+      confirm(t('删除所选客户端', 'Delete selected clients'), `${t('将删除 ', 'Deletes ')}${names.length}${t(' 个客户端：', ' clients: ')}${names.join(t('、', ', '))}${t('。其连接与订阅随之失效，入站保留。', '. Their connections and subscriptions stop working; inbounds are kept.')}`, t('确认删除', 'Confirm delete'), () => { state = deleteRecords(state, [], ids); selected.clear(); });
+    }
+  }
   function listRows(): void {
     const query = search.trim().toLocaleLowerCase();
     const contains = (text: string) => text.toLocaleLowerCase().includes(query);
@@ -365,22 +417,28 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
       const inbound = state.inbounds.find(record => record.id === item.inboundId);
       return contains(`${item.name} ${inbound?.name ?? ''}`) && (!inboundFilter || item.inboundId === inboundFilter) && (filter === 'all' || (filter === 'available' ? clientStatus(viewClient(item), inbound, now) === t('可用', 'Available') : clientStatus(viewClient(item), inbound, now) !== t('可用', 'Available')));
     });
-    const count = page === 'inbounds' ? inboundRows.length : clientRows.length;
+    const visible = new Set((page === 'inbounds' ? inboundRows : clientRows).map(item => item.id));
+    for (const id of [...selected]) if (!visible.has(id)) selected.delete(id);
+    const count = visible.size;
     root.querySelector('#result-count')!.textContent = `${t('显示', 'Showing')} ${count} / ${page === 'inbounds' ? state.inbounds.length : state.clients.length} ${t('条', '')}`;
-    root.querySelector('#list-content')!.innerHTML = count ? `<table class="data-table"><caption class="sr-only">${page === 'inbounds' ? persistent ? t('入站列表', 'Inbounds') : t('入站演示列表', 'Demo inbounds') : persistent ? t('客户端列表', 'Clients') : t('客户端演示列表', 'Demo clients')}</caption><thead><tr>${(page === 'inbounds' ? [t('入站名称', 'Inbound name'), t('类型 / 端口', 'Type / port'), t('状态', 'Status'), t('客户端', 'Clients'), t('操作', 'Actions')] : [t('客户端 / 入站', 'Client / inbound'), persistent ? t('状态', 'Status') : t('演示状态', 'Demo status'), t('流量（GB）', 'Traffic (GB)'), t('到期时间', 'Expiry'), t('IP / 订阅', 'IP / subscription'), t('操作', 'Actions')]).map(label => `<th scope="col">${label}</th>`).join('')}</tr></thead><tbody>${page === 'inbounds' ? inboundRows.map(item => `<tr>
+    const headers = page === 'inbounds' ? [t('入站名称', 'Inbound name'), t('类型 / 端口', 'Type / port'), t('状态', 'Status'), t('客户端', 'Clients'), t('总流量', 'Total traffic'), t('操作', 'Actions')]
+      : [t('客户端 / 入站', 'Client / inbound'), persistent ? t('状态', 'Status') : t('演示状态', 'Demo status'), t('流量', 'Traffic'), t('到期', 'Expiry'), t('最近上线', 'Last online'), t('IP / 订阅', 'IP / subscription'), t('操作', 'Actions')];
+    root.querySelector('#list-content')!.innerHTML = count ? `<table class="data-table ${page}-table"><caption class="sr-only">${page === 'inbounds' ? persistent ? t('入站列表', 'Inbounds') : t('入站演示列表', 'Demo inbounds') : persistent ? t('客户端列表', 'Clients') : t('客户端演示列表', 'Demo clients')}</caption><thead><tr><th scope="col" class="select-cell"><input type="checkbox" data-select-all aria-label="${t('全选', 'Select all')}"></th>${headers.map(label => `<th scope="col">${label}</th>`).join('')}</tr></thead><tbody>${page === 'inbounds' ? inboundRows.map(item => `<tr>${selectCell(item)}
       <td data-label="${t('入站名称', 'Inbound name')}"><strong class="record-name">${esc(item.name)}</strong><small class="table-secondary">${presets[item.preset].protocol} · ${presets[item.preset].security}</small></td>
-      <td data-label="${t('类型 / 端口', 'Type / port')}"><span class="tag">${presets[item.preset].label}</span><small class="table-secondary">${presets[item.preset].transport} / ${item.port}${item.portHopping ? ` · ${t('跳跃', 'hop')} ${item.portHopping}` : ''}</small></td>
-      <td data-label="${t('状态', 'Status')}">${badge(persistent ? item.enabled ? t('已启用', 'Enabled') : t('已停用', 'Disabled') : item.enabled ? t('已启用', 'Enabled') : t('已停用', 'Disabled'), item.enabled)}</td>
-      <td data-label="${t('客户端', 'Clients')}"><button class="text-button" data-op="clients" data-id="${esc(item.id)}">${state.clients.filter(client => client.inboundId === item.id).length} ${t('个客户端', 'clients')}</button></td><td data-label="${t('操作', 'Actions')}">${rowActions(item, 'inbound')}</td></tr>`).join('') : clientRows.map(item => {
+      <td data-label="${t('类型 / 端口', 'Type / port')}"><span class="tag preset-${item.preset}">${presets[item.preset].label}</span><small class="table-secondary">${presets[item.preset].transport} / ${item.port}${item.portHopping ? ` · ${t('跳跃', 'hop')} ${item.portHopping}` : ''}</small></td>
+      <td data-label="${t('状态', 'Status')}">${badge(item.enabled ? t('已启用', 'Enabled') : t('已停用', 'Disabled'), item.enabled)}</td>
+      <td data-label="${t('客户端', 'Clients')}"><button class="text-button" data-op="clients" data-id="${esc(item.id)}">${state.clients.filter(client => client.inboundId === item.id).length} ${t('个客户端', 'clients')}</button></td>
+      <td data-label="${t('总流量', 'Total traffic')}" data-inbound-traffic="${esc(item.id)}"><span class="date-value">${inboundTraffic(item.id)}</span></td><td data-label="${t('操作', 'Actions')}">${rowActions(item, 'inbound')}</td></tr>`).join('') : clientRows.map(item => {
         const inbound = state.inbounds.find(record => record.id === item.inboundId)!;
-        const status = clientStatus(viewClient(item), inbound, now);
-        const bytes = persistent ? usedBytes(traffic, item.id) : null;
-        const percent = item.quotaGB > 0 ? Math.min(100, viewClient(item).usedGB / item.quotaGB * 100) : 0;
-        return `<tr data-client-row="${esc(item.id)}"><td data-label="${t('客户端 / 入站', 'Client / inbound')}"><strong class="record-name">${esc(item.name)}</strong><small class="table-secondary">${esc(inbound.name)}</small></td>
-          <td data-label="${persistent ? t('状态', 'Status') : t('演示状态', 'Demo status')}" data-client-status>${badge(persistent && status === t('可用', 'Available') ? bytes === null ? t('可用 · 用量未知', 'Available · usage unknown') : t('可用', 'Available') : status, status === t('可用', 'Available'))}</td><td data-label="${t('流量（GB）', 'Traffic (GB)')}" data-client-traffic><span>${persistent ? formatTrafficGB(bytes) : item.usedGB} / ${item.quotaGB || t('不限', 'Unlimited')}</span>${item.quotaGB && (!persistent || bytes !== null) ? `<div class="mini-meter" aria-hidden="true"><span style="width:${percent}%"></span></div>` : ''}</td>
-          <td data-label="${t('到期时间', 'Expiry')}"><span class="date-value">${chineseDate(item.expiresAt)}</span></td><td data-label="${t('IP / 订阅', 'IP / subscription')}" data-client-ip>${ipCell(item)}<small class="table-secondary">${subscriptionLabel(item)}</small></td><td data-label="${t('操作', 'Actions')}">${rowActions(item, 'client')}</td></tr>`;
+        return `<tr data-client-row="${esc(item.id)}">${selectCell(item)}<td data-label="${t('客户端 / 入站', 'Client / inbound')}"><strong class="record-name">${esc(item.name)}</strong><small class="table-secondary">${esc(inbound.name)}</small></td>
+          <td data-label="${persistent ? t('状态', 'Status') : t('演示状态', 'Demo status')}"><div class="status-cell"><label class="switch" title="${item.enabled ? t('停用', 'Disable') : t('启用', 'Enable')}"><input type="checkbox" data-toggle-client="${esc(item.id)}" ${item.enabled ? 'checked' : ''} ${loading || reloadRequired ? 'disabled' : ''} aria-label="${t('启用客户端', 'Enable client')} ${esc(item.name)}"><span aria-hidden="true"></span></label><span data-client-status>${clientState(item, inbound, now)}</span></div></td>
+          <td data-label="${t('流量', 'Traffic')}" data-client-traffic>${trafficCell(item)}</td>
+          <td data-label="${t('到期', 'Expiry')}">${item.expiresAt === null ? `<span class="date-value">${t('永不过期', 'Never expires')}</span>` : `<span class="date-value">${expiryLeft(item.expiresAt, now)}</span><small class="table-secondary">${chineseDate(item.expiresAt)}</small>`}</td>
+          <td data-label="${t('最近上线', 'Last online')}" data-client-last>${lastOnlineCell(item)}</td>
+          <td data-label="${t('IP / 订阅', 'IP / subscription')}" data-client-ip>${ipCell(item)}<small class="table-secondary">${subscriptionLabel(item)}</small></td><td data-label="${t('操作', 'Actions')}">${rowActions(item, 'client')}</td></tr>`;
       }).join('')}</tbody></table>` : (page === 'inbounds' ? state.inbounds : state.clients).length === 0 ? `<div class="empty-state">${icon(page === 'inbounds' ? 'log-in' : 'users')}<h2>${page === 'inbounds' ? t('还没有入站', 'No inbounds yet') : t('还没有客户端', 'No clients yet')}</h2><p>${page === 'inbounds' ? t('用右上角的“添加入站”或“一键创建”开始。', 'Start with Add inbound or Quick create at the top right.') : t('先创建入站，再为它添加客户端。', 'Create an inbound first, then add clients to it.')}</p></div>`
       : `<div class="empty-state">${icon('search')}<h2>${page === 'inbounds' ? t('没有匹配的入站', 'No matching inbounds') : t('没有匹配的客户端', 'No matching clients')}</h2><p>${t('试试其他关键词或清除筛选。', 'Try other keywords or clear the filters.')}</p><button class="secondary-button" data-clear>${t('清除搜索与筛选', 'Clear search and filters')}</button></div>`;
+    updateSelection();
     refreshIcons();
   }
   function renderList(): void {
@@ -388,11 +446,11 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
     root.innerHTML = `<header class="page-heading"><div><h1 class="page-title" tabindex="-1">${page === 'inbounds' ? t('入站列表', 'Inbounds') : t('客户端', 'Clients')}</h1><p>${page === 'inbounds' ? t('创建和管理入站，保存后立即生效。', 'Create and manage inbounds; changes apply as soon as you save.') : persistent ? t('管理客户端，查看累计流量与到期时间。', 'Manage clients and view traffic totals and expiry.') : t('管理客户端演示数据与到期时间。', 'Manage demo client data and expiry.')}</p></div>${page === 'inbounds' && persistent ? `<div class="create-actions"><button class="primary-button create-button" data-create ${!loaded || loading || reloadRequired ? 'disabled' : ''}>${icon('plus')}${t('添加入站', 'Add inbound')}</button><div class="quick-create"><button class="secondary-button" data-quick-toggle aria-haspopup="menu" aria-expanded="false" ${!loaded || loading || submitting || reloadRequired ? 'disabled' : ''}>${icon('zap')}${t('一键创建', 'Quick create')}</button><div class="quick-menu" role="menu" hidden>${(Object.keys(quickLabels) as Preset[]).map(key => `<button type="button" role="menuitem" data-quick-preset="${key}">${quickLabels[key]}</button>`).join('')}</div></div></div>` : `<button class="primary-button create-button" data-create ${!loaded || loading || reloadRequired ? 'disabled' : ''}>${icon('plus')}${page === 'inbounds' ? t('一键创建', 'Quick create') : t('添加客户端', 'Add client')}</button>`}</header>
       ${loading ? t('<p class="core-message" role="status">正在读取独立数据库…</p>', '<p class="core-message" role="status">Reading the database…</p>') : loadError ? `<p class="form-error" role="alert">${esc(loadError)}</p>` : ''}
       ${reloadRequired ? t('<p class="form-error" role="alert">保存失败或结果未确认，当前列表可能已过期；请重新读取草稿后再修改，不会自动覆盖最新数据。</p>', '<p class="form-error" role="alert">The save failed or was not confirmed, so this list may be stale. Reload the draft before editing; the latest data is never overwritten automatically.</p>') : ''}
-      <div class="workspace-bar"><div class="workspace-summary"><span>${t('入站', 'Inbounds')} <strong>${state.inbounds.length}</strong></span><span>${t('客户端', 'Clients')} <strong>${state.clients.length}</strong></span><span>${persistent ? t('可用', 'Available') : t('演示可用', 'Demo available')} <strong>${available}</strong></span></div>${persistent ? `<div class="workspace-actions"><button class="secondary-button" data-reload ${loading || submitting ? 'disabled' : ''}>${icon('refresh-cw')}${t('刷新', 'Refresh')}</button><button class="secondary-button" data-apply ${!loaded || loading || submitting || reloadRequired ? 'disabled' : ''}>${icon('rotate-cw')}${t('重新应用', 'Re-apply')}</button></div>` : ''}</div>
+      <div class="workspace-bar"><div class="workspace-summary"><span>${t('入站', 'Inbounds')} <strong>${state.inbounds.length}</strong></span><span>${t('客户端', 'Clients')} <strong>${state.clients.length}</strong></span><span>${persistent ? t('可用', 'Available') : t('演示可用', 'Demo available')} <strong>${available}</strong></span></div>${persistent ? `<div class="workspace-actions"><button class="icon-button bordered" data-reload title="${t('从服务器重新读取列表（别处修改过时使用）', 'Reload the list from the server (after changes elsewhere)')}" aria-label="${t('刷新', 'Refresh')}" ${loading || submitting ? 'disabled' : ''}>${icon('refresh-cw')}</button></div>` : ''}</div>
       ${persistent ? `<div class="workspace-status"><p class="form-hint" id="workspace-application-status" role="status"></p><p class="form-hint" id="traffic-status">${esc(trafficStatus(traffic, trafficError))}</p><p class="form-hint">${t('流量约每2秒统计一次；客户端到期或用尽额度时会自动停用。', 'Traffic is counted about every 2 seconds; clients stop working automatically when they expire or run out of quota.')}</p></div>` : ''}
       <section class="card list-card" aria-label="${page === 'inbounds' ? t('入站管理', 'Inbound management') : t('客户端管理', 'Client management')}"><div class="list-toolbar"><label class="search-box">${icon('search')}<span class="sr-only">${page === 'inbounds' ? t('搜索入站', 'Search inbounds') : t('搜索客户端', 'Search clients')}</span><input type="search" id="workspace-search" value="${esc(search)}" placeholder="${page === 'inbounds' ? t('搜索名称、类型或端口', 'Search name, type or port') : t('搜索客户端或入站名称', 'Search client or inbound name')}" autocomplete="off"></label>
         <label class="filter-control"><span class="sr-only">${t('筛选状态', 'Filter by status')}</span><select id="status-filter">${(page === 'inbounds' ? [['all', t('全部状态', 'All states')], ['enabled', t('已启用', 'Enabled')], ['disabled', t('已停用', 'Disabled')]] : [['all', t('全部状态', 'All states')], ['available', persistent ? t('可用', 'Available') : t('演示可用', 'Demo available')], ['unavailable', persistent ? t('不可用', 'Unavailable') : t('演示不可用', 'Demo unavailable')]]).map(([value, label]) => `<option value="${value}"${value === filter ? ' selected' : ''}>${label}</option>`).join('')}</select></label>
-        ${page === 'clients' ? `<label class="filter-control inbound-filter"><span class="sr-only">${t('筛选关联入站', 'Filter by linked inbound')}</span><select id="inbound-filter"><option value="">${t('全部入站', 'All inbounds')}</option>${state.inbounds.map(item => `<option value="${esc(item.id)}"${item.id === inboundFilter ? ' selected' : ''}>${esc(item.name)}</option>`).join('')}</select></label>` : ''}<span id="result-count" class="result-count" aria-live="polite"></span></div><div id="list-content"></div>
+        ${page === 'clients' ? `<label class="filter-control inbound-filter"><span class="sr-only">${t('筛选关联入站', 'Filter by linked inbound')}</span><select id="inbound-filter"><option value="">${t('全部入站', 'All inbounds')}</option>${state.inbounds.map(item => `<option value="${esc(item.id)}"${item.id === inboundFilter ? ' selected' : ''}>${esc(item.name)}</option>`).join('')}</select></label>` : ''}<button type="button" class="danger-button is-solid" data-delete-selected hidden>${icon('trash-2')}<span></span></button><span id="result-count" class="result-count" aria-live="polite"></span></div><div id="list-content"></div>
       <footer class="list-footer">${persistent ? t('在客户端的连接信息里可查看节点链接、二维码和订阅链接。', 'Open a client\'s connection info for node links, QR codes and subscription links.') : t('所有更改仅保留在本页内存中，刷新即恢复。未生成可用连接或订阅链接。', 'All changes stay in this page\'s memory and are restored on refresh. No usable connections or subscription links are generated.')}</footer></section>`;
     root.querySelector<HTMLInputElement>('#workspace-search')!.addEventListener('input', event => { search = (event.target as HTMLInputElement).value; listRows(); });
     root.querySelector<HTMLSelectElement>('#status-filter')!.addEventListener('change', event => { filter = (event.target as HTMLSelectElement).value; listRows(); });
@@ -410,13 +468,20 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
     const button = (event.target as Element).closest<HTMLButtonElement>('button');
     if (!button) return;
     if (button.hasAttribute('data-reload')) { void load(true); return; }
-    if (button.hasAttribute('data-apply')) { if (loaded && !loading && !submitting && !reloadRequired) onApply(); return; }
     if (!loaded || loading || submitting || reloadRequired) return;
     if (button.hasAttribute('data-create')) { if (page === 'inbounds') quickCreate(); else clientEditor(); }
     if (button.hasAttribute('data-quick-toggle')) { quickMenu(root.querySelector<HTMLElement>('.quick-menu')!.hidden === true); return; }
     if (button.dataset.quickPreset) { quickMenu(false); void quickCreateNow(button.dataset.quickPreset as Preset); }
+    if (button.hasAttribute('data-delete-selected')) { if (selected.size) deleteSelected(); return; }
     if (button.hasAttribute('data-clear')) { search = ''; filter = 'all'; inboundFilter = ''; renderList(); root.querySelector<HTMLInputElement>('#workspace-search')!.focus(); }
     if (button.dataset.op) operate(button.dataset.op, button.dataset.id!);
+  });
+  root.addEventListener('change', event => {
+    const target = event.target as HTMLInputElement;
+    if (target.dataset.select !== undefined) { if (target.checked) selected.add(target.dataset.select); else selected.delete(target.dataset.select); updateSelection(); }
+    if (target.hasAttribute('data-select-all')) { root.querySelectorAll<HTMLInputElement>('[data-select]').forEach(box => { box.checked = target.checked; if (target.checked) selected.add(box.dataset.select!); else selected.delete(box.dataset.select!); }); updateSelection(); }
+    // 开关先复原，确认弹窗保存成功后列表按新状态重绘。
+    if (target.dataset.toggleClient !== undefined) { target.checked = !target.checked; if (loaded && !loading && !submitting && !reloadRequired) operate('toggle-client', target.dataset.toggleClient); }
   });
   async function load(force = false): Promise<void> {
     if ((!force && loaded) || loading || submitting) return;
@@ -442,7 +507,19 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
   async function refreshTraffic(): Promise<void> {
     if (trafficLoading || document.hidden || root.hidden) return;
     trafficLoading = true;
-    try { traffic = await api<TrafficSnapshot>('runtime/traffic'); trafficError = ''; if (page === 'clients') { ipView = await api<IPLimitView>('runtime/iplimit').catch(() => ipView); subscriptionService = await api<{ data: { enabled: boolean } }>('panel/subscription').then(s => s.data.enabled, () => subscriptionService); } }
+    try {
+      const previous = traffic;
+      traffic = await api<TrafficSnapshot>('runtime/traffic'); trafficError = '';
+      const seconds = previous?.sampledAt && traffic.sampledAt ? (Date.parse(traffic.sampledAt) - Date.parse(previous.sampledAt)) / 1000 : 0;
+      if (seconds > 0 && seconds <= 30) {
+        speeds = {};
+        for (const [id, count] of Object.entries(traffic.totals)) {
+          const before = previous!.totals[id];
+          if (!before) continue;
+          const up = Number(BigInt(count.uplink) - BigInt(before.uplink)), down = Number(BigInt(count.downlink) - BigInt(before.downlink));
+          if (up >= 0 && down >= 0) speeds[id] = { up: up / seconds, down: down / seconds };
+        }
+      } if (page === 'clients') { ipView = await api<IPLimitView>('runtime/iplimit').catch(() => ipView); subscriptionService = await api<{ data: { enabled: boolean } }>('panel/subscription').then(s => s.data.enabled, () => subscriptionService); } }
     catch (reason) { trafficError = (reason as Error).message; }
     finally {
       trafficLoading = false;
@@ -451,18 +528,18 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
       if (!root.hidden && !root.contains(document.activeElement) && !document.querySelector('dialog[open]')) listRows();
       else root.querySelectorAll<HTMLElement>('[data-client-row]').forEach(row => {
         const item = state.clients.find(client => client.id === row.dataset.clientRow); if (!item) return;
-        const bytes = usedBytes(traffic, item.id);
-        row.querySelector('[data-client-traffic]')!.textContent = `${formatTrafficGB(bytes)} / ${item.quotaGB || t('不限', 'Unlimited')}`;
+        row.querySelector('[data-client-traffic]')!.innerHTML = trafficCell(item);
+        row.querySelector('[data-client-last]')!.innerHTML = lastOnlineCell(item);
         const ipTarget = row.querySelector<HTMLElement>('[data-client-ip]');
         if (ipTarget && !ipTarget.contains(document.activeElement)) ipTarget.innerHTML = `${ipCell(item)}<small class="table-secondary">${subscriptionLabel(item)}</small>`;
-        const status = clientStatus(viewClient(item), state.inbounds.find(inbound => inbound.id === item.inboundId));
-        row.querySelector('[data-client-status]')!.innerHTML = badge(status === t('可用', 'Available') ? bytes === null ? t('可用 · 用量未知', 'Available · usage unknown') : t('可用', 'Available') : status, status === t('可用', 'Available'));
+        row.querySelector('[data-client-status]')!.innerHTML = clientState(item, state.inbounds.find(inbound => inbound.id === item.inboundId));
       });
+      root.querySelectorAll<HTMLElement>('[data-inbound-traffic]').forEach(cell => { cell.innerHTML = `<span class="date-value">${inboundTraffic(cell.dataset.inboundTraffic!)}</span>`; });
     }
   }
   if (persistent) {
     window.setInterval(() => { void refreshTraffic(); }, 5000);
     window.setInterval(() => { if (!root.hidden && !document.hidden) updateApplicationStatus(); }, 1000);
   }
-  return { render(next) { if (page !== next) { search = ''; filter = 'all'; if (next === 'inbounds') inboundFilter = ''; } page = next; renderList(); if (!loaded) void load(); if (persistent) void refreshTraffic(); }, setRuntime(status, at) { runtime = status; runtimeAt = at; updateApplicationStatus(); } };
+  return { render(next) { if (page !== next) { search = ''; filter = 'all'; selected.clear(); if (next === 'inbounds') inboundFilter = ''; } page = next; renderList(); if (!loaded) void load(); if (persistent) void refreshTraffic(); }, setRuntime(status, at) { runtime = status; runtimeAt = at; updateApplicationStatus(); } };
 }

@@ -329,7 +329,7 @@ const logs = initLogs(refreshIcons);
 if (authenticated) initMonitor(document.querySelector<HTMLElement>('#home-view')!, () => latestRuntime);
 const serverInfo = authenticated ? initServerInfo(document.querySelector<HTMLElement>('#home-view')!, () => showPrivate) : null;
 if (authenticated) window.setInterval(() => { if (!document.hidden) void runtime.refresh(); }, 5000);
-management = initManagement(document.querySelector('#workspace-view')!, refreshIcons, navigate, showDetail, authenticated, () => { void quickRuntime('restart'); }, () => { void runtime.refresh(); });
+management = initManagement(document.querySelector('#workspace-view')!, refreshIcons, navigate, showDetail, authenticated, () => { void runtime.refresh(); });
 const core = initCore(refreshIcons, status => {
   const label = document.querySelector('[data-action="core-version"] span');
   if (label) label.textContent = status ? `v${status.selected}` : t('版本管理', 'Version management');

@@ -16,7 +16,7 @@ export async function stopCore(): Promise<RuntimeStatus> { return api<RuntimeSta
 export function runtimeStatusText(status: RuntimeStatus | null): string {
   if (!status) return t('核心运行状态未连接', 'Core status unavailable');
   if (status.running) return `${t('运行中 v', 'Running v')}${status.version ?? ''} · ${status.inbounds} ${t('条代理入站', 'proxy inbounds')}`;
-  return status.unexpectedExit ? t('Xray 异常退出 · 未自动重启，请检查后重新应用', 'Xray exited unexpectedly · not restarted automatically; check and apply again') : t('Xray 已停止', 'Xray stopped');
+  return status.unexpectedExit ? t('Xray 异常退出 · 未自动重启，请检查后点“重启”', 'Xray exited unexpectedly · not restarted automatically; check, then click Restart') : t('Xray 已停止', 'Xray stopped');
 }
 export interface RuntimeHistory {
   revision: number; available: boolean; version?: string; workspaceRevision: number; settingsRevision: number; inbounds: number; appliedAt?: string; issue?: string; nonLoopbackProxy?: boolean;

@@ -1,5 +1,7 @@
-.auth-screen { min-height: 100dvh; display: grid; place-items: center; padding: 24px 16px; background: radial-gradient(1200px 600px at 50% -10%, color-mix(in srgb, var(--accent-bg) 16%, transparent), transparent 60%), var(--background); }
-.auth-card { width: min(100%, 400px); padding: 30px 28px 24px; box-shadow: var(--shadow-pop); }
+.auth-screen { position: relative; overflow: hidden; min-height: 100dvh; display: grid; place-items: center; padding: 24px 16px; background: radial-gradient(1200px 600px at 50% -10%, color-mix(in srgb, var(--accent-bg) 16%, transparent), transparent 60%), var(--background); }
+.auth-backdrop { position: absolute; inset: 0; pointer-events: none; }
+.auth-content { position: relative; z-index: 1; width: min(100%, 400px); }
+.auth-card { width: 100%; padding: 30px 28px 24px; box-shadow: var(--shadow-pop); background: color-mix(in srgb, var(--surface) 86%, transparent); backdrop-filter: blur(12px); }
 .auth-heading { margin-bottom: 24px; position: relative; }
 .auth-heading .lang-toggle { position: absolute; top: -12px; right: -12px; }
 .auth-heading > span { display: inline-flex; align-items: center; gap: 9px; color: var(--text); font-size: 16px; font-weight: 650; letter-spacing: -.02em; }

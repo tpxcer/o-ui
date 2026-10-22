@@ -233,6 +233,7 @@ func run() int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go runtime.RunTelegram(ctx)
+	go runtime.RunTelegramBot(ctx)
 	go runtime.RunIPLimit(ctx)
 	go func() {
 		if err := runtime.RestorePortHopping(ctx); err != nil {

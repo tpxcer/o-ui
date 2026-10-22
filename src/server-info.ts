@@ -1,7 +1,7 @@
 import { api } from './api.ts';
 import { escapeHtml as esc } from './workspace.ts';
-import { allowance, planTags, type PlanStatus, type PublicInfo } from './server-plan-model.ts';
-import { t } from './i18n.ts';
+import { allowance, binaryGB, decimalBytes, planMode, planTags, type PlanStatus, type PublicInfo } from './server-plan-model.ts';
+import { locale, t } from './i18n.ts';
 
 const hidden = '••••••••••••';
 
@@ -36,7 +36,27 @@ export function initServerInfo(root: HTMLElement, reveal: () => boolean): { refr
   function field(label: string, value: string, attribute = ''): string {
     return `<div class="field"><dt>${label}</dt><dd${attribute}>${value}</dd></div>`;
   }
+  // 服务商拉取：本月流量、节点、套餐与IP/PTR都来自服务商接口（参照OUI）。
+  function paintProvider(): void {
+    const p = plan?.provider;
+    let summary = `<p>${esc(plan?.providerError || t('正在从服务商读取…', 'Reading from the provider…'))}</p>`;
+    if (p) {
+      const quota = Number(p.planMonthlyData), used = Number(p.dataCounter), percent = quota > 0 && p.dataCounter ? Math.min(100, used / quota * 100).toFixed(1) : null;
+      const reset = p.dataNextReset > 0 ? new Date(p.dataNextReset * 1000).toLocaleString(locale, { hour12: false, year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
+      summary = `<div class="allowance-heading"><span>${t('本月流量', 'Traffic this month')}</span><strong>${esc(decimalBytes(p.dataCounter))} / ${quota > 0 ? esc(decimalBytes(p.planMonthlyData)) : t('不限', 'Unlimited')}</strong></div>
+        <div class="allowance-progress"><div class="meter" role="progressbar" aria-label="${t('本月流量使用率', 'Monthly traffic usage')}" ${percent === null ? '' : `aria-valuenow="${percent}"`} aria-valuemin="0" aria-valuemax="100"><span style="width:${percent ?? 0}%"></span></div><span>${percent === null ? t('不限', 'Unlimited') : `${percent}%`}</span></div>
+        <p>${t('下次重置：', 'Next reset: ')}${esc(reset)} · ${t('数据来自服务商接口', 'From the provider API')}</p>`;
+    }
+    const tags = p ? [['RAM', p.planRam], ['Disk', p.planDisk], ['Swap', p.planSwap]].filter(([, value]) => binaryGB(value)).map(([name, value]) => `<span class="tag">${name} ${binaryGB(value)}</span>`).join(' ') : '';
+    body.innerHTML = `<div class="traffic-allowance">${summary}</div><dl>${field(t('节点', 'Node'), esc(p ? p.nodeLocation || p.nodeAlias || '—' : '—'))}${field(t('套餐', 'Plan'), esc(p?.plan || '—'))}${field(t('套餐资源', 'Plan resources'), tags || '—')}${field(t('服务商 IP', 'Provider IP'), '—', ' data-provider')}${field('PTR', '—', ' data-provider')}</dl>`;
+    const [ips, ptr] = [...body.querySelectorAll<HTMLElement>('[data-provider]')];
+    setPrivate(ips, p?.ipAddresses.join(', ') ?? '', '—');
+    setPrivate(ptr, p ? Object.values(p.ptr).filter(Boolean).join(', ') : '', '—');
+  }
   function paintPlan(): void {
+    const mode = planMode(plan);
+    body.closest<HTMLElement>('.package-card')!.hidden = !!plan && mode === 'off';
+    if (plan && mode === 'provider') { paintProvider(); return; }
     const data = plan?.data, usage = plan?.usage;
     let summary = `<p>${esc(planError || (plan ? t('尚未配置套餐与月流量。可在“面板设置 → 服务器套餐”手动填写；不连接服务商接口。', 'No plan or monthly traffic configured. Fill it in under "Panel settings → Server plan"; no provider API is used.') : t('正在读取套餐…', 'Reading plan…')))}</p>`;
     if (data && usage) {

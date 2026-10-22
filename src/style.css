@@ -26,7 +26,7 @@
   --active: color-mix(in srgb, var(--blue) 14%, transparent);
   --track: #24262c;
   --series-1: #3987e5;
-  --series-2: #d95926;
+  --series-2: #2ea043;
   --radius-lg: 14px;
   --radius: 10px;
   --radius-sm: 8px;
@@ -60,7 +60,7 @@
   --active: color-mix(in srgb, var(--blue) 9%, transparent);
   --track: #e8eaee;
   --series-1: #2a78d6;
-  --series-2: #eb6834;
+  --series-2: #008300;
   --shadow: 0 1px 2px rgb(16 24 40 / .04), 0 1px 3px rgb(16 24 40 / .05);
   --shadow-pop: 0 24px 48px rgb(16 24 40 / .16), 0 0 0 1px rgb(16 24 40 / .06);
 }
@@ -133,6 +133,7 @@ main { margin-left: var(--sidebar-width); padding: 20px 28px 40px; outline: none
 .meter { background: var(--track); border-radius: 999px; overflow: hidden; height: 6px; }
 .meter > span { display: block; border-radius: inherit; height: 100%; background: var(--resource-color, var(--blue)); transition: width .4s ease; }
 .two-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; margin-top: 16px; }
+.two-columns:has(> .package-card[hidden]) { grid-template-columns: minmax(0, 1fr); }
 .card-header { min-height: 54px; padding: 8px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .card-header h2 { min-width: 0; overflow-wrap: anywhere; }
 .card-body { padding: 20px; }

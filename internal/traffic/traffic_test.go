@@ -103,3 +103,22 @@ func TestParseOfficialOmittedZero(t *testing.T) {
 		t.Fatal("omitted zero bypassed same-process counter regression")
 	}
 }
+
+// 最近上线只在客户端确有新流量时更新；无变化的采样保留上次时刻。
+func TestMergeTracksLastOnline(t *testing.T) {
+	t0 := time.Date(2026, 10, 22, 8, 0, 0, 0, time.UTC)
+	first, err := Merge(Empty(), "p1", map[string]Count{"a": {0, 0}, "b": {10, 0}}, t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, seen := first.LastOnline["a"]; seen || !first.LastOnline["b"].Equal(t0) {
+		t.Fatal("only clients with traffic are marked online", first.LastOnline)
+	}
+	second, err := Merge(first, "p1", map[string]Count{"a": {0, 5}, "b": {10, 0}}, t0.Add(2*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !second.LastOnline["a"].Equal(t0.Add(2*time.Second)) || !second.LastOnline["b"].Equal(t0) {
+		t.Fatal("idle sample must keep the previous time", second.LastOnline)
+	}
+}

@@ -392,6 +392,6 @@ func registerTraffic(mux *http.ServeMux, rt *Runtime) {
 			return
 		}
 		c, running := rt.engine.Current()
-		respond(w, 200, map[string]any{"totals": ledger.Totals, "sampledAt": ledger.SampledAt, "collecting": running && c.StatsAddress != "", "intervalSeconds": int(trafficInterval.Seconds()), "issue": rt.issue, "incomplete": ledger.Incomplete})
+		respond(w, 200, map[string]any{"totals": ledger.Totals, "lastOnline": ledger.LastOnline, "sampledAt": ledger.SampledAt, "collecting": running && c.StatsAddress != "", "intervalSeconds": int(trafficInterval.Seconds()), "issue": rt.issue, "incomplete": ledger.Incomplete})
 	})
 }

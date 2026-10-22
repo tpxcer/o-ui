@@ -4,7 +4,7 @@ import { lang, languageNames, setLang, t, type Lang } from './i18n.ts';
 import { settingsToolbar, settingSection, settingRow, toggle, selectControl, textControl } from './settings-ui.ts';
 import { accessURL, generalForm, generalRequest, type GeneralForm, type GeneralStatus } from './panel-access.ts';
 import { subscriptionForm, subscriptionRequest, type SubscriptionForm, type SubscriptionStatus } from './subscription-settings.ts';
-import { planForm, planRows } from './server-plan.ts';
+import { planFields, planForm, planRows } from './server-plan.ts';
 import { telegramForm, telegramRequest, type TelegramForm, type TelegramStatus } from './telegram-settings.ts';
 import { parsePlanForm, type PlanStatus } from './server-plan-model.ts';
 import { passwordChangeError } from './password.ts';
@@ -21,7 +21,7 @@ type Section = keyof Values;
 // 表单字段所属分区；账号表单与两步验证不在其中，它们是即时操作。
 const sections: Record<string, Section> = {
   listenIP: 'general', domain: 'general', port: 'general', path: 'general', sessionMinutes: 'general', certificateFile: 'general', keyFile: 'general',
-  node: 'plan', name: 'plan', resources: 'plan', quotaGB: 'plan', resetDay: 'plan', billing: 'plan', interfaces: 'plan', usedGB: 'plan',
+  planMode: 'plan', node: 'plan', name: 'plan', resources: 'plan', quotaGB: 'plan', resetDay: 'plan', billing: 'plan', interfaces: 'plan', usedGB: 'plan', providerURL: 'plan', providerVEID: 'plan', providerKey: 'plan',
   language: 'language', enabled: 'subscription', title: 'subscription', updateHours: 'subscription', showInfo: 'subscription', remarkClientName: 'subscription',
   clashEnabled: 'subscription', jsonEnabled: 'subscription', jsonFragment: 'subscription', fragmentPackets: 'subscription', fragmentLength: 'subscription', fragmentInterval: 'subscription',
   jsonDirectIP: 'subscription', jsonDirectDomain: 'subscription',
@@ -110,9 +110,9 @@ export function initPanelSettings(root: HTMLElement, persistent: boolean): { ren
     const view = telegram?.data;
     const secret = (name: string, value: string, set: boolean | undefined, label: string) => `<input name="${name}" type="password" value="${esc(value)}" aria-label="${label}" autocomplete="new-password" spellcheck="false" placeholder="${set ? t('已设置，留空保持不变', 'Set; leave empty to keep') : t('未设置', 'Not set')}">`;
     return `<form id="settings-telegram" novalidate>${settingSection(t('Telegram 机器人', 'Telegram bot'), [
-      settingRow(t('启用机器人', 'Enable bot'), t('只发送通知，不接收或执行 Telegram 里的命令', 'Sends notifications only; never receives or runs commands from Telegram'), toggle('tgEnabled', v.tgEnabled, t('启用机器人', 'Enable bot'))),
+      settingRow(t('启用机器人', 'Enable bot'), t('发送通知；管理员给机器人发 /start 打开管理菜单（参照 OUI：状态、流量排行、在线、客户端启停与节点链接、一键创建入站、备份、重启 Xray、升级面板）。只响应下面的管理员 Chat ID', 'Sends notifications; admins send /start to the bot for the admin menu (like OUI: status, traffic ranking, online clients, enable/disable clients and node links, quick create inbound, backup, restart Xray, update the panel). Only the admin chat IDs below are answered'), toggle('tgEnabled', v.tgEnabled, t('启用机器人', 'Enable bot'))),
       settingRow('Bot Token', t('在 Telegram 找 @BotFather 创建机器人后获得；只写不读', 'Create a bot with @BotFather in Telegram to get it; write-only'), secret('tgToken', v.tgToken, view?.tokenSet, 'Bot Token')),
-      settingRow(t('管理员 Chat ID', 'Admin chat IDs'), t('可向 @userinfobot 查询自己的 ID；多个用英文逗号分隔，并先给机器人发一条消息', 'Ask @userinfobot for your ID; separate several with commas, and message the bot once first'), textControl('tgChatIds', v.tgChatIds, t('管理员 Chat ID', 'Admin chat IDs'), 'maxlength="230" inputmode="numeric" placeholder="123456789"')),
+      settingRow(t('管理员 Chat ID', 'Admin chat IDs'), t('给机器人发 /id 可查看自己的 ID（也可问 @userinfobot）；多个用英文逗号分隔', 'Send /id to the bot to see your ID (or ask @userinfobot); separate several with commas'), textControl('tgChatIds', v.tgChatIds, t('管理员 Chat ID', 'Admin chat IDs'), 'maxlength="230" inputmode="numeric" placeholder="123456789"')),
     ].join(''))}${settingSection(t('通知', 'Notifications'), [
       settingRow(t('登录提醒', 'Sign-in alerts'), t('面板登录成功或失败时发送用户名、IP 和时间', 'Sends the username, IP and time on each successful or failed sign-in'), toggle('tgNotifyLogin', v.tgNotifyLogin, t('登录提醒', 'Sign-in alerts'))),
       settingRow(t('每日报告时间', 'Daily report time'), t('服务器本地时间；报告含 Xray 状态、资源、业务流量和即将到期的客户端。留空不发送', 'Server local time; includes Xray status, resources, proxy traffic and clients expiring soon. Leave empty to disable'), textControl('tgReportTime', v.tgReportTime, t('每日报告时间', 'Daily report time'), 'type="time"')),
@@ -146,6 +146,8 @@ export function initPanelSettings(root: HTMLElement, persistent: boolean): { ren
     const value = target.type === 'checkbox' ? target.checked : target.value;
     if (section === 'language') draft.language = String(value);
     else (draft[section] as unknown as Record<string, string | boolean>)[target.name] = value;
+    // 切换套餐方式时只换下面的设置行，其它输入不受影响。
+    if (target.name === 'planMode') { const fields = root.querySelector('[data-plan-fields]'); if (fields) fields.innerHTML = planFields(draft.plan, plan, interfaces); }
     note = '';
     status();
   }

@@ -147,7 +147,11 @@ func TestAuthenticationAndSettingsAPI(t *testing.T) {
 	if w = request("PUT", "/api/workspace", string(workspaceBody), origin, cookie); w.Code != 409 {
 		t.Fatal(w.Code, w.Body.String())
 	}
-	if w = request("PUT", "/api/workspace", `{"revision":1,"data":{"inbounds":[],"clients":[]}}`, origin, cookie); w.Code != 400 {
+	// 删除入站时其客户端一并删除（2026-10-22起允许）；格式无效的草稿仍拒绝。
+	if w = request("PUT", "/api/workspace", `{"revision":1,"data":{"inbounds":[],"clients":[]}}`, origin, cookie); w.Code != 200 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	if w = request("PUT", "/api/workspace", `{"revision":2,"data":{"inbounds":[]}}`, origin, cookie); w.Code != 400 {
 		t.Fatal(w.Code, w.Body.String())
 	}
 	draft := map[string]any{"freedomStrategy": "AsIs", "routingStrategy": "AsIs", "probeURL": "https://example.test/204", "statistics": true, "logLevel": "warning", "accessLog": false, "dnsLog": false, "rules": "[]", "outbounds": `[{"tag":"direct","protocol":"freedom"}]`, "balancers": "[]", "dns": `{"servers":["localhost"]}`, "advanced": "{}"}

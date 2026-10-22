@@ -27,16 +27,23 @@ const (
 
 var interfaceName = regexp.MustCompile(`^[A-Za-z0-9_.:@-]{1,15}$`)
 
-// 服务器套餐只用于首页显示与月用量统计，由用户手填，不连接服务商接口。
+// 服务器套餐用于首页显示与月用量统计。mode：off关闭、provider从服务商接口拉取、manual手动填写（旧数据没有mode，按manual）。
+// 手动字段在各模式下都保留；providerKey只写不读，留空保存时沿用已保存的密钥。
 type serverPlan struct {
-	Node       string   `json:"node"`
-	Name       string   `json:"name"`
-	Resources  string   `json:"resources"`
-	QuotaGB    float64  `json:"quotaGB"`
-	ResetDay   int      `json:"resetDay"`
-	Billing    string   `json:"billing"`
-	Interfaces []string `json:"interfaces"`
+	Mode         string   `json:"mode,omitempty"`
+	Node         string   `json:"node"`
+	Name         string   `json:"name"`
+	Resources    string   `json:"resources"`
+	QuotaGB      float64  `json:"quotaGB"`
+	ResetDay     int      `json:"resetDay"`
+	Billing      string   `json:"billing"`
+	Interfaces   []string `json:"interfaces"`
+	ProviderURL  string   `json:"providerURL,omitempty"`
+	ProviderVEID string   `json:"providerVEID,omitempty"`
+	ProviderKey  string   `json:"providerKey,omitempty"`
 }
+
+var providerVEID = regexp.MustCompile(`^[A-Za-z0-9_-]{0,64}$`)
 
 // hostTraffic按网卡计数差值累计当前周期；Counters为上次观察的原始值，用于跨面板重启续算。
 type hostTraffic struct {
@@ -99,6 +106,15 @@ func validateServerPlan(data json.RawMessage) (serverPlan, error) {
 	}
 	if len(p.Interfaces) > 8 {
 		return p, i18n.New("计量网卡最多8个", "At most 8 metered interfaces")
+	}
+	if !slices.Contains([]string{"", "off", "provider", "manual"}, p.Mode) {
+		return p, i18n.New("套餐方式无效", "Invalid plan mode")
+	}
+	if len(p.ProviderURL) > 500 || strings.ContainsFunc(p.ProviderURL, func(r rune) bool { return r <= 32 || r == 127 }) || (p.ProviderURL != "" && !strings.HasPrefix(p.ProviderURL, "https://") && !strings.HasPrefix(p.ProviderURL, "http://")) {
+		return p, i18n.New("拉取链接须以 http:// 或 https:// 开头，最长500字符，不含空格", "The provider URL must start with http:// or https://, up to 500 characters without spaces")
+	}
+	if !providerVEID.MatchString(p.ProviderVEID) || len(p.ProviderKey) > 200 || strings.ContainsFunc(p.ProviderKey, func(r rune) bool { return r <= 32 || r == 127 }) {
+		return p, i18n.New("VEID 只能含字母、数字、下划线和短横线；API KEY 最长200字符且不含空格", "VEID may contain only letters, digits, underscores and hyphens; API KEY is up to 200 characters without spaces")
 	}
 	seen := map[string]bool{}
 	for _, name := range p.Interfaces {
@@ -287,7 +303,13 @@ func (a *planAccount) close() {
 }
 
 func (a *planAccount) status() map[string]any {
-	result := map[string]any{"revision": a.planRev, "data": a.plan, "usage": nil, "issue": a.issue}
+	var view *serverPlan
+	if a.plan != nil {
+		copied := *a.plan
+		copied.ProviderKey = ""
+		view = &copied
+	}
+	result := map[string]any{"revision": a.planRev, "data": view, "hasProviderKey": a.plan != nil && a.plan.ProviderKey != "", "usage": nil, "issue": a.issue}
 	if a.plan != nil && !a.traffic.PeriodStart.IsZero() {
 		quota := "0"
 		if a.plan.QuotaGB > 0 {
@@ -350,9 +372,10 @@ func registerServerPlan(mux *http.ServeMux, rt *Runtime) {
 			return
 		}
 		rt.plan.mu.Lock()
-		defer rt.plan.mu.Unlock()
 		rt.plan.observe(time.Now())
-		respond(w, 200, rt.plan.status())
+		result, current := rt.plan.status(), rt.plan.plan
+		rt.plan.mu.Unlock()
+		respond(w, 200, withProvider(r.Context(), result, current))
 	})
 	mux.HandleFunc("PUT /api/system/plan", func(w http.ResponseWriter, r *http.Request) {
 		if rt == nil || rt.plan == nil {
@@ -376,8 +399,11 @@ func registerServerPlan(mux *http.ServeMux, rt *Runtime) {
 			return
 		}
 		rt.plan.mu.Lock()
-		defer rt.plan.mu.Unlock()
+		if p.ProviderKey == "" && rt.plan.plan != nil {
+			p.ProviderKey = rt.plan.plan.ProviderKey
+		}
 		if err := rt.plan.save(r.Context(), request.Revision, p, request.UsedGB); err != nil {
+			rt.plan.mu.Unlock()
 			code, message := 500, i18n.T("保存套餐设置失败，未改变已保存数据", "Failed to save plan settings; saved data unchanged")
 			if errors.Is(err, store.ErrConflict) {
 				code, message = 409, store.ErrConflict.Error()
@@ -385,6 +411,21 @@ func registerServerPlan(mux *http.ServeMux, rt *Runtime) {
 			respond(w, code, map[string]string{"error": message})
 			return
 		}
-		respond(w, 200, rt.plan.status())
+		result, current := rt.plan.status(), rt.plan.plan
+		rt.plan.mu.Unlock()
+		respond(w, 200, withProvider(r.Context(), result, current))
 	})
+}
+
+// withProvider在锁外拉取服务商信息（有缓存），失败时只附带错误，不影响套餐设置本身。
+func withProvider(ctx context.Context, result map[string]any, p *serverPlan) map[string]any {
+	if p == nil || p.Mode != "provider" {
+		return result
+	}
+	if info, err := fetchProvider(ctx, p.ProviderURL, p.ProviderVEID, p.ProviderKey); err != nil {
+		result["providerError"] = err.Error()
+	} else {
+		result["provider"] = info
+	}
+	return result
 }

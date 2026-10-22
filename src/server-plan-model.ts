@@ -1,8 +1,15 @@
 import { locale, t } from './i18n.ts';
 export type Billing = 'both' | 'upload' | 'max';
-export interface ServerPlan { node: string; name: string; resources: string; quotaGB: number; resetDay: number; billing: Billing; interfaces: string[] }
+export type PlanMode = 'off' | 'provider' | 'manual';
+export interface ServerPlan { mode?: '' | PlanMode; node: string; name: string; resources: string; quotaGB: number; resetDay: number; billing: Billing; interfaces: string[]; providerURL?: string; providerVEID?: string; providerKey?: string }
 export interface PlanUsage { periodStart: string; nextReset: string; sent: string; received: string; used: string; quota: string; inexact: boolean; at: string }
-export interface PlanStatus { revision: number; data: ServerPlan | null; usage: PlanUsage | null; issue: string }
+// 服务商接口（搬瓦工/64clouds getServiceInfo）返回的套餐信息；数量为字节的十进制字符串，重置时间为Unix秒。
+export interface ProviderInfo { hostname: string; nodeAlias: string; nodeLocation: string; plan: string; os: string; planMonthlyData: string; planDisk: string; planRam: string; planSwap: string; dataCounter: string; dataNextReset: number; ipAddresses: string[]; ptr: Record<string, string> }
+export interface PlanStatus { revision: number; data: ServerPlan | null; hasProviderKey?: boolean; usage: PlanUsage | null; issue: string; provider?: ProviderInfo; providerError?: string }
+
+export const planModeLabels: Record<PlanMode, string> = { off: t('关闭', 'Off'), provider: t('服务商拉取', 'Pull from provider'), manual: t('手动输入', 'Manual') };
+// 旧数据没有mode：已保存过套餐的按手动，从未保存的按关闭。
+export const planMode = (status: PlanStatus | null): PlanMode => status?.data ? (status.data.mode || 'manual') : 'off';
 export interface PublicAddress { ip: string; hostname: string; location: string; country: string; org: string }
 export interface PublicInfo { checkedAt: string; ipv4: PublicAddress | null; ipv6: PublicAddress | null; issues: string[] }
 
@@ -29,12 +36,16 @@ export function allowance(usage: PlanUsage): { used: string; total: string; perc
 }
 
 // 入站名称前缀：按公网信息的国家代码显示旗帜与中文国家名，查询不到时不冒充。
+export function regionName(info: PublicInfo | null): string {
+  const code = info?.ipv4?.country || info?.ipv6?.country || '';
+  if (!/^[A-Z]{2}$/.test(code)) return t('未知地区', 'Unknown region');
+  try { return new Intl.DisplayNames([locale], { type: 'region' }).of(code) ?? code; } catch { return code; /* 无区域数据时显示代码。 */ }
+}
+
 export function regionLabel(info: PublicInfo | null): string {
   const code = info?.ipv4?.country || info?.ipv6?.country || '';
   if (!/^[A-Z]{2}$/.test(code)) return t('未知地区', 'Unknown region');
-  let name = code;
-  try { name = new Intl.DisplayNames([locale], { type: 'region' }).of(code) ?? code; } catch { /* 无区域数据时显示代码。 */ }
-  return `${String.fromCodePoint(...[...code].map(c => 0x1f1e6 + c.charCodeAt(0) - 65))} ${name}`;
+  return `${String.fromCodePoint(...[...code].map(c => 0x1f1e6 + c.charCodeAt(0) - 65))} ${regionName(info)}`;
 }
 
 export function planTags(resources: string): string[] {
@@ -60,5 +71,16 @@ export function parsePlanForm(values: Record<string, string>): { plan: ServerPla
     usedGB = Number(text('usedGB'));
     if (!Number.isFinite(usedGB) || usedGB < 0 || usedGB > 1000000) throw new Error(t('本周期已用校准值须为0至1000000 GB', 'Usage calibration must be 0–1000000 GB'));
   }
-  return { plan: { node: text('node'), name: text('name'), resources: text('resources'), quotaGB, resetDay, billing, interfaces }, usedGB };
+  const mode = text('planMode') as PlanMode;
+  if (!(mode in planModeLabels)) throw new Error(t('套餐方式无效', 'Invalid plan mode'));
+  if (text('providerURL') && !/^https?:\/\/\S+$/.test(text('providerURL'))) throw new Error(t('拉取链接须以 http:// 或 https:// 开头，不含空格', 'The provider URL must start with http:// or https:// without spaces'));
+  if (!/^[A-Za-z0-9_-]{0,64}$/.test(text('providerVEID'))) throw new Error(t('VEID 只能含字母、数字、下划线和短横线', 'VEID may contain only letters, digits, underscores and hyphens'));
+  return { plan: { mode, node: text('node'), name: text('name'), resources: text('resources'), quotaGB, resetDay, billing, interfaces, providerURL: text('providerURL'), providerVEID: text('providerVEID'), providerKey: text('providerKey') }, usedGB };
+}
+
+// 内存/磁盘按二进制换算后标GB（与服务商套餐标称一致，如1 GB内存=1073741824字节）。
+export function binaryGB(value: string): string {
+  if (!/^\d+$/.test(value) || value === '0') return '';
+  const gb = Number(value) / 1024 ** 3;
+  return `${gb >= 10 ? Math.round(gb) : Number(gb.toFixed(1))} GB`;
 }

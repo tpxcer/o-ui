@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { allowance, decimalBytes, parsePlanForm, planTags, regionLabel } from '../src/server-plan-model.ts';
 
-const form = { node: ' LA ', name: 'KVM', resources: 'RAM 2 GB, Disk 40 GB', quotaGB: '2000', resetDay: '31', billing: 'both', interfaces: 'eth0, ens3', usedGB: '' };
+const form = { planMode: 'manual', node: ' LA ', name: 'KVM', resources: 'RAM 2 GB, Disk 40 GB', quotaGB: '2000', resetDay: '31', billing: 'both', interfaces: 'eth0, ens3', usedGB: '', providerURL: '', providerVEID: '', providerKey: '' };
 
 test('套餐用量按十进制GB/TB显示，不限额不显示百分比', () => {
   assert.equal(decimalBytes('208600000000'), '208.60 GB');
@@ -26,14 +26,15 @@ test('套餐资源按常用分隔符拆成标签并限量', () => {
 
 test('套餐表单与后端规则一致，校准值可选', () => {
   const parsed = parsePlanForm(form);
-  assert.deepEqual(parsed.plan, { node: 'LA', name: 'KVM', resources: 'RAM 2 GB, Disk 40 GB', quotaGB: 2000, resetDay: 31, billing: 'both', interfaces: ['eth0', 'ens3'] });
+  assert.deepEqual(parsed.plan, { mode: 'manual', node: 'LA', name: 'KVM', resources: 'RAM 2 GB, Disk 40 GB', quotaGB: 2000, resetDay: 31, billing: 'both', interfaces: ['eth0', 'ens3'], providerURL: '', providerVEID: '', providerKey: '' });
+  assert.equal(parsePlanForm({ ...form, planMode: 'provider', providerURL: 'https://api.64clouds.com/v1/getServiceInfo', providerVEID: '123', providerKey: 'k' }).plan.mode, 'provider');
   assert.equal(parsed.usedGB, null);
   assert.equal(parsePlanForm({ ...form, usedGB: '208.6' }).usedGB, 208.6);
   assert.deepEqual(parsePlanForm({ ...form, interfaces: '' }).plan.interfaces, []);
   for (const bad of [
     { quotaGB: '-1' }, { quotaGB: '' }, { quotaGB: '1000001' }, { resetDay: '0' }, { resetDay: '1.5' }, { resetDay: '32' },
     { billing: 'down' }, { interfaces: 'eth0;rm' }, { interfaces: 'eth0 eth0' }, { interfaces: 'a b c d e f g h i' },
-    { node: '长'.repeat(121) }, { name: 'a\u0007' }, { usedGB: '-2' }, { usedGB: 'x' },
+    { node: '长'.repeat(121) }, { name: 'a\u0007' }, { usedGB: '-2' }, { usedGB: 'x' }, { planMode: 'cloud' }, { providerURL: 'ftp://x' }, { providerVEID: 'a b' },
   ]) assert.throws(() => parsePlanForm({ ...form, ...bad }), Error, JSON.stringify(bad));
 });
 

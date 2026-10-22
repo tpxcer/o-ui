@@ -34,8 +34,16 @@ func TestValidateWorkspaceDraft(t *testing.T) {
 	if err := validateWorkspaceDraft(json.RawMessage(strings.Replace(string(valid), `"ipLimit":0`, `"ipLimit":2`, 1)), nil); err != nil {
 		t.Fatal("IP limit rejected", err)
 	}
-	if validateWorkspaceDraft(json.RawMessage(`{"inbounds":[],"clients":[]}`), valid) == nil {
-		t.Fatal("batch delete accepted")
+	// 删除入站时其客户端一并删除、可批量删除（2026-10-22起）；但剩余客户端不能指向已删除的入站。
+	if err := validateWorkspaceDraft(json.RawMessage(`{"inbounds":[],"clients":[]}`), valid); err != nil {
+		t.Fatal("deleting an inbound together with its clients rejected", err)
+	}
+	orphan := strings.Replace(string(valid), `"inboundId":"in-one"`, `"inboundId":"in-gone"`, 1)
+	if validateWorkspaceDraft(json.RawMessage(orphan), valid) == nil {
+		t.Fatal("client pointing at a deleted inbound accepted")
+	}
+	if validateWorkspaceDraft(json.RawMessage(`{"inbounds":[],"clients":[]}`), json.RawMessage(`{"inbounds":`)) == nil {
+		t.Fatal("corrupted previous draft overwritten")
 	}
 	var state workspaceDraft
 	if err := json.Unmarshal(valid, &state); err != nil {

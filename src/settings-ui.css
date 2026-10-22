@@ -10,17 +10,18 @@
 .setting-section > summary::-webkit-details-marker, .xray-setting-section > summary::-webkit-details-marker { display: none; }
 .setting-section > summary::before, .xray-setting-section > summary::before { content: ""; flex: none; width: 6px; height: 6px; margin: 0 2px 2px; border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted); transform: rotate(-45deg); transition: transform .15s; }
 .setting-section[open] > summary::before, .xray-setting-section[open] > summary::before { transform: rotate(45deg); margin-bottom: 4px; }
-.setting-section > summary { padding: 13px 18px; font-weight: 600; font-size: 14px; }
+.setting-section > summary { padding: 12px 20px; font-weight: 600; font-size: 14px; }
 .setting-section > summary:hover, .xray-setting-section > summary:hover { background: color-mix(in srgb, var(--raised) 60%, transparent); }
 .setting-section[open] > summary { border-bottom: 1px solid var(--border); }
 .setting-section > summary:focus-visible, .xray-setting-section > summary:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
 .setting-list { display: grid; }
-.setting-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(200px, 420px); gap: 8px 24px; align-items: center; padding: 14px 18px; border-top: 1px solid var(--border); }
+/* 字号与间距参照OUI的SettingListItem：标题14px/500，说明14px次要色、行高1.5715，左右各占一半（窄屏上下排列） */
+.setting-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px 16px; align-items: center; padding: 12px 20px; border-top: 1px solid var(--border); }
 .setting-row:first-child { border-top: 0; }
-.setting-copy { display: grid; gap: 3px; }
-.setting-copy strong { font-weight: 500; }
-.setting-copy small { color: var(--muted); font-size: 12px; line-height: 1.6; }
-.setting-control { display: flex; justify-content: flex-end; gap: 8px; }
+.setting-copy { display: grid; gap: 4px; }
+.setting-copy strong { font-size: 14px; font-weight: 500; }
+.setting-copy small { color: var(--muted); font-size: 14px; line-height: 1.5715; }
+.setting-control { display: flex; justify-content: flex-start; gap: 8px; }
 .setting-control > input:not([type="checkbox"]), .setting-control > select, .setting-control > textarea { width: 100%; }
 .switch { position: relative; display: inline-flex; width: 38px; height: 22px; flex: none; }
 .switch input { position: absolute; inset: 0; opacity: 0; margin: 0; width: 100%; height: 100%; cursor: pointer; }
@@ -32,8 +33,10 @@
 .switch input:disabled + span { opacity: .5; }
 .settings-table-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
 .tag-chip { display: inline-block; padding: 1px 10px; border-radius: 999px; font-size: 12px; border: 1px solid var(--border); background: var(--raised); }
+@media (max-width: 991px) {
+  .setting-row { grid-template-columns: 1fr; padding: 12px 16px; }
+}
 @media (max-width: 760px) {
-  .setting-row { grid-template-columns: 1fr; padding: 14px 16px; }
   .setting-control { justify-content: flex-start; }
   .settings-toolbar { top: 64px; padding: 10px; }
   .settings-banner { justify-content: flex-start; text-align: left; }

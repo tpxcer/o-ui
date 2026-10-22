@@ -24,12 +24,14 @@ func (c Count) Total() uint64 {
 }
 
 type Ledger struct {
-	Totals     map[string]Count `json:"totals"`
-	Last       map[string]Count `json:"last"`
-	Epoch      string           `json:"epoch"`
-	SampledAt  *time.Time       `json:"sampledAt,omitempty"`
-	Active     bool             `json:"active"`
-	Incomplete bool             `json:"incomplete"`
+	Totals map[string]Count `json:"totals"`
+	Last   map[string]Count `json:"last"`
+	// LastOnline记录各客户端最近一次有流量的时刻（参照OUI的“最近上线”与2分钟在线判定）。
+	LastOnline map[string]time.Time `json:"lastOnline,omitempty"`
+	Epoch      string               `json:"epoch"`
+	SampledAt  *time.Time           `json:"sampledAt,omitempty"`
+	Active     bool                 `json:"active"`
+	Incomplete bool                 `json:"incomplete"`
 }
 
 func Empty() Ledger { return Ledger{Totals: map[string]Count{}, Last: map[string]Count{}} }
@@ -100,6 +102,12 @@ func Merge(old Ledger, epoch string, counts map[string]Count, now time.Time) (Le
 	for id, c := range old.Totals {
 		next.Totals[id] = c
 	}
+	for id, at := range old.LastOnline {
+		if next.LastOnline == nil {
+			next.LastOnline = map[string]time.Time{}
+		}
+		next.LastOnline[id] = at
+	}
 	if old.Epoch == epoch {
 		for id, c := range old.Last {
 			next.Last[id] = c
@@ -118,6 +126,12 @@ func Merge(old Ledger, epoch string, counts map[string]Count, now time.Time) (Le
 		total.Uplink += up
 		total.Downlink += down
 		next.Totals[id] = total
+		if up+down > 0 {
+			if next.LastOnline == nil {
+				next.LastOnline = map[string]time.Time{}
+			}
+			next.LastOnline[id] = sampled
+		}
 		next.Last[id] = c
 	}
 	return next, nil

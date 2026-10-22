@@ -6,7 +6,7 @@ export function settingsStatusText(persistent: boolean, revision: number, runtim
   if (!runtime) return t('核心运行状态未连接，无法确认设置是否生效。', 'Core status is unavailable; cannot tell whether the settings are in effect.');
   const age = now - at;
   if (!Number.isFinite(age) || age < -5000 || age > 10000) return t('核心运行状态已过期，无法确认设置是否生效。', 'Core status is stale; cannot tell whether the settings are in effect.');
-  if (!runtime.running) return runtime.unexpectedExit ? t('核心异常退出，设置当前未在运行；请检查后重新应用。', 'The core exited unexpectedly; the settings are not running. Check and apply again.') : t('核心已停止，设置当前未在运行。', 'The core is stopped; the settings are not running.');
+  if (!runtime.running) return runtime.unexpectedExit ? t('核心异常退出，设置当前未在运行；请检查后在首页点“重启”重新应用。', 'The core exited unexpectedly; the settings are not running. Check, then click Restart on the dashboard to apply again.') : t('核心已停止，设置当前未在运行。', 'The core is stopped; the settings are not running.');
   const version = runtime.version ?? t('未知', 'unknown');
   const running = t(`Xray v${version} · 设置修订${runtime.settingsRevision}`, `Xray v${version} · settings revision ${runtime.settingsRevision}`);
   if (revision === runtime.settingsRevision) return t(`已保存设置修订${revision}当前已生效（${running}）。`, `Saved settings revision ${revision} is in effect (${running}).`);

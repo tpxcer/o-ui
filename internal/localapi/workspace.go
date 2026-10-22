@@ -166,29 +166,10 @@ func validateWorkspaceDraft(data, previous json.RawMessage) error {
 		clientIDs[client.ID] = true
 		names[client.Name] = true
 	}
-	if len(previous) > 0 && string(previous) != "null" {
-		if json.Unmarshal(previous, &old) != nil {
-			return i18n.New("已有草稿损坏，拒绝覆盖", "Existing draft is corrupted; refusing to overwrite")
-		}
-		removed := 0
-		for _, in := range old.Inbounds {
-			if !ids[in.ID] {
-				removed++
-				for _, client := range old.Clients {
-					if client.InboundID == in.ID {
-						return i18n.New("请先逐个删除关联客户端，再删除入站", "Delete the linked clients one by one before deleting the inbound")
-					}
-				}
-			}
-		}
-		for _, client := range old.Clients {
-			if !clientIDs[client.ID] {
-				removed++
-			}
-		}
-		if removed > 1 {
-			return i18n.New("不支持批量删除，请逐项处理", "Bulk deletion is not supported; handle items one by one")
-		}
+	// 允许批量删除，删除入站时其客户端一并删除（用户2026-10-22决定，页面先列出将删除的项目并确认）；
+	// 剩余客户端不能指向已删除的入站，已由上面的关联检查保证。已有草稿损坏时仍拒绝覆盖。
+	if len(previous) > 0 && string(previous) != "null" && json.Unmarshal(previous, &old) != nil {
+		return i18n.New("已有草稿损坏，拒绝覆盖", "Existing draft is corrupted; refusing to overwrite")
 	}
 	return nil
 }

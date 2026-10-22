@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createQuick, defaultSniffing, deleteInbound, editClient, editInbound, addClient,
+import { createQuick, defaultSniffing, deleteInbound, deleteRecords, quickInboundName, editClient, editInbound, addClient,
   seedWorkspace, clientStatus, randomName, inboundName, presets, escapeHtml, calendarDays, chineseDate } from '../src/workspace.ts';
 import type { Preset, Workspace } from '../src/workspace.ts';
 
@@ -53,9 +53,14 @@ test('编辑入站保留已有嗅探值，编辑客户端不重命名原入站',
   assert.notEqual(changed.clients[0].name, state.clients[0].name);
 });
 
-test('有客户端不能删除入站，不自动关联批删；新增需有入站', () => {
+test('删除入站一并删除其客户端，可批量删除；新增需有入站', () => {
   const state = seedWorkspace(now);
-  assert.throws(() => deleteInbound(state, 'demo-1'), /关联客户端/);
+  const cascaded = deleteInbound(state, 'demo-1');
+  assert.equal(cascaded.inbounds.some(item => item.id === 'demo-1'), false);
+  assert.equal(cascaded.clients.some(item => item.inboundId === 'demo-1'), false);
+  assert.equal(cascaded.clients.length, state.clients.filter(item => item.inboundId !== 'demo-1').length);
+  const bulk = deleteRecords(state, ['demo-1'], [state.clients.find(item => item.inboundId !== 'demo-1')!.id]);
+  assert.equal(bulk.clients.length, cascaded.clients.length - 1);
   assert.throws(() => addClient(state, 'missing', client, 'new'), /关联入站/);
   const result = addClient(state, 'demo-1', client, 'new');
   assert.equal(result.clients.length, 5);
@@ -93,4 +98,23 @@ test('反向代理标签只用于VLESS入站且唯一，留空时不写入', () 
   assert.throws(() => editClient(state, 'vless-client', { ...client, enabled: true, reverseTag: 'r home' }), /反向|Reverse/);
   state = editClient(state, 'vless-client', { ...client, enabled: true, reverseTag: undefined });
   assert.equal('reverseTag' in JSON.parse(JSON.stringify(state.clients[0])), false);
+});
+
+test('一键创建入站名称为地区-类型-日期，同名依次加(1)(2)', () => {
+  const day = new Date(2026, 9, 22, 9, 30);
+  assert.equal(quickInboundName('台湾', 'HY2', day, []), '台湾-HY2-2026.10.22');
+  assert.equal(quickInboundName('台湾', 'HY2', day, ['台湾-HY2-2026.10.22']), '台湾-HY2-2026.10.22(1)');
+  assert.equal(quickInboundName('台湾', 'HY2', day, ['台湾-HY2-2026.10.22', '台湾-HY2-2026.10.22(1)']), '台湾-HY2-2026.10.22(2)');
+  assert.equal(quickInboundName('台湾', 'Reality', day, ['台湾-HY2-2026.10.22']), '台湾-Reality-2026.10.22');
+  assert.equal(quickInboundName('美国', 'HY2', new Date(2026, 0, 5), []), '美国-HY2-2026.01.05');
+});
+
+test('流量自动单位：字节取整，去掉多余的0', async () => {
+  const { formatBytes } = await import('../src/traffic.ts');
+  assert.equal(formatBytes(218.83), '219 B');
+  assert.equal(formatBytes(50e9), '50 GB');
+  assert.equal(formatBytes(41_500_000), '41.5 MB');
+  assert.equal(formatBytes(2_850_000), '2.85 MB');
+  assert.equal(formatBytes(1_500_000_000n), '1.5 GB');
+  assert.equal(formatBytes(null), '未采集');
 });
