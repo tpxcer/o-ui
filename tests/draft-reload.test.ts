@@ -72,6 +72,49 @@ function clickWorkspace(root: Control, attribute: string, operation?: string, id
   const button = new Control(); button.dataset[attribute] = ''; if (operation) button.dataset.op = operation; if (id) button.dataset.id = id;
   root.fire('click', { target: button });
 }
+
+test('客户端启用与最近上线分列，速率持续显示且未知采样不假报零', async () => {
+  const state = workspaceFixture();
+  state.clients.forEach(client => { client.enabled = true; client.expiresAt = null; client.quotaGB = 0; });
+  state.inbounds.forEach(inbound => { inbound.enabled = true; });
+  const id = state.clients[0].id;
+  let samples = 0, mode = 'online';
+  const start = Date.now();
+  await withPage(async url => {
+    const path = String(url);
+    if (path.endsWith('/api/workspace')) return Response.json({ revision: 1, data: state });
+    if (path.endsWith('/api/runtime/traffic')) {
+      samples++;
+      const sampledAt = new Date(start + samples * 2000).toISOString();
+      return Response.json({ totals: { [id]: { uplink: String(samples * 2000), downlink: String(samples * 4000) } }, lastOnline: { [id]: new Date(mode === 'online' ? start : start - 33 * 60000).toISOString() }, sampledAt, collecting: mode !== 'stopped', intervalSeconds: 2, issue: '', incomplete: false });
+    }
+    if (path.endsWith('/api/runtime/iplimit')) return Response.json({ clients: {} });
+    if (path.endsWith('/api/panel/subscription')) return Response.json({ data: { enabled: false } });
+    return Response.json({ clients: [], botEnabled: false });
+  }, async (root, _dialogs, _confirmation, timers) => {
+    root.hidden = false;
+    initManagement(root as unknown as HTMLElement, () => {}, () => {}, () => {}, true).render('clients');
+    await settle();
+    let html = root.querySelector('#list-content').innerHTML;
+    assert.match(html, /<th scope="col">启用<\/th>/);
+    assert.match(html, /class="speed-up"[^>]*>↑ —/);
+    assert.match(html, /class="speed-down"[^>]*>↓ —/);
+    assert.doesNotMatch(html.match(/<td data-label="启用">[\s\S]*?<\/td>/)?.[0] ?? '', /is-online/);
+    assert.match(html, /data-client-last><span class="status-badge is-online"/);
+    const poll = timers.find(timer => timer.delay === 5000)!;
+    poll.callback(); await settle();
+    html = root.querySelector('#list-content').innerHTML;
+    assert.match(html, /class="speed-up"[^>]*>↑ 1 KB\/s/);
+    assert.match(html, /class="speed-down"[^>]*>↓ 2 KB\/s/);
+    mode = 'offline'; poll.callback(); await settle();
+    html = root.querySelector('#list-content').innerHTML;
+    assert.match(html, /33 分钟前上线过/);
+    assert.doesNotMatch(html, /is-online|>离线</);
+    mode = 'stopped'; poll.callback(); await settle();
+    html = root.querySelector('#list-content').innerHTML;
+    assert.match(html, /class="speed-up"[^>]*>↑ —/);
+  });
+});
 test('入站客户端显式重读可取消，失败保留旧列表，再成功后使用新修订', async () => {
   const initial = workspaceFixture(), next = structuredClone(initial); next.clients[0].name = 'latest-client';
   let reads = 0; const writes: any[] = [];

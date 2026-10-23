@@ -386,23 +386,19 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
   // OUI的在线判定：启用且最近2分钟内有流量；核心未采集时一律离线。
   const isOnline = (item: Client) => {
     const at = traffic?.lastOnline?.[item.id];
-    return persistent && !!at && !!traffic?.collecting && Date.now() - Date.parse(at) <= onlineWindowMs;
-  };
-  const clientState = (item: Client, inbound: Inbound | undefined, now = Date.now()) => {
-    const status = clientStatus(viewClient(item), inbound, now);
-    if (status !== t('可用', 'Available')) return badge(status, false);
-    if (!persistent) return badge(status, true);
-    return isOnline(item) ? `<span class="status-badge is-online"><b></b>${t('在线', 'Online')}</span>` : badge(t('离线', 'Offline'), false);
+    return clientStatus(viewClient(item), state.inbounds.find(inbound => inbound.id === item.inboundId)) === t('可用', 'Available') && persistent && !!at && !!traffic?.collecting && !trafficError && !!traffic.sampledAt && Date.now() - Date.parse(traffic.sampledAt) <= 10_000 && Date.now() - Date.parse(at) <= onlineWindowMs;
   };
   const trafficCell = (item: Client) => {
     const bytes = persistent ? usedBytes(traffic, item.id) : BigInt(Math.round(item.usedGB * 1e9));
     const percent = item.quotaGB > 0 ? Math.min(100, viewClient(item).usedGB / item.quotaGB * 100) : 0;
-    const speed = isOnline(item) && speeds[item.id] ? `<small class="table-secondary speed-pair"><span>↑ ${formatBytes(speeds[item.id].up)}/s</span><span>↓ ${formatBytes(speeds[item.id].down)}/s</span></small>` : '';
+    const rate = persistent && traffic?.collecting && !trafficError && traffic.sampledAt && Date.now() - Date.parse(traffic.sampledAt) <= 10_000 ? speeds[item.id] : undefined;
+    const speed = `<small class="table-secondary speed-pair"><span class="speed-up" title="${t('上传', 'Upload')}">↑ ${rate ? formatBytes(rate.up) + '/s' : '—'}</span><span class="speed-down" title="${t('下载', 'Download')}">↓ ${rate ? formatBytes(rate.down) + '/s' : '—'}</span></small>`;
     return `<span>${formatBytes(bytes)} / ${item.quotaGB ? formatBytes(item.quotaGB * 1e9) : t('不限', 'Unlimited')}</span>${item.quotaGB && bytes !== null ? `<div class="mini-meter" aria-hidden="true"><span style="width:${percent}%"></span></div>` : ''}${speed}`;
   };
   const lastOnlineCell = (item: Client) => {
     const at = traffic?.lastOnline?.[item.id];
-    return at ? `<span class="date-value" title="${esc(new Date(at).toLocaleString(locale))}">${relativeTime(Date.parse(at))}</span>` : `<span class="date-value muted-text">${persistent ? t('从未', 'Never') : '—'}</span>`;
+    if (isOnline(item)) return `<span class="status-badge is-online"><b></b>${t('在线', 'Online')}</span>`;
+    return at ? `<span class="date-value" title="${esc(new Date(at).toLocaleString(locale))}">${t(`${relativeTime(Date.parse(at))}上线过`, `Last online ${relativeTime(Date.parse(at))}`)}</span>` : `<span class="date-value muted-text">${persistent ? t('从未上线', 'Never online') : '—'}</span>`;
   };
   const inboundTraffic = (id: string) => {
     let total = 0n;
@@ -444,7 +440,7 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
     const count = visible.size;
     root.querySelector('#result-count')!.textContent = `${t('显示', 'Showing')} ${count} / ${page === 'inbounds' ? state.inbounds.length : state.clients.length} ${t('条', '')}`;
     const headers = page === 'inbounds' ? [t('入站名称', 'Inbound name'), t('类型 / 端口', 'Type / port'), t('状态', 'Status'), t('客户端', 'Clients'), t('总流量', 'Total traffic'), t('操作', 'Actions')]
-      : [t('客户端 / 入站', 'Client / inbound'), persistent ? t('状态', 'Status') : t('演示状态', 'Demo status'), t('流量', 'Traffic'), t('到期', 'Expiry'), t('最近上线', 'Last online'), t('IP / 订阅', 'IP / subscription'), ...(persistent ? [t('上线通知', 'Online alerts')] : []), t('操作', 'Actions')];
+      : [t('客户端 / 入站', 'Client / inbound'), t('启用', 'Enabled'), t('流量', 'Traffic'), t('到期', 'Expiry'), t('最近上线', 'Last online'), t('IP / 订阅', 'IP / subscription'), ...(persistent ? [t('上线通知', 'Online alerts')] : []), t('操作', 'Actions')];
     root.querySelector('#list-content')!.innerHTML = count ? `<table class="data-table ${page}-table${page === 'clients' && persistent ? ' with-notify' : ''}"><caption class="sr-only">${page === 'inbounds' ? persistent ? t('入站列表', 'Inbounds') : t('入站演示列表', 'Demo inbounds') : persistent ? t('客户端列表', 'Clients') : t('客户端演示列表', 'Demo clients')}</caption><thead><tr><th scope="col" class="select-cell"><input type="checkbox" data-select-all aria-label="${t('全选', 'Select all')}"></th>${headers.map(label => `<th scope="col">${label}</th>`).join('')}</tr></thead><tbody>${page === 'inbounds' ? inboundRows.map(item => `<tr>${selectCell(item)}
       <td data-label="${t('入站名称', 'Inbound name')}"><strong class="record-name">${esc(item.name)}</strong><small class="table-secondary">${presets[item.preset].protocol} · ${presets[item.preset].security}</small></td>
       <td data-label="${t('类型 / 端口', 'Type / port')}"><span class="tag preset-${item.preset}">${presets[item.preset].label}</span><small class="table-secondary">${presets[item.preset].transport} / ${item.port}${item.portHopping ? ` · ${t('跳跃', 'hop')} ${item.portHopping}` : ''}</small></td>
@@ -453,7 +449,7 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
       <td data-label="${t('总流量', 'Total traffic')}" data-inbound-traffic="${esc(item.id)}"><span class="date-value">${inboundTraffic(item.id)}</span></td><td data-label="${t('操作', 'Actions')}">${rowActions(item, 'inbound')}</td></tr>`).join('') : clientRows.map(item => {
         const inbound = state.inbounds.find(record => record.id === item.inboundId)!;
         return `<tr data-client-row="${esc(item.id)}">${selectCell(item)}<td data-label="${t('客户端 / 入站', 'Client / inbound')}"><strong class="record-name">${esc(item.name)}</strong><small class="table-secondary">${esc(inbound.name)}</small></td>
-          <td data-label="${persistent ? t('状态', 'Status') : t('演示状态', 'Demo status')}"><div class="status-cell"><label class="switch" title="${item.enabled ? t('停用', 'Disable') : t('启用', 'Enable')}"><input type="checkbox" data-toggle-client="${esc(item.id)}" ${item.enabled ? 'checked' : ''} ${loading || reloadRequired ? 'disabled' : ''} aria-label="${t('启用客户端', 'Enable client')} ${esc(item.name)}"><span aria-hidden="true"></span></label><span data-client-status>${clientState(item, inbound, now)}</span></div></td>
+          <td data-label="${t('启用', 'Enabled')}"><div class="status-cell"><label class="switch" title="${item.enabled ? t('停用', 'Disable') : t('启用', 'Enable')}"><input type="checkbox" data-toggle-client="${esc(item.id)}" ${item.enabled ? 'checked' : ''} ${loading || reloadRequired ? 'disabled' : ''} aria-label="${t('启用客户端', 'Enable client')} ${esc(item.name)}"><span aria-hidden="true"></span></label></div></td>
           <td data-label="${t('流量', 'Traffic')}" data-client-traffic>${trafficCell(item)}</td>
           <td data-label="${t('到期', 'Expiry')}">${item.expiresAt === null ? `<span class="date-value">${t('永不过期', 'Never expires')}</span>` : `<span class="date-value">${expiryLeft(item.expiresAt, now)}</span><small class="table-secondary">${chineseDate(item.expiresAt)}</small>`}</td>
           <td data-label="${t('最近上线', 'Last online')}" data-client-last>${lastOnlineCell(item)}</td>
@@ -579,8 +575,8 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
       const previous = traffic;
       traffic = await api<TrafficSnapshot>('runtime/traffic'); trafficError = '';
       const seconds = previous?.sampledAt && traffic.sampledAt ? (Date.parse(traffic.sampledAt) - Date.parse(previous.sampledAt)) / 1000 : 0;
+      speeds = {};
       if (seconds > 0 && seconds <= 30) {
-        speeds = {};
         for (const [id, count] of Object.entries(traffic.totals)) {
           const before = previous!.totals[id];
           if (!before) continue;
@@ -600,7 +596,6 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
         row.querySelector('[data-client-last]')!.innerHTML = lastOnlineCell(item);
         const ipTarget = row.querySelector<HTMLElement>('[data-client-ip]');
         if (ipTarget && !ipTarget.contains(document.activeElement)) ipTarget.innerHTML = `${ipCell(item)}<small class="table-secondary">${subscriptionLabel(item)}</small>`;
-        row.querySelector('[data-client-status]')!.innerHTML = clientState(item, state.inbounds.find(inbound => inbound.id === item.inboundId));
         const notifyTarget = row.querySelector<HTMLElement>('[data-client-notify]');
         if (notifyTarget && !notifyTarget.contains(document.activeElement)) notifyTarget.innerHTML = notifyCell(item);
       });
