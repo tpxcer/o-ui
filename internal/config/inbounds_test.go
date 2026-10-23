@@ -77,9 +77,16 @@ func TestRealityCompatibilityIsExplicit(t *testing.T) {
 				t.Fatal("REALITY compatibility default/toggle serialization changed")
 			}
 		}
+		// 从OUI导入时原样保留更低的版本（如0.0.0）；不是x.y.z（每段0至255）的仍拒绝。
+		for _, bad := range []string{"1.8", "256.0.0", "1.8.x", "01.8.2", "1.8.2.0"} {
+			in.Reality.MinClientVer = bad
+			if _, err := compileOne(in, client); err == nil {
+				t.Fatal("malformed minimum version accepted", bad)
+			}
+		}
 		in.Reality.MinClientVer = "0.0.0"
-		if _, err := compileOne(in, client); err == nil {
-			t.Fatal("arbitrary minimum version accepted")
+		if _, err := compileOne(in, client); err != nil {
+			t.Fatal(err)
 		}
 	}
 }

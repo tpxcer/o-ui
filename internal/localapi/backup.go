@@ -14,12 +14,14 @@ import (
 	"fmt"
 	"independent-panel/internal/i18n"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"time"
 
 	"independent-panel/internal/backup"
+	"independent-panel/internal/config"
 	"independent-panel/internal/store"
 	"independent-panel/internal/traffic"
 )
@@ -39,6 +41,9 @@ type businessBackup struct {
 	Identities   identities                   `json:"identities"`
 	Traffic      traffic.Ledger               `json:"traffic"`
 	Certificates map[string]backupCertificate `json:"certificates"`
+	// 从OUI数据库换算时为"oui"，并附带预览说明；不进入备份文件。
+	source string
+	notes  []string
 }
 type backupRecord struct {
 	ID   string `json:"id"`
@@ -50,6 +55,8 @@ type backupPreview struct {
 	Inbounds         int            `json:"inbounds"`
 	Clients          int            `json:"clients"`
 	Certificates     int            `json:"certificates"`
+	Source           string         `json:"source,omitempty"`
+	Notes            []string       `json:"notes,omitempty"`
 	ReplacedInbounds []backupRecord `json:"replacedInbounds"`
 	ReplacedClients  []backupRecord `json:"replacedClients"`
 	RemovedInbounds  []backupRecord `json:"removedInbounds"`
@@ -60,6 +67,7 @@ type restoreRequest struct {
 	Password     string `json:"password"`
 	Fingerprint  string `json:"fingerprint"`
 	Confirmation string `json:"confirmation"`
+	ShareHost    string `json:"shareHost,omitempty"` // 仅导入OUI数据库时用：写入导入入站的分享主机
 }
 
 func decodeStrict(data []byte, value any) error {
@@ -111,16 +119,24 @@ func validateBackup(b businessBackup) error {
 			return i18n.New("备份客户端身份无效", "Invalid client identity in backup")
 		}
 		uuid, err := hex.DecodeString(identity.UUID[0:8] + identity.UUID[9:13] + identity.UUID[14:18] + identity.UUID[19:23] + identity.UUID[24:36])
-		auth, authErr := base64.RawURLEncoding.DecodeString(identity.Auth)
-		if err != nil || len(uuid) != 16 || identity.UUID[8] != '-' || identity.UUID[13] != '-' || identity.UUID[18] != '-' || identity.UUID[23] != '-' || authErr != nil || len(auth) != 32 {
+		if err != nil || len(uuid) != 16 || identity.UUID[8] != '-' || identity.UUID[13] != '-' || identity.UUID[18] != '-' || identity.UUID[23] != '-' || !config.ValidHY2Auth(identity.Auth) {
 			return i18n.New("备份客户端身份无效", "Invalid client identity in backup")
 		}
 	}
 	for id, identity := range b.Identities.Inbounds {
 		key, err := base64.RawURLEncoding.DecodeString(identity.PrivateKey)
-		short, shortErr := hex.DecodeString(identity.ShortID)
-		if !draftID.MatchString(id) || err != nil || shortErr != nil || len(short) != 8 {
+		if !draftID.MatchString(id) || err != nil || !config.ValidShortID(identity.ShortID) || len(identity.ExtraShortIDs) > 64 || len(identity.ExtraServerNames) > 64 || (identity.MinClientVer != "" && !config.ValidClientVersion(identity.MinClientVer)) {
 			return i18n.New("备份REALITY身份无效", "Invalid REALITY identity in backup")
+		}
+		for _, short := range identity.ExtraShortIDs {
+			if !config.ValidShortID(short) {
+				return i18n.New("备份REALITY身份无效", "Invalid REALITY identity in backup")
+			}
+		}
+		for _, name := range identity.ExtraServerNames {
+			if !config.ValidShareHost(name) || net.ParseIP(name) != nil {
+				return i18n.New("备份REALITY身份无效", "Invalid REALITY identity in backup")
+			}
 		}
 		if _, err = ecdh.X25519().NewPrivateKey(key); err != nil {
 			return i18n.New("备份REALITY私钥无效", "Invalid REALITY private key in backup")
@@ -138,7 +154,8 @@ func validateBackup(b businessBackup) error {
 				return i18n.New("备份缺少REALITY身份", "Backup lacks REALITY identities")
 			}
 		}
-		if in.Connection != nil && (in.Connection.CertificateFile != "" || in.Connection.KeyFile != "" || in.Connection.UsePanelCertificate) {
+		// 从OUI导入时沿用同一台服务器上OUI所用的证书文件路径（如acme.sh续签的文件）。
+		if b.source != "oui" && in.Connection != nil && (in.Connection.CertificateFile != "" || in.Connection.KeyFile != "" || in.Connection.UsePanelCertificate) {
 			return i18n.New("备份不能指定证书落盘路径", "A backup cannot choose certificate file paths")
 		}
 		if in.Preset == "hy2" || in.Preset == "xhttp-tls" {
@@ -232,14 +249,22 @@ func sealBackup(b businessBackup, password string) ([]byte, error) {
 	return backup.Seal(data, password)
 }
 
+func decodeArchive(archive string) ([]byte, error) {
+	if len(archive) > base64.StdEncoding.EncodedLen(backup.MaxFile) {
+		return nil, i18n.New("备份文件过大", "Backup file too large")
+	}
+	file, err := base64.StdEncoding.Strict().DecodeString(archive)
+	if err != nil {
+		return nil, i18n.New("备份文件编码无效", "Invalid backup file encoding")
+	}
+	return file, nil
+}
+
 func openBackup(request restoreRequest) (businessBackup, []byte, error) {
 	var b businessBackup
-	if len(request.Archive) > base64.StdEncoding.EncodedLen(backup.MaxFile) {
-		return b, nil, i18n.New("备份文件过大", "Backup file too large")
-	}
-	file, err := base64.StdEncoding.Strict().DecodeString(request.Archive)
+	file, err := decodeArchive(request.Archive)
 	if err != nil {
-		return b, nil, i18n.New("备份文件编码无效", "Invalid backup file encoding")
+		return b, nil, err
 	}
 	data, err := backup.Open(file, request.Password)
 	if err != nil {
@@ -252,8 +277,19 @@ func openBackup(request restoreRequest) (businessBackup, []byte, error) {
 	return b, file, validateBackup(b)
 }
 
+// openAnyBackup：OUI（3x-ui系）的x-ui.db换算成业务备份，其余按本面板备份打开。
+// OUI的分享主机参与预览指纹，预览后改了分享主机需要重新预览。
+func (rt *Runtime) openAnyBackup(request restoreRequest) (businessBackup, []byte, error) {
+	file, err := decodeArchive(request.Archive)
+	if err != nil || !isOUIBackup(file) {
+		return openBackup(request)
+	}
+	b, err := importOUI(file, request.ShareHost, rt.root, time.Now())
+	return b, append(file, "\x00"+request.ShareHost...), err
+}
+
 func previewBackup(b businessBackup, file []byte, docs map[string]store.Document) (backupPreview, error) {
-	result := backupPreview{CreatedAt: b.CreatedAt, Inbounds: len(b.Workspace.Inbounds), Clients: len(b.Workspace.Clients), Certificates: len(b.Certificates), ReplacedInbounds: []backupRecord{}, ReplacedClients: []backupRecord{}, RemovedInbounds: []backupRecord{}, RemovedClients: []backupRecord{}}
+	result := backupPreview{Source: b.source, Notes: b.notes, CreatedAt: b.CreatedAt, Inbounds: len(b.Workspace.Inbounds), Clients: len(b.Workspace.Clients), Certificates: len(b.Certificates), ReplacedInbounds: []backupRecord{}, ReplacedClients: []backupRecord{}, RemovedInbounds: []backupRecord{}, RemovedClients: []backupRecord{}}
 	data, _ := json.Marshal(docs)
 	hash := sha256.New()
 	_, _ = hash.Write(file)
@@ -343,6 +379,10 @@ func (rt *Runtime) restore(ctx context.Context, b businessBackup, current busine
 	data := map[string]json.RawMessage{}
 	data["workspace"], _ = json.Marshal(b.Workspace)
 	data["xray-settings"] = b.Settings
+	if b.source == "oui" {
+		// OUI的路由/DNS等不导入，保留o-ui当前的Xray设置。
+		data["xray-settings"] = docs["xray-settings"].Data
+	}
 	data["proxy-identities"], _ = json.Marshal(b.Identities)
 	data["traffic"], _ = json.Marshal(b.Traffic)
 	// 历史运行快照不在业务包内；同一事务使旧历史失效，避免恢复后重启旧用户。
@@ -448,7 +488,7 @@ func registerBackup(mux *http.ServeMux, rt *Runtime) {
 				respond(w, 409, map[string]string{"error": i18n.T("请先停止本项目Xray核心，再预览或恢复备份", "Stop this panel's Xray core before previewing or restoring a backup")})
 				return
 			}
-			b, file, err := openBackup(request)
+			b, file, err := rt.openAnyBackup(request)
 			if err != nil {
 				respond(w, 422, map[string]string{"error": err.Error()})
 				return

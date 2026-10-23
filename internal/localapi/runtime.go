@@ -36,6 +36,11 @@ type proxyIdentity struct {
 type realityIdentity struct {
 	PrivateKey string
 	ShortID    string
+	// 从OUI导入时保留的其余shortId与SNI：服务端继续接受旧客户端，链接仍用ShortID与草稿里的SNI。
+	ExtraShortIDs    []string `json:",omitempty"`
+	ExtraServerNames []string `json:",omitempty"`
+	// 从OUI导入的原最低客户端版本（低于官方默认，如0.0.0；上游sing-box报1.8.1）；仅在开启Mihomo兼容模式时代替1.8.2。
+	MinClientVer string `json:",omitempty"`
 }
 type identities struct {
 	Clients  map[string]proxyIdentity
@@ -230,7 +235,7 @@ func completeIdentities(ids *identities, draft workspaceDraft) (bool, error) {
 		if _, err = rand.Read(short); err != nil {
 			return false, err
 		}
-		ids.Inbounds[in.ID] = realityIdentity{base64.RawURLEncoding.EncodeToString(key.Bytes()), hex.EncodeToString(short)}
+		ids.Inbounds[in.ID] = realityIdentity{PrivateKey: base64.RawURLEncoding.EncodeToString(key.Bytes()), ShortID: hex.EncodeToString(short)}
 		changed = true
 	}
 	return changed, nil
@@ -261,9 +266,13 @@ func buildInbounds(draft workspaceDraft, ids identities, used map[string]traffic
 			}
 			if in.Preset == "reality" || in.Preset == "xhttp-reality" {
 				secret := ids.Inbounds[in.ID]
-				item.Reality = &config.Reality{Target: c.Target, ServerNames: []string{c.ServerName}, PrivateKey: secret.PrivateKey, ShortIDs: []string{secret.ShortID}}
+				item.Reality = &config.Reality{Target: c.Target, ServerNames: append([]string{c.ServerName}, secret.ExtraServerNames...), PrivateKey: secret.PrivateKey, ShortIDs: append([]string{secret.ShortID}, secret.ExtraShortIDs...)}
+				item.NoVision = c.NoVision
 				if c.MihomoCompatibility {
 					item.Reality.MinClientVer = "1.8.2"
+					if secret.MinClientVer != "" {
+						item.Reality.MinClientVer = secret.MinClientVer
+					}
 				}
 			}
 			if strings.HasPrefix(in.Preset, "xhttp-") {

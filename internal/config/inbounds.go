@@ -76,6 +76,7 @@ type Inbound struct {
 	Reality     *Reality
 	Certificate *Certificate
 	XHTTP       *XHTTP
+	NoVision    bool // 仅reality预设：不加xtls-rprx-vision流控（兼容从OUI导入的无流控客户端）
 }
 
 type Client struct {
@@ -196,12 +197,12 @@ func stream(in Inbound) (StreamSettings, error) {
 			}
 		}
 		for _, id := range r.ShortIDs {
-			if _, err := hex.DecodeString(id); err != nil || len(id) == 0 || len(id) > 16 {
+			if !ValidShortID(id) {
 				return result, i18n.New("REALITY的shortId需为2至16位偶数长度十六进制", "REALITY shortId must be hex with an even length of 2–16")
 			}
 		}
-		if r.MinClientVer != "" && r.MinClientVer != "1.8.2" {
-			return result, i18n.New("REALITY最低客户端版本仅支持官方默认或Mihomo兼容模式", "REALITY minimum client version supports only the official default or Mihomo compatibility mode")
+		if r.MinClientVer != "" && !ValidClientVersion(r.MinClientVer) {
+			return result, i18n.New("REALITY最低客户端版本须为x.y.z（每段0至255）", "REALITY minimum client version must be x.y.z (each part 0–255)")
 		}
 		result.Reality = &Reality{Target: r.Target, ServerNames: append([]string{}, r.ServerNames...), PrivateKey: r.PrivateKey, ShortIDs: append([]string{}, r.ShortIDs...), MinClientVer: r.MinClientVer}
 	}
@@ -220,6 +221,33 @@ func stream(in Inbound) (StreamSettings, error) {
 		result.Network, result.XHTTP = "xhttp", &XHTTP{Path: x.Path, Mode: x.Mode}
 	}
 	return result, nil
+}
+
+// ValidShortID：REALITY shortId为2至16位偶数长度十六进制。
+func ValidShortID(id string) bool {
+	_, err := hex.DecodeString(id)
+	return err == nil && len(id) > 0 && len(id) <= 16
+}
+
+// ValidUUID：VLESS客户端UUID，不接受全零。
+func ValidUUID(id string) bool {
+	return uuidPattern.MatchString(id) && id != "00000000-0000-0000-0000-000000000000"
+}
+
+// ValidClientVersion：Xray按x.y.z三段（每段0至255）解析REALITY的最低/最高客户端版本。
+func ValidClientVersion(version string) bool {
+	parts := strings.Split(version, ".")
+	for _, part := range parts {
+		if n, err := strconv.Atoi(part); err != nil || n < 0 || n > 255 || strconv.Itoa(n) != part {
+			return false
+		}
+	}
+	return len(parts) == 3
+}
+
+// ValidHY2Auth：HY2认证值为16至256字节且不含空白/控制符（本面板生成的与从OUI导入的都要满足）。
+func ValidHY2Auth(auth string) bool {
+	return len(auth) >= 16 && len(auth) <= 256 && !strings.ContainsFunc(auth, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) })
 }
 
 func validPortString(value string) bool {
@@ -281,16 +309,16 @@ func CompileInbounds(inbounds []Inbound, clients []Client, now time.Time) ([]Com
 		}
 		user := User{Email: "client-" + client.ID}
 		if in.Preset == "hy2" {
-			if len(client.Auth) < 16 || len(client.Auth) > 256 || strings.ContainsFunc(client.Auth, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) {
+			if !ValidHY2Auth(client.Auth) {
 				return nil, i18n.New("HY2客户端需要16至256字节无空白/控制符的认证值", "HY2 clients need a 16–256 byte auth value without spaces or control characters")
 			}
 			user.Auth = client.Auth
 		} else {
-			if !uuidPattern.MatchString(client.UUID) || client.UUID == "00000000-0000-0000-0000-000000000000" {
+			if !ValidUUID(client.UUID) {
 				return nil, i18n.New("VLESS客户端UUID格式无效", "Invalid VLESS client UUID")
 			}
 			user.ID = strings.ToLower(client.UUID)
-			if in.Preset == "reality" {
+			if in.Preset == "reality" && !in.NoVision {
 				user.Flow = "xtls-rprx-vision"
 			}
 		}

@@ -53,7 +53,8 @@ func ClientConnection(in CompiledInbound, user User, serverName, name string, sh
 	}
 	if in.Stream.Security == "reality" {
 		r := in.Stream.Reality
-		if r == nil || len(r.ShortIDs) != 1 {
+		// 服务端可接受多个shortId（如从OUI导入），链接固定用第一个。
+		if r == nil || len(r.ShortIDs) == 0 {
 			return nil, "", i18n.New("REALITY连接参数缺失", "REALITY connection parameters are missing")
 		}
 		data, err := base64.RawURLEncoding.DecodeString(r.PrivateKey)

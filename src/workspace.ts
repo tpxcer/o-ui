@@ -7,7 +7,7 @@ export const presets = {
 } as const;
 export type Preset = keyof typeof presets;
 export type Sniffing = { enabled: boolean; http: boolean; tls: boolean; quic: boolean; routeOnly: boolean; fakeDns: boolean; metadataOnly: boolean; ipsExcluded?: string[]; domainsExcluded?: string[] };
-export type Connection = { certificateFile: string; keyFile: string; target: string; serverName: string; path: string; mode: string; usePanelCertificate?: boolean; mihomoCompatibility?: boolean };
+export type Connection = { certificateFile: string; keyFile: string; target: string; serverName: string; path: string; mode: string; usePanelCertificate?: boolean; mihomoCompatibility?: boolean; noVision?: boolean };
 export const defaultConnection = (): Connection => ({ certificateFile: '', keyFile: '', target: '', serverName: '', path: '/', mode: 'auto' });
 export type Inbound = { id: string; name: string; preset: Preset; port: number; enabled: boolean; sniffing: Sniffing; connection?: Connection; listen?: string; shareHost?: string; portHopping?: string };
 export type Client = { id: string; inboundId: string; name: string; enabled: boolean; quotaGB: number; usedGB: number; expiresAt: number | null; ipLimit: number; subscription: boolean; reverseTag?: string };

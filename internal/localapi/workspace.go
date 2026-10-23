@@ -44,6 +44,7 @@ type connectionDraft struct {
 	Mode                string `json:"mode"`
 	UsePanelCertificate bool   `json:"usePanelCertificate,omitempty"`
 	MihomoCompatibility bool   `json:"mihomoCompatibility,omitempty"`
+	NoVision            bool   `json:"noVision,omitempty"`
 }
 type clientDraft struct {
 	ID           string  `json:"id"`
@@ -116,6 +117,9 @@ func validateWorkspaceDraft(data, previous json.RawMessage) error {
 		if in.Connection != nil {
 			if in.Connection.MihomoCompatibility && in.Preset != "reality" && in.Preset != "xhttp-reality" {
 				return i18n.New("Mihomo兼容模式仅用于REALITY", "Mihomo compatibility mode applies to REALITY only")
+			}
+			if in.Connection.NoVision && in.Preset != "reality" {
+				return i18n.New("关闭Vision流控仅用于VLESS Reality（TCP）", "Turning off Vision flow applies to VLESS Reality (TCP) only")
 			}
 			if in.Connection.UsePanelCertificate && in.Preset != "hy2" && in.Preset != "xhttp-tls" {
 				return i18n.New("REALITY不使用面板TLS证书", "REALITY does not use the panel TLS certificate")
