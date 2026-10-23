@@ -623,7 +623,11 @@ func (rt *Runtime) botSaveWorkspace(ctx context.Context, mutate func(*workspaceD
 		return savedDocument{}, err
 	}
 	result := rt.saved(ctx, doc)
-	result.Firewall = syncFirewall(ctx, old.Data, doc.Data)
+	firewall, fwErr := saveFirewallReport(ctx, rt.state, old.Data, doc.Data, doc.Revision)
+	result.Firewall = firewall.Message
+	if fwErr != nil {
+		result.Firewall += i18n.T(" 防火墙状态记录失败，请重新核对。", " Failed to record firewall status; check again.")
+	}
 	return result, nil
 }
 

@@ -113,7 +113,14 @@ func TestFreeHopRangeSkipsUsedAndBusyPorts(t *testing.T) {
 	free.Close()
 	saved := candidate + 1000
 	sequence := []int{saved - 10, taken - 10, candidate}
-	hop, ok := freeHopRange(map[int]bool{saved: true}, func() int { next := sequence[0]; sequence = sequence[1:]; return next })
+	hop, ok := freeHopRange(map[int]bool{saved: true}, func() int {
+		if len(sequence) == 0 {
+			return candidate
+		}
+		next := sequence[0]
+		sequence = sequence[1:]
+		return next
+	})
 	if !ok || hop != strconv.Itoa(candidate)+"-"+strconv.Itoa(candidate+hopRangeSize-1) {
 		t.Skip("candidate range is busy on this machine:", hop, ok)
 	}

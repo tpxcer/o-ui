@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http/httptest"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -38,8 +39,79 @@ func TestSyncFirewallAllowsNewAndRemovesDeletedPorts(t *testing.T) {
 	if !strings.Contains(message, "50004/tcp") {
 		t.Fatal("missing manual firewall hint", message)
 	}
-	if message = syncFirewall(context.Background(), draft(map[int]string{50004: "xhttp-tls"}), draft(map[int]string{})); message != "" {
-		t.Fatal("failed deletes must stay quiet", message)
+	if message = syncFirewall(context.Background(), draft(map[int]string{50004: "xhttp-tls"}), draft(map[int]string{})); !strings.Contains(message, "未能撤销旧端口") {
+		t.Fatal("failed deletes must warn", message)
+	}
+}
+
+func TestFirewallReportPersistsFailuresAndRetryDoesNotRestartCore(t *testing.T) {
+	state, rt, handler, cookie := subscriptionFixture(t)
+	previous := runFirewall
+	t.Cleanup(func() { runFirewall = previous })
+	runFirewall = func(context.Context, string, string, string) (string, error) {
+		return "unsupported input filter", errors.New("blocked")
+	}
+	ctx := context.Background()
+	doc, err := state.ReadDocument(ctx, "workspace")
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := saveFirewallReport(ctx, state, nil, doc.Data, doc.Revision)
+	if err != nil || report.Endpoints["18443/tcp"].State != "failed" {
+		t.Fatal(report, err)
+	}
+	// 无关保存不能清除仍未修复端口的告警。
+	report, err = saveFirewallReport(ctx, state, doc.Data, doc.Data, doc.Revision)
+	if err != nil || report.Endpoints["18443/tcp"].State != "failed" {
+		t.Fatal(report, err)
+	}
+	call := func(method, path, body string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(method, path, strings.NewReader(body))
+		r.Host, r.RemoteAddr = "127.0.0.1:5180", "127.0.0.1:1234"
+		r.Header.Set("Origin", "http://127.0.0.1:5180")
+		r.Header.Set("Content-Type", "application/json")
+		r.AddCookie(cookie)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		return w
+	}
+	read := call("GET", "/api/runtime/firewall", "")
+	if read.Code != 200 || !strings.Contains(read.Body.String(), `"state":"failed"`) {
+		t.Fatal(read.Code, read.Body.String())
+	}
+	runFirewall = func(context.Context, string, string, string) (string, error) { return "allowed", nil }
+	before := rt.engine.Status()
+	result := call("POST", "/api/runtime/firewall/retry", `{"inboundId":"in-one"}`)
+	if result.Code != 200 || !strings.Contains(result.Body.String(), `"state":"allowed"`) {
+		t.Fatal(result.Code, result.Body.String())
+	}
+	after := rt.engine.Status()
+	if before.Running != after.Running || before.WorkspaceRevision != after.WorkspaceRevision {
+		t.Fatal("retry changed core state")
+	}
+	if missing := call("POST", "/api/runtime/firewall/retry", `{"inboundId":"missing"}`); missing.Code != 404 {
+		t.Fatal(missing.Code)
+	}
+	runFirewall = func(context.Context, string, string, string) (string, error) {
+		return "no supported active firewall detected", exec.Command("sh", "-c", "exit 4").Run()
+	}
+	report, err = saveFirewallReport(ctx, state, nil, doc.Data, doc.Revision)
+	if err != nil || report.Endpoints["18443/tcp"].State != "unverified" {
+		t.Fatal(report, err)
+	}
+}
+
+func TestFirewallReportMarksPortHoppingFailure(t *testing.T) {
+	previousFirewall, previousHopping := runFirewall, runPortHopping
+	t.Cleanup(func() { runFirewall, runPortHopping = previousFirewall, previousHopping })
+	runFirewall = func(context.Context, string, string, string) (string, error) { return "allowed", nil }
+	runPortHopping = func(context.Context, ...string) (string, error) { return "", errors.New("NAT failed") }
+	data := json.RawMessage(`{"inbounds":[{"preset":"hy2","port":50574,"portHopping":"59556-59755"}]}`)
+	for _, pair := range [][2]json.RawMessage{{nil, data}, {data, nil}} {
+		report := syncFirewallReport(context.Background(), pair[0], pair[1])
+		if report.Endpoints["50574/udp"].State != "failed" {
+			t.Fatal("NAT failure hidden by port allow status", report)
+		}
 	}
 }
 

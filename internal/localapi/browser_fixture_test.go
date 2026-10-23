@@ -86,6 +86,23 @@ func TestBrowserFixture(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if os.Getenv("PANEL_BROWSER_FIREWALL_QA") == "1" {
+		previous := runFirewall
+		defer func() { runFirewall = previous }()
+		doc, err := s.ReadDocument(context.Background(), "workspace")
+		if err != nil {
+			t.Fatal(err)
+		}
+		runFirewall = func(context.Context, string, string, string) (string, error) {
+			return "隔离测试：不支持的INPUT拦截层", fmt.Errorf("test-only firewall failure")
+		}
+		if _, err = saveFirewallReport(context.Background(), s, nil, doc.Data, doc.Revision); err != nil {
+			t.Fatal(err)
+		}
+		runFirewall = func(context.Context, string, string, string) (string, error) {
+			return "隔离测试：防火墙已放行（未调用宿主防火墙）", nil
+		}
+	}
 	if os.Getenv("PANEL_BROWSER_TRAFFIC_QA") == "1" {
 		origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, strings.Repeat("x", 8192)) }))
 		defer origin.Close()

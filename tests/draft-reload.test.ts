@@ -58,7 +58,7 @@ async function withPage(fetcher: typeof fetch, run: (root: Control, dialogs: Con
   const timers: { delay: number; callback: () => void }[] = [];
   root.hidden = true;
   const values = {
-    fetch: fetcher, location: { protocol: 'http:' }, HTMLInputElement: Control, HTMLButtonElement: Control, setTimeout() { return 0; }, clearTimeout() {},
+    fetch: ((url, options) => String(url).endsWith('/api/runtime/firewall') ? Promise.resolve(Response.json({ data: null })) : fetcher(url, options)) as typeof fetch, location: { protocol: 'http:' }, HTMLInputElement: Control, HTMLButtonElement: Control, setTimeout() { return 0; }, clearTimeout() {},
     window: { setInterval(callback: () => void, delay: number) { timers.push({ delay, callback }); }, addEventListener() {}, confirm() { confirmation.count++; return confirmation.answer; } },
     document: { createElement: (tag: string) => { const item = new Control(); if (tag === 'dialog') dialogs.push(item); return item; }, body: new Control(), activeElement: null, hidden: false, addEventListener() {}, querySelector() { return null; } },
   };

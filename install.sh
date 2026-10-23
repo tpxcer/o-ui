@@ -348,10 +348,11 @@ RestartSec=5s
 KillMode=mixed
 KillSignal=SIGTERM
 TimeoutStopSec=30s
-# 不设NoNewPrivileges：面板经sudo调用防火墙助手放行入站端口；/etc只读但留/etc/ufw供ufw保存规则
+# 防火墙助手经sudo运行；只开放防火墙持久化目录，其他/etc内容保持只读。
 PrivateTmp=yes
 ProtectSystem=full
 ReadWritePaths=-/etc/ufw
+ReadWritePaths=-/etc/nftables.d
 ProtectHome=yes
 
 [Install]
@@ -846,7 +847,9 @@ write_firewall_helper() {
 set -eu
 PATH='$path'
 export PATH
+umask 077
 RULES='$F_FWRULES'
+NFT_CONFIG='$R/etc/nftables.d/host_hardening.nft'
 EOF
   cat >>"$tmp" <<'EOF'
 usage() { echo "用法：o-ui-firewall allow|delete <1024-65535> tcp|udp；ban|unban <IP> <1024-65535> tcp|udp；flush；redirect add|delete <起始-结束> <端口>；redirect flush / usage: o-ui-firewall allow|delete <1024-65535> tcp|udp; ban|unban <IP> <1024-65535> tcp|udp; flush; redirect add|delete <start-end> <port>; redirect flush" >&2; exit 2; }
@@ -952,8 +955,193 @@ if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -i '^status: 
 elif command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
   backend=firewalld
 else
-  echo "无防火墙，未改动 / no firewall, nothing changed"
-  exit 0
+  backend=''
+fi
+# 原生nftables规则可能与UFW/firewalld并存；必须检查额外的INPUT拦截层。
+if command -v nft >/dev/null 2>&1; then
+  command -v python3 >/dev/null 2>&1 || { echo "检测到nftables，需要python3检查并持久化端口规则，请手动放行 / nftables detected; python3 is required, allow the port manually"; exit 3; }
+  nft_status=0
+  python3 -I - "$action" "$port" "$proto" "$RULES" "$NFT_CONFIG" "$backend" <<'PY' || nft_status=$?
+import fcntl
+import json
+import os
+from pathlib import Path
+import stat
+import subprocess
+import sys
+import tempfile
+import time
+
+action, port, proto, records_path, config_path, backend = sys.argv[1:]
+port = int(port)
+records, config = Path(records_path), Path(config_path)
+marker = f"o-ui inbound {port}/{proto}"
+record = f"nft {port}/{proto}\n"
+line = f'    {proto} dport {port} counter accept comment "{marker}"\n'
+
+def nft(*args, data=None):
+    return subprocess.run(["nft", *args], input=data, text=True, capture_output=True, check=True, timeout=3).stdout
+
+def write_atomic(path, data):
+    info = path.stat() if path.exists() else None
+    mode = stat.S_IMODE(info.st_mode) if info else 0o600
+    fd, name = tempfile.mkstemp(prefix=".o-ui-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w") as stream:
+            os.fchmod(stream.fileno(), mode)
+            if info:
+                os.fchown(stream.fileno(), info.st_uid, info.st_gid)
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(name, path)
+        directory = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        if os.path.exists(name):
+            os.unlink(name)
+
+def allows(rule):
+    matched = False
+    for expr in rule.get("expr", []):
+        if "match" in expr:
+            m = expr["match"]
+            if m.get("op") != "==" or m.get("left") != {"payload": {"protocol": proto, "field": "dport"}}:
+                return False
+            value = m.get("right")
+            def contains(value):
+                if type(value) is int:
+                    return value == port
+                if isinstance(value, dict):
+                    if "set" in value:
+                        return any(contains(v) for v in value["set"])
+                    if "range" in value:
+                        lo, hi = value["range"]
+                        return lo <= port <= hi
+                return False
+            if matched:
+                return False
+            matched = contains(value)
+        elif not any(key in expr for key in ("counter", "accept")):
+            return False
+    return matched and any("accept" in expr for expr in rule.get("expr", []))
+
+def main():
+    entries = json.loads(nft("-j", "list", "ruleset"))["nftables"]
+    chains = [e["chain"] for e in entries if "chain" in e and e["chain"].get("hook") == "input"]
+    rules = [e["rule"] for e in entries if "rule" in e]
+    target = ("inet", "host_hardening", "input")
+    def identity(obj):
+        return obj.get("family"), obj.get("table"), obj.get("chain", obj.get("name"))
+    chain = next((c for c in chains if identity(c) == target), None)
+    for c in chains:
+        managed = (backend == "ufw" and identity(c) in (("ip", "filter", "INPUT"), ("ip6", "filter", "INPUT"))) or (backend == "firewalld" and c.get("table") == "firewalld")
+        if identity(c) == target or managed:
+            continue
+        def blocks(expr):
+            if identity(c) in (("ip", "filter", "INPUT"), ("ip6", "filter", "INPUT")) and expr == {"jump": {"target": "o-ui-iplimit"}}:
+                return False
+            return any(k in expr for k in ("drop", "reject", "jump", "goto", "vmap", "queue"))
+        blocked = c.get("policy") == "drop" or any(
+            identity(r) == identity(c) and any(blocks(x) for x in r.get("expr", [])) for r in rules)
+        if blocked:
+            raise ValueError("检测到尚不支持的nftables INPUT拦截层，请手动放行 / unsupported nftables INPUT filter; allow manually")
+    if chain is None:
+        return 4
+    if chain.get("type") != "filter":
+        raise ValueError("不支持的host_hardening链类型 / unsupported host_hardening chain type")
+    records.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if config.is_symlink() or records.is_symlink() or config.parent.is_symlink() or records.parent.is_symlink():
+        raise ValueError("防火墙路径不能是符号链接 / firewall paths must not be symlinks")
+    lock_fd = os.open(str(records) + ".lock", os.O_CREAT | os.O_APPEND | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(lock_fd, "a") as lock:
+        deadline = time.monotonic() + 3
+        while True:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise ValueError("防火墙正在更新，请重试 / firewall update in progress; retry")
+                time.sleep(0.05)
+        # 获取锁后重新读取运行规则，避免两个保存操作使用同一旧快照。
+        current = json.loads(nft("-j", "list", "chain", *target))["nftables"]
+        live = [e["rule"] for e in current if "rule" in e]
+        invalid = [{"match": {"op": op, "left": {"ct": {"key": "state"}}, "right": "invalid"}} for op in ("==", "in")]
+        for rule in live[:-1]:
+            expr = rule.get("expr", [])
+            verdicts = {k for e in expr for k in e} & {"drop", "reject", "jump", "goto", "vmap", "queue"}
+            if verdicts and not (verdicts == {"drop"} and any(i in expr for i in invalid) and all(set(e) <= {"match", "counter", "drop"} for e in expr)):
+                raise ValueError("最终规则前存在额外拦截，请手动检查 / extra blocking rule precedes final rule; inspect manually")
+        owned = [r for r in live if r.get("comment") == marker]
+        expected_match = {"match": {"op": "==", "left": {"payload": {"protocol": proto, "field": "dport"}}, "right": port}}
+        if any(not allows(r) or [x for x in r.get("expr", []) if "match" in x] != [expected_match] for r in owned):
+            raise ValueError("o-ui规则已被外部修改，请手动检查 / o-ui rule changed externally; inspect manually")
+        previous_records = records.read_text() if records.exists() else ""
+        recorded = record in previous_records.splitlines(keepends=True)
+        if action == "delete" and not recorded:
+            print("不是o-ui添加的nft规则，未改动 / nft rule was not added by o-ui; unchanged")
+            return 0
+        if action == "allow" and not owned and any(allows(r) for r in live):
+            print("已有其他nft规则放行，未接管 / already allowed by another nft rule; unchanged")
+            return 0
+        previous = config.read_text()
+        info = config.stat()
+        if info.st_uid != os.geteuid() or info.st_mode & 0o022:
+            raise ValueError("防火墙文件必须由root管理且不可由其他用户写入 / firewall file must be root-owned and not writable by other users")
+        # 仅支持已核实的单表单链布局，不猜测任意nft脚本或include的插入位置。
+        tail = "    counter drop\n  }\n}\n"
+        if not previous.startswith("table inet host_hardening {\n  chain input {\n") or not previous.endswith(tail) or previous.count("chain ") != 1:
+            raise ValueError("不支持的host_hardening持久化布局，请手动放行 / unsupported persistent firewall layout; allow manually")
+        candidate = "".join(l for l in previous.splitlines(keepends=True) if l != line)
+        candidate_records = "".join(l for l in previous_records.splitlines(keepends=True) if l != record)
+        batch = ""
+        if action == "allow":
+            candidate = candidate[:-len(tail)] + line + tail
+            candidate_records += record
+            if not owned:
+                if not live or not all(any(k in x for k in ("counter", "drop")) for x in live[-1].get("expr", [])) or not any("drop" in x for x in live[-1].get("expr", [])):
+                    raise ValueError("未找到最终drop规则，未改动 / final drop rule missing; unchanged")
+                handle = int(live[-1]["handle"])
+                batch = f'insert rule inet host_hardening input position {handle} {line.strip()}\n'
+        else:
+            batch = "".join(f'delete rule inet host_hardening input handle {int(r["handle"])}\n' for r in owned)
+        # 只校验整份持久化文件，实际应用仅含本端口的事务，不重载/清空现有规则。
+        nft("--check", "--file", "-", data=candidate)
+        if batch:
+            nft("--check", "--file", "-", data=batch)
+        if config.read_text() != previous:
+            raise ValueError("防火墙文件已变化，请重试 / firewall file changed; retry")
+        try:
+            write_atomic(config, candidate)
+            write_atomic(records, candidate_records)
+            if batch:
+                nft("--file", "-", data=batch)
+        except Exception:
+            write_atomic(config, previous)
+            write_atomic(records, previous_records)
+            raise
+        print(f"已{'放行' if action == 'allow' else '撤销'} {port}/{proto}（nft host_hardening，已持久化） / {port}/{proto} nft host_hardening rule persisted")
+    return 0
+
+try:
+    sys.exit(main())
+except ValueError as error:
+    print(str(error))
+    sys.exit(3)
+except (OSError, KeyError, TypeError, subprocess.SubprocessError):
+    print("nftables自动放行或撤销失败，请检查host_hardening布局、权限及python3，必要时手动处理 / nftables update failed; check layout, permissions and python3, or manage manually")
+    sys.exit(3)
+PY
+  case $nft_status in 0|4) ;; *) exit "$nft_status" ;; esac
+fi
+if [ -z "$backend" ]; then
+  [ "${nft_status:-4}" != 0 ] || exit 0
+  echo "未检测到启用的UFW/firewalld或受支持的nftables拦截层；如有其他防火墙请手动放行 / no supported active firewall detected; allow manually in other firewalls"
+  exit 4
 fi
 exists() {
   if [ "$backend" = ufw ]; then
@@ -965,7 +1153,7 @@ exists() {
 umask 077
 mkdir -p "${RULES%/*}"
 touch "$RULES"
-exec 9>>"$RULES"
+exec 9>>"$RULES.lock"
 if command -v flock >/dev/null 2>&1; then flock 9; fi
 record="$backend $rule"
 recorded=''

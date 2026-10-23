@@ -64,6 +64,7 @@ func handler(manager *core.Manager, state *store.Store, dist string, hosts []str
 	registerApplySaved(mux, rt)
 	registerOutboundTraffic(mux, rt)
 	registerFreePort(mux, state)
+	registerFirewall(mux, rt, state)
 	mux.HandleFunc("GET /api/logs", func(w http.ResponseWriter, r *http.Request) {
 		if rt == nil || rt.logs == nil {
 			respond(w, 503, map[string]string{"error": i18n.T("诊断日志尚未启动", "Diagnostics log is not running")})
@@ -251,7 +252,11 @@ func handler(manager *core.Manager, state *store.Store, dist string, hosts []str
 		// 已提交：应用与放行防火墙不随浏览器断开取消（面板经本机代理访问时，保存重启Xray会切断这条连接）。
 		committed := context.WithoutCancel(r.Context())
 		result := rt.saved(committed, doc)
-		result.Firewall = syncFirewall(committed, old.Data, doc.Data)
+		firewall, fwErr := saveFirewallReport(committed, state, old.Data, doc.Data, doc.Revision)
+		result.Firewall = firewall.Message
+		if fwErr != nil {
+			result.Firewall += i18n.T(" 防火墙状态记录失败，请重新核对。", " Failed to record firewall status; check again.")
+		}
 		respond(w, 200, result)
 	})
 	mux.HandleFunc("PUT /api/settings", func(w http.ResponseWriter, r *http.Request) {

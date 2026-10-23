@@ -89,6 +89,37 @@ case "$*" in
 esac`,
   iptables: IPTABLES_STUB,
   ip6tables: IPTABLES_STUB,
+  nft: `exec python3 - "$@" <<'PY'
+import json, os, pathlib, re, sys
+s = pathlib.Path(os.environ['FAKE_STATE'])
+args = sys.argv[1:]
+with open(s / 'calls.log', 'a') as f: f.write('nft ' + ' '.join(args) + '\\n')
+path = s / 'nft.json'
+data = json.loads(path.read_text()) if path.exists() else {'nftables': []}
+if args[:2] == ['-j', 'list']:
+    result = data
+    if args[2] == 'chain':
+        family, table, chain = args[3:]
+        result = {'nftables': [e for e in data['nftables'] if any(v.get('family') == family and v.get('table') == table and v.get('chain', v.get('name')) == chain for v in e.values())]}
+    print(json.dumps(result)); sys.exit(0)
+# stdin供命令文档占用，事务内容由shell包装转交临时文件。
+text = pathlib.Path(os.environ['NFT_INPUT']).read_text()
+if '--check' in args:
+    sys.exit(1 if os.environ.get('FAKE_NFT_FAIL') == 'check' else 0)
+if os.environ.get('FAKE_NFT_FAIL') == 'apply': sys.exit(1)
+for line in text.splitlines():
+    m = re.fullmatch(r'insert rule inet host_hardening input position ([0-9]+) (tcp|udp) dport ([0-9]+) counter accept comment "([^"]+)"', line)
+    if m:
+        handle, proto, port, comment = m.groups()
+        new = {'rule': {'family': 'inet', 'table': 'host_hardening', 'chain': 'input', 'handle': max(e.get('rule', {}).get('handle', 0) for e in data['nftables']) + 1, 'comment': comment, 'expr': [{'match': {'op': '==', 'left': {'payload': {'protocol': proto, 'field': 'dport'}}, 'right': int(port)}}, {'counter': {'packets': 0, 'bytes': 0}}, {'accept': None}]}}
+        pos = next(i for i,e in enumerate(data['nftables']) if e.get('rule', {}).get('handle') == int(handle))
+        data['nftables'].insert(pos, new)
+    else:
+        m = re.fullmatch(r'delete rule inet host_hardening input handle ([0-9]+)', line)
+        if not m: sys.exit(2)
+        data['nftables'] = [e for e in data['nftables'] if e.get('rule', {}).get('handle') != int(m.group(1))]
+path.write_text(json.dumps(data))
+PY`,
   sudo: `echo "sudo $*" >>"$FAKE_STATE/calls.log"`,
   visudo: `echo "visudo $*" >>"$FAKE_STATE/calls.log"
 [ -z "\${FAKE_VISUDO_FAIL:-}" ] && grep -qx 'o-ui ALL=(root) NOPASSWD: /usr/local/libexec/o-ui-firewall, /usr/local/libexec/o-ui-update ""' "$2"`,
@@ -199,6 +230,8 @@ async function sandbox(options: { acme?: boolean } = {}) {
   const base = await mkdtemp(join(tmpdir(), 'o-ui-install-')), root = join(base, 'root'), bin = join(base, 'stub-bin'), state = join(base, 'state'), downloads = join(base, 'downloads');
   for (const dir of [bin, state, downloads, join(root, 'run/systemd/system'), join(root, 'proc/sys/net/core'), join(root, 'proc/sys/net/ipv4'), join(root, 'etc/sysctl.d')]) await mkdir(dir, { recursive: true });
   for (const [name, body] of Object.entries(stubs)) await writeFile(join(bin, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+  // nft同时需要读取stdin事务和内嵌Python脚本，先转存事务到独立临时文件。
+  await writeFile(join(bin, 'nft'), `#!/bin/sh\nNFT_INPUT=$(mktemp "$FAKE_STATE/nft-input.XXXXXX")\nexport NFT_INPUT\ncase "$*" in *'--file -'*) cat >"$NFT_INPUT" ;; esac\n${stubs.nft}\n`, { mode: 0o755 });
   await writeFile(join(root, 'proc/sys/net/core/default_qdisc'), 'pfifo_fast\n');
   await writeFile(join(root, 'proc/sys/net/ipv4/tcp_congestion_control'), 'cubic\n');
   await writeFile(join(root, 'proc/sys/net/ipv4/tcp_available_congestion_control'), 'reno cubic bbr\n');
@@ -747,6 +780,112 @@ test('防火墙助手端口跳跃：严格校验，nat表独立链挂在PREROUTI
   assert.equal(await box.log('iptables-nat-rules'), 'PREROUTING -j o-ui-hop\n', '卸载时清空端口跳跃转发');
 });
 
+const hostFirewall = 'table inet host_hardening {\n  chain input {\n    type filter hook input priority -50; policy drop;\n    iif "lo" accept\n    ct state established,related accept\n    ct state invalid drop\n    tcp dport 5522 accept\n    udp dport 443 accept\n    counter drop\n  }\n}\n';
+
+async function nftSandbox() {
+  const box = await sandbox();
+  const result = box.run(['install', '--package', box.pkg], ['1', '23456', '', 'admin-test', '', '1', 'example.com', '1', '', '1', 'n']);
+  assert.equal(result.status, 0, result.out);
+  await mkdir(join(box.root, 'etc/nftables.d'), { recursive: true });
+  await writeFile(join(box.root, 'etc/nftables.d/host_hardening.nft'), hostFirewall, { mode: 0o640 });
+  const initial = { nftables: [
+    { chain: { family: 'inet', table: 'host_hardening', name: 'input', type: 'filter', hook: 'input', prio: -50, policy: 'drop' } },
+    { rule: { family: 'inet', table: 'host_hardening', chain: 'input', handle: 16, expr: [{ match: { op: 'in', left: { ct: { key: 'state' } }, right: 'invalid' } }, { drop: null }] } },
+    { rule: { family: 'inet', table: 'host_hardening', chain: 'input', handle: 18, expr: [{ counter: { packets: 10, bytes: 100 } }, { drop: null }] } },
+  ] };
+  await writeFile(join(box.state, 'nft.json'), JSON.stringify(initial));
+  return { ...box, initial };
+}
+
+test('nft host_hardening：持久放行、重复保存、运行规则丢失后恢复及仅撤销自身规则', async () => {
+  const box = await nftSandbox();
+  const unit = await box.read('etc/systemd/system/o-ui.service');
+  assert.match(unit, /^ReadWritePaths=-\/etc\/nftables.d$/m);
+  for (const proto of ['udp', 'tcp']) {
+    const result = box.helper(['allow', '50574', proto]);
+    assert.equal(result.status, 0, result.out);
+    assert.match(result.out, /nft host_hardening，已持久化/);
+    assert.equal(box.helper(['allow', '50574', proto]).status, 0);
+  }
+  assert.equal(await box.read('var/lib/o-ui-firewall/rules'), 'nft 50574/udp\nnft 50574/tcp\n');
+  assert.equal((await stat(join(box.root, 'var/lib/o-ui-firewall/rules'))).mode & 0o777, 0o600);
+  assert.equal((await stat(join(box.root, 'etc/nftables.d/host_hardening.nft'))).mode & 0o777, 0o640);
+  assert.equal((JSON.parse(await box.log('nft.json')).nftables.filter((e: any) => e.rule?.comment).length), 2);
+  await writeFile(join(box.state, 'nft.json'), JSON.stringify(box.initial));
+  assert.equal(box.helper(['allow', '50574', 'udp']).status, 0, '运行规则丢失时按持久配置重建');
+  assert.equal(box.helper(['allow', '50574', 'tcp']).status, 0);
+  assert.equal(box.helper(['delete', '50574', 'udp']).status, 0);
+  assert.equal(box.helper(['delete', '50574', 'udp']).status, 0);
+  assert.equal(box.helper(['delete', '50574', 'tcp']).status, 0);
+  assert.equal(await box.read('etc/nftables.d/host_hardening.nft'), hostFirewall);
+  assert.equal(await box.read('var/lib/o-ui-firewall/rules'), '');
+  assert.deepEqual(JSON.parse(await box.log('nft.json')), box.initial, '原有drop及其计数不变');
+  assert.doesNotMatch(await box.log('calls.log'), /nft (flush|delete table|--file \/etc)/);
+});
+
+test('nft自动放行：预检或提交失败时保留原文件，未知拦截层和不支持布局明确报错', async () => {
+  const box = await nftSandbox();
+  for (const fail of ['check', 'apply']) {
+    const result = box.helper(['allow', '50574', 'udp'], { FAKE_NFT_FAIL: fail });
+    assert.equal(result.status, 3, result.out);
+    assert.equal(await box.read('etc/nftables.d/host_hardening.nft'), hostFirewall);
+    assert.deepEqual(JSON.parse(await box.log('nft.json')), box.initial);
+    if (existsSync(join(box.root, 'var/lib/o-ui-firewall/rules'))) assert.equal(await box.read('var/lib/o-ui-firewall/rules'), '');
+  }
+  const unknown = structuredClone(box.initial);
+  unknown.nftables.push({ chain: { family: 'inet', table: 'other', name: 'input', type: 'filter', hook: 'input', prio: 10, policy: 'drop' } });
+  await writeFile(join(box.state, 'nft.json'), JSON.stringify(unknown));
+  const blocked = box.helper(['allow', '50574', 'udp']);
+  assert.equal(blocked.status, 3); assert.match(blocked.out, /尚不支持的nftables INPUT拦截层/);
+  await writeFile(join(box.state, 'nft.json'), JSON.stringify(box.initial));
+  await writeFile(join(box.root, 'etc/nftables.d/host_hardening.nft'), hostFirewall.replace('counter drop', 'reject'));
+  const layout = box.helper(['allow', '50574', 'udp']);
+  assert.equal(layout.status, 3); assert.match(layout.out, /不支持的host_hardening持久化布局/);
+});
+
+test('nft与UFW同时存在须均放行，已有外部规则不接管、不删除', async () => {
+  const box = await nftSandbox();
+  const result = box.helper(['allow', '50574', 'udp'], { FAKE_UFW: '1' });
+  assert.equal(result.status, 0, result.out);
+  assert.equal(await box.read('var/lib/o-ui-firewall/rules'), 'nft 50574/udp\nufw 50574/udp\n');
+  assert.match(await box.log('ufw-rules'), /50574\/udp ALLOW/);
+  assert.equal(box.helper(['delete', '50574', 'udp'], { FAKE_UFW: '1' }).status, 0);
+  const external = structuredClone(box.initial) as { nftables: any[] };
+  external.nftables.splice(1, 0, { rule: { family: 'inet', table: 'host_hardening', chain: 'input', handle: 17, expr: [{ match: { op: '==', left: { payload: { protocol: 'udp', field: 'dport' } }, right: { set: [50574, { range: [51000, 51999] }] } } }, { accept: null }] } });
+  await writeFile(join(box.state, 'nft.json'), JSON.stringify(external));
+  assert.match(box.helper(['allow', '50574', 'udp']).out, /已有其他nft规则放行/);
+  assert.match(box.helper(['delete', '50574', 'udp']).out, /不是o-ui添加/);
+  assert.deepEqual(JSON.parse(await box.log('nft.json')), external);
+  assert.equal(await box.read('etc/nftables.d/host_hardening.nft'), hostFirewall);
+});
+
+test('nft安全边界：拒绝提前阻断、跳转、外部改写的自有规则与可写配置', async () => {
+  const box = await nftSandbox();
+  const limit = structuredClone(box.initial) as { nftables: any[] };
+  limit.nftables.push({ chain: { family: 'ip', table: 'filter', name: 'INPUT', type: 'filter', hook: 'input', policy: 'accept' } }, { rule: { family: 'ip', table: 'filter', chain: 'INPUT', expr: [{ jump: { target: 'o-ui-iplimit' } }] } });
+  await writeFile(join(box.state, 'nft.json'), JSON.stringify(limit));
+  assert.equal(box.helper(['allow', '50575', 'udp']).status, 0, '兼容助手自身IP上限链');
+  assert.equal(box.helper(['delete', '50575', 'udp']).status, 0);
+  for (const expr of [[{ jump: { target: 'other' } }], [{ match: { op: '==', left: { payload: { protocol: 'udp', field: 'dport' } }, right: 50574 } }, { drop: null }]]) {
+    const changed = structuredClone(box.initial) as { nftables: any[] };
+    changed.nftables.splice(1, 0, { rule: { family: 'inet', table: 'host_hardening', chain: 'input', handle: 17, expr } });
+    await writeFile(join(box.state, 'nft.json'), JSON.stringify(changed));
+    const result = box.helper(['allow', '50574', 'udp']);
+    assert.equal(result.status, 3, result.out); assert.match(result.out, /额外拦截/);
+    assert.equal(await box.read('etc/nftables.d/host_hardening.nft'), hostFirewall);
+  }
+  await writeFile(join(box.state, 'nft.json'), JSON.stringify(box.initial));
+  await chmod(join(box.root, 'etc/nftables.d/host_hardening.nft'), 0o666);
+  assert.equal(box.helper(['allow', '50574', 'udp']).status, 3);
+  await chmod(join(box.root, 'etc/nftables.d/host_hardening.nft'), 0o640);
+  assert.equal(box.helper(['allow', '50574', 'udp']).status, 0);
+  const changed = JSON.parse(await box.log('nft.json'));
+  changed.nftables.find((entry: any) => entry.rule?.comment).rule.expr[0].match.right = 50575;
+  await writeFile(join(box.state, 'nft.json'), JSON.stringify(changed));
+  assert.equal(box.helper(['delete', '50574', 'udp']).status, 3);
+  assert.deepEqual(JSON.parse(await box.log('nft.json')), changed, '不能删除已被外部改写的标记规则');
+});
+
 test('防火墙助手：严格校验参数，只撤销自己加过的规则，ufw与firewalld及无防火墙', async () => {
   const box = await sandbox();
   assert.equal(box.run(['install', '--package', box.pkg], [...start(), ...acme(), 'n']).status, 0);
@@ -757,7 +896,7 @@ test('防火墙助手：严格校验参数，只撤销自己加过的规则，uf
   }
   assert.doesNotMatch(await box.log('calls.log'), /^ufw (allow|delete) [^2]/m);
   const none = box.helper(['allow', '50000', 'udp']);
-  assert.equal(none.status, 0); assert.match(none.out, /^无防火墙，未改动 \/ no firewall, nothing changed\n$/);
+  assert.equal(none.status, 4); assert.match(none.out, /未检测到启用的UFW\/firewalld或受支持的nftables拦截层/);
   // ufw：已有的他人规则（如x-ui的52890）不记录、不删除；自己加的只加一次，撤销后清除记录
   await writeFile(join(box.state, 'ufw-rules'), '52890/tcp ALLOW Anywhere\n');
   const env = { FAKE_UFW: '1' };

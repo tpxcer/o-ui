@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"independent-panel/internal/i18n"
+	"independent-panel/internal/store"
+	"net/http"
 	"os"
 	"os/exec"
 	"sort"
@@ -124,6 +126,23 @@ func inboundEndpoints(data json.RawMessage) map[string]bool {
 
 // syncFirewall为新增端口放行、为已删除端口撤销（参照OUI），返回给页面显示的结果；失败不影响已保存的配置。
 func syncFirewall(ctx context.Context, before, after json.RawMessage) string {
+	return syncFirewallReport(ctx, before, after).Message
+}
+
+type firewallEndpoint struct {
+	State     string `json:"state"`
+	Message   string `json:"message"`
+	CheckedAt string `json:"checkedAt"`
+}
+
+type firewallReport struct {
+	Revision  int64                       `json:"workspaceRevision"`
+	Endpoints map[string]firewallEndpoint `json:"endpoints"`
+	Message   string                      `json:"message,omitempty"`
+}
+
+func syncFirewallReport(ctx context.Context, before, after json.RawMessage) firewallReport {
+	report := firewallReport{Endpoints: map[string]firewallEndpoint{}}
 	old, next := inboundEndpoints(before), inboundEndpoints(after)
 	var results, manual []string
 	keys := make([]string, 0, len(old)+len(next))
@@ -146,6 +165,21 @@ func syncFirewall(ctx context.Context, before, after json.RawMessage) string {
 			action = "delete"
 		}
 		text, err := runFirewall(ctx, action, port, protocol)
+		status := firewallEndpoint{State: "allowed", Message: text, CheckedAt: time.Now().UTC().Format(time.RFC3339)}
+		if action == "delete" {
+			status.State = "removed"
+		}
+		if err != nil {
+			status.State = "failed"
+			var exit *exec.ExitError
+			if errors.As(err, &exit) && exit.ExitCode() == 4 {
+				status.State = "unverified"
+			}
+		}
+		if strings.Contains(text, "no firewall, nothing changed") {
+			status.State = "unverified"
+		}
+		report.Endpoints[key] = status
 		switch {
 		case err == nil && text != "":
 			results = append(results, text)
@@ -153,6 +187,8 @@ func syncFirewall(ctx context.Context, before, after json.RawMessage) string {
 			results = append(results, key)
 		case action == "allow":
 			manual = append(manual, key)
+		case err != nil:
+			results = append(results, i18n.T("未能撤销旧端口：", "Could not remove the old port: ")+key)
 		}
 	}
 	if len(manual) > 0 {
@@ -177,6 +213,9 @@ func syncFirewall(ctx context.Context, before, after json.RawMessage) string {
 		for _, key := range keys {
 			hop, port, _ := strings.Cut(key, " ")
 			text, err := runPortHopping(ctx, action, hop, port)
+			if err != nil {
+				report.Endpoints[port+"/udp"] = firewallEndpoint{State: "failed", Message: i18n.T("端口跳跃转发操作失败：", "Port hopping update failed: ") + hop + "→" + port, CheckedAt: time.Now().UTC().Format(time.RFC3339)}
+			}
 			switch {
 			case err == nil && text != "":
 				results = append(results, text)
@@ -193,5 +232,78 @@ func syncFirewall(ctx context.Context, before, after json.RawMessage) string {
 		}
 		results = append(results, i18n.T("未能设置端口跳跃转发：", "Could not set up port hopping: ")+strings.Join(hopFailed, ", ")+reason)
 	}
-	return strings.Join(results, "; ")
+	report.Message = strings.Join(results, "; ")
+	return report
+}
+
+// 保存结果独立于业务草稿，刷新页面仍能看到上次放行失败；不把记录当作公网连通性检查。
+func saveFirewallReport(ctx context.Context, state *store.Store, before, after json.RawMessage, revision int64) (firewallReport, error) {
+	old, err := state.ReadDocument(ctx, "firewall-status")
+	if err != nil {
+		return firewallReport{}, err
+	}
+	report := syncFirewallReport(ctx, before, after)
+	var previous firewallReport
+	_ = json.Unmarshal(old.Data, &previous)
+	for key, status := range previous.Endpoints {
+		if _, changed := report.Endpoints[key]; !changed {
+			report.Endpoints[key] = status
+		}
+	}
+	for key, status := range report.Endpoints {
+		if status.State == "removed" {
+			delete(report.Endpoints, key)
+		}
+	}
+	report.Revision = revision
+	data, err := json.Marshal(report)
+	if err == nil {
+		_, err = state.SaveDocument(ctx, "firewall-status", old.Revision, data)
+	}
+	return report, err
+}
+
+func registerFirewall(mux *http.ServeMux, rt *Runtime, state *store.Store) {
+	mux.HandleFunc("GET /api/runtime/firewall", func(w http.ResponseWriter, r *http.Request) {
+		doc, err := state.ReadDocument(r.Context(), "firewall-status")
+		if err != nil {
+			respond(w, 500, map[string]string{"error": i18n.T("读取防火墙状态失败", "Failed to read firewall status")})
+			return
+		}
+		respond(w, 200, doc)
+	})
+	mux.HandleFunc("POST /api/runtime/firewall/retry", func(w http.ResponseWriter, r *http.Request) {
+		if rt == nil {
+			respond(w, 503, map[string]string{"error": i18n.T("核心运行控制未启用", "Core runtime control is not enabled")})
+			return
+		}
+		var request struct {
+			InboundID string `json:"inboundId"`
+		}
+		if !readJSON(w, r, &request, 256) {
+			return
+		}
+		rt.mu.Lock()
+		defer rt.mu.Unlock()
+		doc, err := state.ReadDocument(r.Context(), "workspace")
+		var draft workspaceDraft
+		if err != nil || json.Unmarshal(doc.Data, &draft) != nil {
+			respond(w, 500, map[string]string{"error": i18n.T("读取入站草稿失败", "Failed to read inbound draft")})
+			return
+		}
+		for _, inbound := range draft.Inbounds {
+			if inbound.ID != request.InboundID {
+				continue
+			}
+			single, _ := json.Marshal(workspaceDraft{Inbounds: []inboundDraft{inbound}})
+			report, err := saveFirewallReport(context.WithoutCancel(r.Context()), state, nil, single, doc.Revision)
+			if err != nil {
+				respond(w, 500, map[string]string{"error": i18n.T("防火墙状态保存失败，请重新核对", "Failed to save firewall status; check again")})
+				return
+			}
+			respond(w, 200, report)
+			return
+		}
+		respond(w, 404, map[string]string{"error": i18n.T("入站不存在", "Inbound does not exist")})
+	})
 }
