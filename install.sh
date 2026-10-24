@@ -42,8 +42,8 @@ F_SYSCTL=$R/etc/sysctl.d/99-o-ui-bbr.conf
 F_MODULES=$R/etc/modules-load.d/o-ui-bbr.conf
 F_PROC=$R/proc
 
-CONF_KEYS='OUI_LANG OUI_PORT OUI_PATH OUI_MODE OUI_HOST OUI_CHALLENGE OUI_RENEW OUI_VERSION OUI_FW OUI_BBR_PREV_QDISC OUI_BBR_PREV_CC OUI_BBR_MODULE'
-OUI_LANG= OUI_PORT= OUI_PATH= OUI_MODE= OUI_HOST= OUI_CHALLENGE= OUI_RENEW= OUI_VERSION= OUI_FW= OUI_BBR_PREV_QDISC= OUI_BBR_PREV_CC= OUI_BBR_MODULE=
+CONF_KEYS='OUI_LANG OUI_PORT OUI_PATH OUI_MODE OUI_HOST OUI_CHALLENGE OUI_HTTP_SERVICE OUI_RENEW OUI_VERSION OUI_FW OUI_BBR_PREV_QDISC OUI_BBR_PREV_CC OUI_BBR_MODULE'
+OUI_LANG= OUI_PORT= OUI_PATH= OUI_MODE= OUI_HOST= OUI_CHALLENGE= OUI_HTTP_SERVICE= OUI_RENEW= OUI_VERSION= OUI_FW= OUI_BBR_PREV_QDISC= OUI_BBR_PREV_CC= OUI_BBR_MODULE=
 WORK=
 PKG_DIR=
 OPT_PACKAGE=
@@ -369,7 +369,9 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=$P_ACME/acme.sh --cron --home $P_ACME --config-home $P_ACME/data --cert-home $P_ACME/certs
+ExecStart=$P_CMD cert-cron
+ExecStopPost=$P_CMD cert-http-resume
+TimeoutStartSec=30min
 EOF
   cat >"$F_UNITS/o-ui-cert-renew.timer" <<EOF
 [Unit]
@@ -472,6 +474,113 @@ acme() {
   "$F_ACME/acme.sh" --home "$F_ACME" --config-home "$F_ACME/data" --cert-home "$F_ACME/certs" "$@"
 }
 
+http_service_allowed() {
+  case $1 in nginx.service|apache2.service|httpd.service|caddy.service) return 0 ;; *) return 1 ;; esac
+}
+
+# 所有监听PID必须能归属同一个允许的systemd网站服务；无监听返回空，不能识别返回失败。
+http_listener_service() {
+  local listeners line pids pid unit found='' triggered
+  command -v ss >/dev/null 2>&1 || return 1
+  listeners=$(ss -H -lntp 'sport = :80' 2>/dev/null) || return 1
+  [ -n "$listeners" ] || return 0
+  while IFS= read -r line; do
+    pids=$(printf '%s\n' "$line" | grep -oE 'pid=[0-9]+' | cut -d= -f2) || return 1
+    [ -n "$pids" ] || return 1
+    for pid in $pids; do
+      unit=$(awk -F: '$3 ~ /^\/system.slice\/(nginx|apache2|httpd|caddy)\.service(\/|$)/ {split($3,a,"/"); print a[3]}' "$F_PROC/$pid/cgroup" 2>/dev/null | sort -u) || return 1
+      http_service_allowed "$unit" || return 1
+      [ -z "$found" ] || [ "$found" = "$unit" ] || return 1
+      found=$unit
+    done
+  done <<<"$listeners"
+  [ "$(systemctl show "$found" -p ControlGroup --value)" = "/system.slice/$found" ] || return 1
+  triggered=$(systemctl show "$found" -p TriggeredBy --value) || return 1
+  [ -z "$triggered" ] && systemctl is-active --quiet "$found" || return 1
+  printf '%s' "$found"
+}
+
+http_resume() {
+  local unit
+  [ -e "$F_ACME/http-paused" ] || return 0
+  [ -f "$F_ACME/http-paused" ] && [ ! -L "$F_ACME/http-paused" ] || return 1
+  unit=$(cat "$F_ACME/http-paused")
+  http_service_allowed "$unit" || return 1
+  if systemctl start "$unit" && systemctl is-active --quiet "$unit"; then
+    rm -f "$F_ACME/http-paused" || return 1
+    info "已恢复网站服务：$unit" "Website service restored: $unit"
+  else
+    warn "网站服务 $unit 恢复失败！请立即检查 systemctl status ${unit}；恢复记录已保留" "FAILED to restore website service $unit! Inspect systemctl status $unit immediately; recovery record retained"
+    return 1
+  fi
+}
+
+cmd_cert_http_stop() {
+  need_root
+  [ "${O_UI_HTTP_GUARD:-}" = 1 ] || die "请通过o-ui证书命令运行，拒绝单独临停网站" "run through an o-ui certificate command; refusing an unguarded website stop"
+  [ "${1-}" = http ] && [ "${O_UI_HTTP_CHALLENGE:-}" = http ] || return 0
+  local unit i listeners
+  unit=$(http_listener_service) || { warn "80端口归属无法安全确认，不停止任何服务；请用DNS验证" "cannot safely identify port 80 ownership; no service stopped; use DNS validation"; return 1; }
+  [ -n "$unit" ] || return 0
+  [ "$unit" = "${O_UI_HTTP_SERVICE:-}" ] && http_service_allowed "$unit" || {
+    warn "80端口被未授权的服务占用，不能自动停止；请重新配置证书或使用DNS验证" "port 80 is held by an unauthorized service; reconfigure the certificate or use DNS validation"; return 1; }
+  # 先记录再停，即使stop部分失败，退出兜底仍会尝试恢复。
+  (umask 077; printf '%s\n' "$unit" >"$F_ACME/http-paused") || return 1
+  info "临时停止网站服务：${unit}（申请结束后恢复）" "Temporarily stopping website service: $unit (restored after validation)"
+  systemctl stop "$unit" || return 1
+  for ((i=0; i<10; i++)); do
+    listeners=$(ss -H -lntp 'sport = :80' 2>/dev/null) || return 1
+    if [ -z "$listeners" ] && ! systemctl is-active --quiet "$unit"; then return 0; fi
+    sleep 1
+  done
+  warn "80端口未成功释放，停止申请并恢复网站" "port 80 was not released; aborting issuance and restoring the website"
+  return 1
+}
+
+cmd_cert_http_resume() {
+  need_root
+  [ -d "$F_ACME" ] || return 0
+  if [ "${O_UI_HTTP_GUARD:-}" = 1 ]; then http_resume; return; fi
+  # systemd清理或管理员救援也须排除仍在进行的签发。
+  (need_cmd flock; exec 9>"$F_ACME/operation.lock"; flock -n 9 || exit 1; http_resume)
+}
+
+acme_guard_worker() {
+  umask 077
+  need_cmd flock setsid
+  mkdir -p "$F_ACME"
+  chmod 0700 "$F_ACME"
+  exec 9>"$F_ACME/operation.lock"
+  flock -n 9 || die "另一项证书操作正在运行，请稍后重试" "another certificate operation is running; retry later"
+  http_resume || exit 1
+  export O_UI_HTTP_GUARD=1 O_UI_HTTP_SERVICE="$OUI_HTTP_SERVICE" O_UI_HTTP_CHALLENGE="$OUI_CHALLENGE"
+  local child='' rc i
+  trap 'rc=$?; trap - EXIT; http_resume || rc=1; exit "$rc"' EXIT
+  trap '
+    trap "" HUP INT TERM
+    if [ -n "$child" ]; then
+      kill -TERM -- "-$child" 2>/dev/null || true
+      for ((i=0; i<10; i++)); do kill -0 "$child" 2>/dev/null || break; sleep 1; done
+      kill -KILL -- "-$child" 2>/dev/null || true
+      wait "$child" 2>/dev/null || true
+    fi
+    exit 130
+  ' HUP INT TERM
+  setsid "$F_ACME/acme.sh" --home "$F_ACME" --config-home "$F_ACME/data" --cert-home "$F_ACME/certs" "$@" &
+  child=$!
+  if wait "$child"; then exit 0; else exit $?; fi
+}
+
+acme_guarded() {
+  local worker rc
+  acme_guard_worker "$@" &
+  worker=$!
+  trap 'trap "" HUP INT TERM; kill -TERM "$worker" 2>/dev/null || true; wait "$worker" 2>/dev/null || true; exit 130' HUP INT TERM
+  if wait "$worker"; then rc=0; else rc=$?; fi
+  trap - HUP INT TERM
+  return "$rc"
+}
+
 # 安装固定版本acme.sh到独立目录，不影响系统已有acme.sh及其cron
 acme_ensure() {
   local tgz src
@@ -555,9 +664,10 @@ cert_end() { { openssl x509 -in "$1" -noout -enddate 2>/dev/null || true; } | se
 # 证书统一由ACME申请并自动续期；不扫描或导入外部证书。
 CERT_EMAIL= CERT_CF_TOKEN= CERT_CF_ZONE= CERT_FORCE= CERT_PREVIOUS=
 ask_access() {
-  local n host
+  local n host unit
   info "面板证书：ACME / Let's Encrypt，自动申请并续期。" "Panel certificate: ACME / Let's Encrypt, automatically issued and renewed."
   OUI_MODE=acme OUI_RENEW=timer
+  OUI_HTTP_SERVICE=
   while :; do
     ask host "面板域名或公网IP（证书将签发给它）" "Panel domain or public IP (the certificate is issued for it)" "$OUI_HOST"
     host=$(printf '%s' "$host" | tr 'A-Z' 'a-z')
@@ -576,10 +686,21 @@ ask_access() {
     OUI_CHALLENGE=http
     if [ "$n" = 2 ]; then OUI_CHALLENGE=cf; fi
   fi
-  if [ "$OUI_CHALLENGE" = http ] && port_in_use 80; then
-    warn "80端口已被占用，HTTP-01无法使用；请改用域名与Cloudflare DNS验证，不会停止现有服务" "port 80 is in use; use a domain with Cloudflare DNS validation instead; existing services will not be stopped"
-    ask_access
-    return 0
+  if [ "$OUI_CHALLENGE" = http ]; then
+    if ! unit=$(http_listener_service); then
+      warn "80端口已被占用，HTTP-01无法使用或无法安全识别监听者；请改用DNS验证，不停止Docker或未知服务" "port 80 is occupied or ownership cannot be safely identified; use DNS validation; Docker and unknown services are not stopped"
+      ask_access
+      return 0
+    fi
+    if [ -n "$unit" ]; then
+      warn "80端口由 $unit 占用；临停整个服务也会中断它承载的HTTPS网站。申请失败或可捕获中断也会尝试恢复；强杀或断电不能保证恢复。不会修改网站配置、开机状态或防火墙" "port 80 is held by $unit; stopping the whole service also interrupts its HTTPS websites. Restoration is attempted on failure or catchable interruption; SIGKILL or power loss cannot guarantee restoration. Website configuration, enablement and firewall are unchanged"
+      if ask_yes "授权申请及今后真正续期时临停 $unit，并在结束后恢复？" "Authorize temporarily stopping $unit during issuance and future due renewals, then restoring it?" n; then
+        OUI_HTTP_SERVICE=$unit
+      else
+        ask_access
+        return 0
+      fi
+    fi
   fi
   if [ "$OUI_CHALLENGE" = cf ]; then
     while [ -z "$CERT_CF_TOKEN" ]; do
@@ -601,6 +722,7 @@ obtain_cert() {
       warn "HTTP-01需要socat或python3" "HTTP-01 needs socat or python3"; return 1; }
   fi
   acme_ensure
+  ensure_tool flock util-linux && ensure_tool setsid util-linux || return 1
   local rc args
   args=(--issue --server letsencrypt -d "$OUI_HOST" --keylength ec-256)
   [ -z "$CERT_FORCE" ] || args+=(--force)
@@ -608,16 +730,14 @@ obtain_cert() {
   if [ "$OUI_CHALLENGE" = cf ]; then args+=(--dns dns_cf); else args+=(--standalone); fi
   is_ipv6 "$OUI_HOST" && args+=(--listen-v6)
   is_ip "$OUI_HOST" && args+=(--cert-profile shortlived --days 3)
+  args+=(--pre-hook "$F_CMD cert-http-stop $OUI_CHALLENGE" --post-hook "$F_CMD cert-http-resume")
   info "正在申请证书（$OUI_HOST）…" "Requesting certificate ($OUI_HOST)…"
   set +e
-  (
-    umask 077
-    if [ "$OUI_CHALLENGE" = cf ]; then
-      export CF_Token="$CERT_CF_TOKEN"
-      [ -z "$CERT_CF_ZONE" ] || export CF_Zone_ID="$CERT_CF_ZONE"
-    fi
-    acme "${args[@]}"
-  )
+  if [ "$OUI_CHALLENGE" = cf ]; then
+    CF_Token="$CERT_CF_TOKEN" CF_Zone_ID="$CERT_CF_ZONE" acme_guarded "${args[@]}"
+  else
+    acme_guarded "${args[@]}"
+  fi
   rc=$?
   set -e
   # acme.sh返回2表示证书仍有效、无需重新签发
@@ -1408,13 +1528,14 @@ cmd_install() {
   conf_save
   # 证书失败不开放HTTP：可重新选择；放弃时面板只听127.0.0.1，之后在菜单“证书管理”配置
   while ! obtain_cert || ! cert_promote || ! panel_enable_https; do
+    [ ! -e "$F_ACME/http-paused" ] || die "网站服务尚未恢复，已停止安装；请立即运行 o-ui cert-http-resume 并检查网站" "website service has not been restored; installation stopped; run o-ui cert-http-resume immediately and inspect the website"
     [ "$OUI_MODE" != acme ] || acme_forget "$OUI_HOST"
     if ask_yes "HTTPS证书未配置成功，是否重新填写域名或验证方式并重试？" "The HTTPS certificate was not set up; enter a domain or validation method and retry?" y; then
       ask_access
       continue
     fi
     warn "面板暂以仅本机（127.0.0.1）启动，不开放公网；之后运行 o-ui 在“证书管理”配置证书" "the panel starts local-only (127.0.0.1) with nothing exposed; run o-ui and set up the certificate under Certificates"
-    OUI_MODE=local OUI_CHALLENGE= OUI_RENEW=
+    OUI_MODE=local OUI_CHALLENGE= OUI_HTTP_SERVICE= OUI_RENEW=
     panel_local_only >/dev/null || warn "未能写入仅本机访问设置" "could not write the local-only access settings"
     break
   done
@@ -1471,6 +1592,7 @@ cmd_update() {
   fi
   OUI_VERSION=$new
   conf_save
+  [ "$OUI_RENEW" != timer ] || renew_timer_enable
   info "已更新到 $new；上一版本保留在 ${F_INSTALL#$R}.prev。" "Updated to $new; the previous version is kept in ${F_INSTALL#$R}.prev."
 }
 
@@ -1515,7 +1637,7 @@ cmd_cert() {
       shift
       local rc
       set +e
-      acme --renew -d "$OUI_HOST" --ecc "$@"
+      acme_guarded --renew -d "$OUI_HOST" --ecc "$@"
       rc=$?
       set -e
       [ $rc -ne 2 ] || { info "证书尚未到续期时间；强制续期请加 --force" "The certificate is not due yet; add --force to renew now"; return 0; }
@@ -1530,8 +1652,13 @@ cmd_cert() {
   if [ -n "$CERT_FORCE" ]; then
     ask_yes "强制重新申请会消耗CA签发配额，频繁执行可能被限流；成功后自动写入面板、启用HTTPS并重启。继续？" "Forced reissue consumes CA issuance quota and may hit rate limits; success automatically installs the certificate, enables HTTPS and restarts the panel. Continue?" n || return 0
   fi
-  local old_mode=$OUI_MODE old_host=$OUI_HOST old_challenge=$OUI_CHALLENGE old_renew=$OUI_RENEW
+  local old_mode=$OUI_MODE old_host=$OUI_HOST old_challenge=$OUI_CHALLENGE old_renew=$OUI_RENEW old_http_service=$OUI_HTTP_SERVICE
   ask_access
+  if [ "$old_mode" = acme ] && [ "$old_host" = "$OUI_HOST" ] && [ -z "$CERT_FORCE" ] &&
+     { [ "$old_challenge" != "$OUI_CHALLENGE" ] || [ "$old_http_service" != "$OUI_HTTP_SERVICE" ]; }; then
+    ask_yes "验证方式或临停授权已变化，需要强制重新签发才能写入续期配置（消耗CA配额）。继续？" "Validation or stop authorization changed; forced reissue is needed to save renewal settings (consumes CA quota). Continue?" n || return 0
+    CERT_FORCE=1
+  fi
   obtain_cert || die "证书未更新，面板设置保持不变" "certificate not updated; panel settings unchanged"
   systemctl stop o-ui
   if ! cert_promote || ! panel_enable_https; then
@@ -1546,7 +1673,7 @@ cmd_cert() {
   if ! wait_active; then
     systemctl stop o-ui || true
     cert_restore_previous || warn "证书恢复失败，请检查备份" "certificate restore failed; inspect the backup"
-    OUI_MODE=$old_mode OUI_HOST=$old_host OUI_CHALLENGE=$old_challenge OUI_RENEW=$old_renew
+    OUI_MODE=$old_mode OUI_HOST=$old_host OUI_CHALLENGE=$old_challenge OUI_RENEW=$old_renew OUI_HTTP_SERVICE=$old_http_service
     if [ "$old_mode" = local ]; then panel_local_only >/dev/null || true; else panel_enable_https || true; fi
     conf_save
     systemctl start o-ui || true
@@ -1781,6 +1908,9 @@ main() {
     log|logs) require_installed; journalctl -u o-ui --no-pager -n "${1:-200}" ;;
     cert) cmd_cert "$@" ;;
     cert-reload) cmd_cert_reload "$@" ;;
+    cert-cron) need_root; [ "$OUI_MODE" != acme ] || acme_guarded --cron ;;
+    cert-http-stop) cmd_cert_http_stop "$@" ;;
+    cert-http-resume) cmd_cert_http_resume ;;
     bbr) cmd_bbr "$@" ;;
     version) conf_load; printf '%s\n' "${OUI_VERSION:-unknown}" ;;
     help|-h|--help) usage ;;

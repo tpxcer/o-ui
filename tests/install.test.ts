@@ -5,7 +5,7 @@ import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createHash } from 'node:crypto';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { packBundle } from '../scripts/build-release.mjs';
 
@@ -39,6 +39,12 @@ const stubs: Record<string, string> = {
   chown: `echo "chown $*" >>"$FAKE_STATE/calls.log"`,
   sleep: `exit 0`,
   socat: `exit 0`,
+  flock: `exec python3 - "$@" <<'PY'
+import fcntl, sys
+try: fcntl.flock(int(sys.argv[-1]), fcntl.LOCK_EX | fcntl.LOCK_NB)
+except BlockingIOError: sys.exit(1)
+PY`,
+  setsid: `exec python3 -c 'import os,sys; os.setsid(); os.execv(sys.argv[1],sys.argv[1:])' "$@"`,
   journalctl: `echo "journalctl $*" >>"$FAKE_STATE/calls.log"`,
   runuser: `echo "runuser LC_ALL=$LC_ALL $*" >>"$FAKE_STATE/calls.log"
 [ "$1" = -u ] && [ "$2" = o-ui ] && [ "$3" = -- ] || exit 97
@@ -48,19 +54,27 @@ exec "$@"`,
 echo "systemctl $*" >>"$s/calls.log"
 unit="$O_UI_ROOT_PREFIX/etc/systemd/system/o-ui.service"
 case "$1" in
-  is-active) for u; do :; done; case $u in o-ui-update) [ -f "$s/update-active" ] ;; o-ui-cert-renew.timer) [ -z "$FAKE_TIMER_FAIL" ] && [ -f "$s/timer" ] ;; *) [ -f "$s/active" ] ;; esac; exit ;;
+  show) case "$4" in ControlGroup) echo "/system.slice/$2" ;; TriggeredBy) printf '%s' "\${FAKE_WEBSITE_SOCKET:-}" ;; esac; exit 0 ;;
+  is-active) for u; do :; done; case $u in nginx.service|apache2.service|httpd.service|caddy.service) [ -f "$s/website-active" ] ;; o-ui-update) [ -f "$s/update-active" ] ;; o-ui-cert-renew.timer) [ -z "$FAKE_TIMER_FAIL" ] && [ -f "$s/timer" ] ;; *) [ -f "$s/active" ] ;; esac; exit ;;
   is-enabled) for u; do :; done; case $u in o-ui-cert-renew.timer) [ -f "$s/timer" ] ;; ufw) [ -f "$s/ufw-enabled" ] ;; *) [ -f "$s/enabled" ] ;; esac; exit ;;
   enable) for u; do :; done; case $u in o-ui) : >"$s/enabled" ;; o-ui-cert-renew.timer) : >"$s/timer" ;; ufw) : >"$s/ufw-enabled" ;; esac; exit 0 ;;
   start|restart)
+    case "$2" in nginx.service|apache2.service|httpd.service|caddy.service) [ -z "\${FAKE_WEBSITE_START_FAIL:-}" ] || exit 1; : >"$s/website-active"; exit 0 ;; esac
     [ "$2" = o-ui ] || exit 0
     if [ -n "\${FAKE_FAIL_VERSION:-}" ] && [ "$(cat "$O_UI_ROOT_PREFIX/opt/o-ui/VERSION")" = "$FAKE_FAIL_VERSION" ]; then rm -f "$s/active" "$s/listening"; exit 0; fi
     : >"$s/active"; awk '/^ExecStart=/ { print $NF }' "$unit" >"$s/listening"; exit 0 ;;
-  stop) [ "$2" = o-ui ] && rm -f "$s/active" "$s/listening"; exit 0 ;;
+  stop) case "$2" in nginx.service|apache2.service|httpd.service|caddy.service) rm -f "$s/website-active"; [ -z "\${FAKE_WEBSITE_STOP_FAIL:-}" ]; exit ;; esac; [ "$2" = o-ui ] && rm -f "$s/active" "$s/listening"; exit 0 ;;
   disable) case " $* " in *" o-ui "*) rm -f "$s/active" "$s/listening" "$s/enabled" ;; esac; exit 0 ;;
   status) echo "o-ui.service fake status"; exit 0 ;;
 esac
 exit 0`,
-  ss: `echo 'State Recv-Q Send-Q Local Address:Port Peer Address:Port'
+  ss: `if [ "$1" = -H ]; then
+  [ -z "\${FAKE_SS_FAIL:-}" ] || exit 1
+  if [ -f "$FAKE_STATE/website-active" ]; then cat "$FAKE_STATE/website-listeners"; fi
+  if grep -qx 80 "$FAKE_STATE/listening-extra" 2>/dev/null; then echo 'LISTEN 0 4096 0.0.0.0:80 0.0.0.0:*'; fi
+  exit 0
+fi
+echo 'State Recv-Q Send-Q Local Address:Port Peer Address:Port'
 for p in $(cat "$FAKE_STATE/listening" "$FAKE_STATE/listening-extra" 2>/dev/null); do echo "LISTEN 0 4096 0.0.0.0:$p 0.0.0.0:*"; done`,
   sysctl: `echo "sysctl $*" >>"$FAKE_STATE/calls.log"
 [ -z "\${FAKE_SYSCTL_FAIL:-}" ] || exit 1
@@ -178,12 +192,29 @@ exit 0
 // 假acme.sh：install-cert时复制FAKE_ACME_CERT/KEY（真实测试证书），否则写占位文本
 const fakeAcme = `#!/bin/sh
 { printf 'acme'; for a in "$@"; do printf ' [%s]' "$a"; done; printf ' CF_Token=%s CF_Zone_ID=%s\\n' "\${CF_Token:+set}" "\${CF_Zone_ID:-}"; } >>"$FAKE_STATE/acme.log"
-mode=''; key=''; full=''
-while [ $# -gt 0 ]; do case $1 in --issue) mode=issue ;; --install-cert) mode=install ;; --renew) mode=renew ;; --remove) mode=remove ;; --key-file) key=$2; shift ;; --fullchain-file) full=$2; shift ;; esac; shift; done
+mode=''; key=''; full=''; pre=''; post=''; validation=''
+while [ $# -gt 0 ]; do case $1 in --issue) mode=issue ;; --install-cert) mode=install ;; --renew|--cron) mode=renew ;; --remove) mode=remove ;; --standalone) validation=http ;; --dns) validation=cf; shift ;; --key-file) key=$2; shift ;; --fullchain-file) full=$2; shift ;; --pre-hook) pre=$2; shift ;; --post-hook) post=$2; shift ;; esac; shift; done
 case $mode in
-  issue) exit "\${FAKE_ACME_ISSUE_RC:-0}" ;;
+  issue|renew)
+    rc=\${FAKE_ACME_ISSUE_RC:-0}
+    if [ "$mode" = renew ]; then
+      rc=\${FAKE_ACME_RENEW_RC:-0}
+      pre=$(cat "$FAKE_STATE/acme-pre" 2>/dev/null); post=$(cat "$FAKE_STATE/acme-post" 2>/dev/null)
+      validation=$(cat "$FAKE_STATE/acme-validation" 2>/dev/null)
+    fi
+    # 未到期在钩子之前返回，匹配固定ACME源码顺序。
+    [ "$rc" != 2 ] || exit 2
+    if [ "$mode" = issue ]; then printf '%s' "$pre" >"$FAKE_STATE/acme-pre"; printf '%s' "$post" >"$FAKE_STATE/acme-post"; printf '%s' "$validation" >"$FAKE_STATE/acme-validation"; fi
+    if [ -n "$pre" ]; then eval "$pre" || exit 1; fi
+    if [ -n "\${FAKE_ACME_HANG:-}" ]; then
+      : >"$FAKE_STATE/acme-waiting"
+      exec python3 -c 'import time; time.sleep(60)'
+    fi
+    if [ -f "$FAKE_STATE/website-active" ] && [ "$validation" = http ]; then exit 77; fi
+    echo "validation $mode" >>"$FAKE_STATE/calls.log"
+    if [ -n "$post" ] && [ -z "\${FAKE_ACME_SKIP_POST:-}" ]; then eval "$post" || exit 1; fi
+    exit "$rc" ;;
   install) if [ -n "\${FAKE_ACME_CERT:-}" ]; then cp "$FAKE_ACME_CERT" "$full"; cp "$FAKE_ACME_KEY" "$key"; else printf 'CERT\\n' >"$full"; printf 'KEY\\n' >"$key"; fi ;;
-  renew) exit "\${FAKE_ACME_RENEW_RC:-0}" ;;
 esac
 exit 0
 `;
@@ -252,12 +283,13 @@ async function sandbox(options: { acme?: boolean } = {}) {
   }
   const issued = await makeCert(join(base, 'issued'), 'fullchain.pem', 'key.pem', ['example.com']);
   const pkg = await makePackage(downloads);
+  const environment = { PATH: `${bin}:/usr/bin:/bin`, HOME: base, LANG: 'C', O_UI_ROOT_PREFIX: root, O_UI_STDIN_ANSWERS: '1', FAKE_STATE: state, FAKE_DOWNLOADS: downloads, FAKE_ACME_CERT: issued.cert, FAKE_ACME_KEY: issued.key };
   const run = (args: string[], answers: string[] = [], env: Record<string, string> = {}) => {
     const script = existsSync(join(root, 'usr/local/bin/o-ui')) && !env.USE_SOURCE ? join(root, 'usr/local/bin/o-ui') : installer;
     const child = spawnSync('bash', [script, ...args], {
       // 旧有场景默认拒绝新增的防火墙安装询问；专项场景在answers里明确同意。
       input: [...answers, 'n'].map(line => line + '\n').join(''), encoding: 'utf8',
-      env: { PATH: `${bin}:/usr/bin:/bin`, HOME: base, LANG: 'C', O_UI_ROOT_PREFIX: root, O_UI_STDIN_ANSWERS: '1', FAKE_STATE: state, FAKE_DOWNLOADS: downloads, FAKE_ACME_CERT: issued.cert, FAKE_ACME_KEY: issued.key, ...env },
+      env: { ...environment, ...env },
     });
     return { status: child.status, out: child.stdout + child.stderr };
   };
@@ -268,7 +300,7 @@ async function sandbox(options: { acme?: boolean } = {}) {
     const child = spawnSync(join(root, 'usr/local/libexec/o-ui-firewall'), args, { encoding: 'utf8', env: { PATH: `${bin}:/usr/bin:/bin`, FAKE_STATE: state, ...env } });
     return { status: child.status, out: child.stdout + child.stderr };
   };
-  return { base, root, bin, state, downloads, pkg, run, read, log, helper };
+  return { base, root, bin, state, downloads, pkg, run, read, log, helper, environment };
 }
 
 const conf = async (box: Awaited<ReturnType<typeof sandbox>>) => Object.fromEntries((await box.read('etc/o-ui/o-ui.conf')).trim().split('\n').map(line => line.split('=', 2)));
@@ -276,6 +308,13 @@ const conf = async (box: Awaited<ReturnType<typeof sandbox>>) => Object.fromEntr
 const start = (port = '23456', path = '/panelqa/') => ['1', port, path, 'admin-test', ''];
 // ACME：域名、HTTP-01、邮箱留空，自动续期
 const acme = (host = 'example.com') => [host, '1', ''];
+
+async function website(box: Awaited<ReturnType<typeof sandbox>>, unit = 'nginx.service') {
+  await mkdir(join(box.root, 'proc/4242'), { recursive: true });
+  await writeFile(join(box.root, 'proc/4242/cgroup'), `0::/system.slice/${unit}\n`);
+  await writeFile(join(box.state, 'website-listeners'), 'LISTEN 0 4096 0.0.0.0:80 0.0.0.0:* users:(("website",pid=4242,fd=6))\nLISTEN 0 4096 [::]:80 [::]:* users:(("website",pid=4242,fd=7))\n');
+  await writeFile(join(box.state, 'website-active'), '');
+}
 
 test('脚本可被bash解析，以main调用收尾避免下载不完整时执行半截脚本，且不再提供仅本机选项', async () => {
   execFileSync('bash', ['-n', installer]);
@@ -347,7 +386,7 @@ test('英文安装：自定义访问路径、Cloudflare DNS验证、自动续期
   const { status, out } = box.run(['install', '--package', box.pkg], answers);
   assert.equal(status, 0, out);
   const acmeLog = await box.log('acme.log'), unit = await box.read('etc/systemd/system/o-ui.service');
-  assert.match(acmeLog, /\[--dns\] \[dns_cf\] CF_Token=set CF_Zone_ID=zone123/);
+  assert.match(acmeLog, /\[--dns\] \[dns_cf\].* CF_Token=set CF_Zone_ID=zone123/);
   assert.doesNotMatch(acmeLog + (await box.log('calls.log')) + out, /cf-secret-token-123/);
   assert.ok(unit.includes('Environment=LANG=en_US.UTF-8\n') && unit.includes('Environment=O_UI_DEFAULT_LANG=en\n'));
   assert.equal(await box.log('panel-path'), '/myPanel/');
@@ -405,6 +444,168 @@ test('历史导入证书在普通升级时保留，不擅自申请或替换', as
   assert.equal((await conf(box)).OUI_MODE, 'file');
   assert.equal(await box.read('etc/o-ui/tls/fullchain.pem'), original);
   assert.equal(await box.log('acme.log'), acmeBefore);
+});
+
+test('HTTP-01确认临停网站：只在验证窗口停止，随后恢复并保存未来续期授权', async () => {
+  for (const unit of ['nginx.service', 'apache2.service', 'httpd.service', 'caddy.service']) {
+    const box = await sandbox();
+    await website(box, unit);
+    const result = box.run(['install', '--package', box.pkg], [...start(), 'example.com', '1', 'y', '', 'n']);
+    assert.equal(result.status, 0, result.out);
+    assert.match(result.out, /也会中断它承载的HTTPS网站/);
+    assert.equal((await conf(box)).OUI_MODE, 'acme', result.out);
+    assert.equal((await conf(box)).OUI_HTTP_SERVICE, unit);
+    const calls = await box.log('calls.log');
+    const stop = calls.indexOf(`systemctl stop ${unit}`), validation = calls.indexOf('validation issue'), restore = calls.indexOf(`systemctl start ${unit}`);
+    assert.ok(stop > 0 && stop < validation && validation < restore && restore < calls.indexOf('-enable-panel-https'), calls);
+    assert.doesNotMatch(calls, new RegExp(`systemctl (disable|enable|restart) ${unit}`));
+    assert.equal(existsSync(join(box.state, 'website-active')), true);
+    assert.equal(existsSync(join(box.root, 'etc/o-ui/acme/http-paused')), false);
+    const service = await box.read('etc/systemd/system/o-ui-cert-renew.service');
+    assert.match(service, /ExecStart=\/usr\/local\/bin\/o-ui cert-cron/);
+    assert.match(service, /ExecStopPost=\/usr\/local\/bin\/o-ui cert-http-resume/);
+  }
+});
+
+test('HTTP-01签发失败、post钩子缺失及stop部分失败都恢复网站', async () => {
+  const failures: Record<string, string>[] = [{ FAKE_ACME_ISSUE_RC: '1' }, { FAKE_ACME_ISSUE_RC: '1', FAKE_ACME_SKIP_POST: '1' }, { FAKE_WEBSITE_STOP_FAIL: '1' }];
+  for (const env of failures) {
+    const box = await sandbox();
+    await website(box);
+    const result = box.run(['install', '--package', box.pkg], [...start(), 'example.com', '1', 'y', '', 'n', 'n'], env);
+    assert.equal(result.status, 0, result.out); // 明确放弃后仅本机启动，不是证书成功。
+    assert.equal((await conf(box)).OUI_MODE, 'local');
+    assert.equal((await conf(box)).OUI_HTTP_SERVICE, '');
+    assert.equal(existsSync(join(box.state, 'website-active')), true);
+    assert.match(await box.log('calls.log'), /systemctl start nginx.service/);
+    assert.equal(existsSync(join(box.root, 'etc/o-ui/acme/http-paused')), false);
+  }
+});
+
+test('HTTP-01恢复失败明确报错并保留救援记录，后续救援不重复签发', async () => {
+  const fresh = await sandbox();
+  await website(fresh);
+  const install = fresh.run(['install', '--package', fresh.pkg], [...start(), 'example.com', '1', 'y', '', 'n'], { FAKE_WEBSITE_START_FAIL: '1' });
+  assert.notEqual(install.status, 0, install.out);
+  assert.match(install.out, /网站服务尚未恢复，已停止安装/);
+  assert.doesNotMatch(install.out, /==== o-ui 安装完成 ====/);
+  const box = await sandbox();
+  assert.equal(box.run(['install', '--package', box.pkg], [...start(), ...acme(), 'n']).status, 0);
+  await website(box);
+  const result = box.run(['cert', '--force'], ['y', 'example.com', '1', 'y', ''], { FAKE_WEBSITE_START_FAIL: '1' });
+  assert.notEqual(result.status, 0, result.out);
+  assert.match(result.out, /恢复失败/);
+  assert.doesNotMatch(result.out, /证书已写入面板并启用HTTPS/);
+  assert.equal(await box.read('etc/o-ui/acme/http-paused'), 'nginx.service\n');
+  const before = await box.log('acme.log');
+  assert.equal(box.run(['cert-http-resume']).status, 0);
+  assert.equal(await box.log('acme.log'), before);
+  assert.equal(existsSync(join(box.state, 'website-active')), true);
+});
+
+test('HTTP-01拒绝授权或未知/Docker/混合/socket监听者时不停止网站，可重选DNS', async () => {
+  for (const kind of ['decline', 'docker', 'mixed', 'socket', 'ss-fail']) {
+    const box = await sandbox();
+    await website(box);
+    const env: Record<string, string> = {};
+    if (kind === 'docker') await writeFile(join(box.root, 'proc/4242/cgroup'), '0::/system.slice/docker-deadbeef.scope\n');
+    if (kind === 'mixed') {
+      await mkdir(join(box.root, 'proc/4243'), { recursive: true });
+      await writeFile(join(box.root, 'proc/4243/cgroup'), '0::/system.slice/caddy.service\n');
+      await writeFile(join(box.state, 'website-listeners'), 'LISTEN 0 4096 0.0.0.0:80 *:* users:(("nginx",pid=4242,fd=6),("caddy",pid=4243,fd=7))\n');
+    }
+    if (kind === 'socket') env.FAKE_WEBSITE_SOCKET = 'caddy.socket';
+    if (kind === 'ss-fail') env.FAKE_SS_FAIL = '1';
+    const result = box.run(['install', '--package', box.pkg], [...start(), 'example.com', '1', ...(kind === 'decline' ? [''] : []), 'example.com', '2', 'token-x', '', '', 'n'], env);
+    assert.equal(result.status, 0, result.out);
+    assert.equal((await conf(box)).OUI_CHALLENGE, 'cf');
+    assert.equal((await conf(box)).OUI_HTTP_SERVICE, '');
+    assert.doesNotMatch(await box.log('calls.log'), /systemctl (stop|start|restart) (nginx|caddy|docker)/);
+  }
+});
+
+test('HTTP-01续期：未到期不临停，到期/失败均恢复，监听者改变不得自动扩大授权', async () => {
+  const box = await sandbox();
+  await website(box);
+  assert.equal(box.run(['install', '--package', box.pkg], [...start(), 'example.com', '1', 'y', '', 'n']).status, 0);
+  for (const cmd of [['cert', 'renew'], ['cert-cron']]) {
+    let before = (await box.log('calls.log')).length;
+    const skip = box.run(cmd, [], { FAKE_ACME_RENEW_RC: '2' });
+    assert.equal(skip.status, cmd[0] === 'cert-cron' ? 2 : 0, skip.out);
+    assert.doesNotMatch((await box.log('calls.log')).slice(before), /systemctl (stop|start) nginx/);
+    for (const rc of ['0', '1']) {
+      before = (await box.log('calls.log')).length;
+      const renew = box.run(cmd, [], { FAKE_ACME_RENEW_RC: rc });
+      assert.equal(renew.status, Number(rc), renew.out);
+      const calls = (await box.log('calls.log')).slice(before);
+      assert.match(calls, /systemctl stop nginx.service/);
+      assert.match(calls, /validation renew/);
+      assert.match(calls, /systemctl start nginx.service/);
+      assert.equal(existsSync(join(box.state, 'website-active')), true);
+    }
+  }
+  await website(box, 'caddy.service');
+  const before = (await box.log('calls.log')).length;
+  const unauthorized = box.run(['cert', 'renew']);
+  assert.notEqual(unauthorized.status, 0, unauthorized.out);
+  assert.match(unauthorized.out, /未授权/);
+  assert.doesNotMatch((await box.log('calls.log')).slice(before), /systemctl (stop|start) (caddy|nginx)/);
+});
+
+test('HTTP-01重新配置时更换方式/授权须确认强制签发，改DNS后不再临停网站', async () => {
+  const box = await sandbox();
+  assert.equal(box.run(['install', '--package', box.pkg], [...start(), ...acme(), 'n']).status, 0);
+  await website(box);
+  const beforeConfig = await box.read('etc/o-ui/o-ui.conf'), beforeAcme = await box.log('acme.log');
+  const cancelled = box.run(['cert'], ['example.com', '1', 'y', '', 'n']);
+  assert.equal(cancelled.status, 0, cancelled.out);
+  assert.equal(await box.read('etc/o-ui/o-ui.conf'), beforeConfig);
+  assert.equal(await box.log('acme.log'), beforeAcme);
+  const granted = box.run(['cert'], ['example.com', '1', 'y', '', 'y']);
+  assert.equal(granted.status, 0, granted.out);
+  assert.equal((await conf(box)).OUI_HTTP_SERVICE, 'nginx.service');
+  assert.match((await box.log('acme.log')).slice(beforeAcme.length), /\[--force\]/);
+  const before = (await box.log('calls.log')).length;
+  const failed = box.run(['cert'], ['example.com', '2', 'token-x', '', '', 'y'], { FAKE_HTTPS_RC: '1' });
+  assert.notEqual(failed.status, 0);
+  assert.equal((await conf(box)).OUI_CHALLENGE, 'http', '启用失败保留旧安装配置');
+  assert.equal(box.run(['cert', 'renew']).status, 0, 'ACME已保存DNS钩子，即使面板回退也不能停网站');
+  const dns = box.run(['cert'], ['example.com', '2', 'token-x', '', '', 'y']);
+  assert.equal(dns.status, 0, dns.out);
+  assert.equal((await conf(box)).OUI_HTTP_SERVICE, '');
+  assert.equal(box.run(['cert', 'renew']).status, 0);
+  assert.doesNotMatch((await box.log('calls.log')).slice(before), /systemctl (stop|start) nginx/);
+});
+
+test('HTTP-01中断时终止本次ACME进程并恢复；同时运行的证书操作被锁拒绝', async () => {
+  for (const command of [['cert', 'renew'], ['cert', '--force']]) {
+    const box = await sandbox();
+    await website(box);
+    assert.equal(box.run(['install', '--package', box.pkg], [...start(), 'example.com', '1', 'y', '', 'n']).status, 0);
+    const child = spawn('bash', [join(box.root, 'usr/local/bin/o-ui'), ...command], { env: { ...box.environment, FAKE_ACME_HANG: '1' }, stdio: ['pipe', 'pipe', 'pipe'] });
+    child.stdin.end(['y', 'example.com', '1', 'y', ''].join('\n') + '\n');
+    let output = '';
+    child.stdout.on('data', chunk => { output += chunk; });
+    child.stderr.on('data', chunk => { output += chunk; });
+    const done = new Promise<number | null>(resolve => child.on('exit', resolve));
+    try {
+      for (let i = 0; i < 200 && !existsSync(join(box.state, 'acme-waiting')); i++) await new Promise(resolve => setTimeout(resolve, 25));
+      assert.equal(existsSync(join(box.state, 'acme-waiting')), true, output);
+      assert.equal(existsSync(join(box.state, 'website-active')), false);
+      const overlap = box.run(['cert', 'renew']);
+      assert.notEqual(overlap.status, 0, overlap.out);
+      assert.match(overlap.out, /另一项证书操作正在运行/);
+      assert.equal(existsSync(join(box.state, 'website-active')), false, '并发操作不得提前恢复网站');
+      child.kill('SIGTERM');
+      assert.equal(await done, 130, output);
+      assert.equal(existsSync(join(box.state, 'website-active')), true, output);
+      assert.equal(existsSync(join(box.root, 'etc/o-ui/acme/http-paused')), false);
+      assert.equal(box.run(['cert', 'renew']).status, 0, '中断后锁应释放');
+    } finally {
+      child.kill('SIGTERM');
+      await done;
+    }
+  }
 });
 
 test('80端口被占用时拒绝HTTP-01，重新选择DNS且不停止已有服务', async () => {
