@@ -292,7 +292,7 @@ func (rt *Runtime) notifyOnline(ctx context.Context, s telegramSettings, session
 			ips = mergeIPs(slices.Clone(ips), rt.onlineIPs(event.client.ID))
 		}
 		for _, text := range onlineMessages(event, ips, lang) {
-			_, _ = telegramBroadcast(ctx, s, text)
+			_, _ = telegramBroadcast(ctx, rt.telegramIdentity(s), text)
 		}
 	}
 }

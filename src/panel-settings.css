@@ -10,3 +10,6 @@
 .twofactor-qr img { display: block; width: 180px; height: 180px; margin: 0 auto 8px; image-rendering: pixelated; }
 .twofactor-qr code { font-size: 13px; overflow-wrap: anywhere; user-select: all; }
 .twofactor-dialog footer { gap: 10px; }
+.telegram-schedule { display: flex; align-items: center; justify-content: flex-end; gap: 10px; min-width: 0; width: 100%; }
+.setting-control .telegram-schedule input[type="time"] { flex: 1; min-width: 0; }
+.setting-control .telegram-schedule select { flex: 0 0 76px; width: 76px; }

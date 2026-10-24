@@ -75,6 +75,7 @@ func telegramFixture(t *testing.T) (func() []telegramSent, func(bool)) {
 func TestTelegramSettingsAndNotifications(t *testing.T) {
 	sent, reject := telegramFixture(t)
 	s, rt, handler, cookie := subscriptionFixture(t)
+	rt.public.cached = publicInfo{IPv4: &publicAddress{IP: "192.0.2.10"}}
 	call := func(method, path, body string, cookie *http.Cookie, want int) map[string]any {
 		t.Helper()
 		r := httptest.NewRequest(method, path, strings.NewReader(body))
@@ -107,18 +108,21 @@ func TestTelegramSettingsAndNotifications(t *testing.T) {
 		{"reportTime": "24:00"},
 		{"cpuThreshold": 101},
 		{"backupEnabled": true},
+		{"reportPeriod": "yearly"},
+		{"backupPeriod": "invalid"},
+		{"serverName": "bad\nname"},
 	} {
 		put(0, bad, 400)
 	}
 	call("POST", "/api/panel/telegram/test", "{}", cookie, 409)
-	saved := put(0, map[string]any{"enabled": true, "token": telegramFixtureToken, "chatIds": " 1001 , -2002 ", "reportTime": "09:00", "notifyLogin": true, "cpuThreshold": 90, "backupEnabled": true, "backupPassword": "backup-passphrase-for-tests"}, 200)
+	saved := put(0, map[string]any{"enabled": true, "token": telegramFixtureToken, "chatIds": " 1001 , -2002 ", "serverName": " 美国01 ", "reportTime": "09:00", "notifyLogin": true, "cpuThreshold": 90, "backupEnabled": true, "backupPassword": "backup-passphrase-for-tests"}, 200)
 	view := saved["data"].(map[string]any)
-	if view["tokenSet"] != true || view["backupPasswordSet"] != true || view["chatIds"] != "1001,-2002" {
+	if view["tokenSet"] != true || view["backupPasswordSet"] != true || view["chatIds"] != "1001,-2002" || view["serverName"] != "美国01" || view["reportPeriod"] != "daily" || view["backupPeriod"] != "daily" {
 		t.Fatal("saved view", view)
 	}
 	// 留空令牌与口令时保留原值。
-	view = put(1, map[string]any{"enabled": true, "chatIds": "1001,-2002", "reportTime": "09:00", "notifyLogin": true, "backupEnabled": true}, 200)["data"].(map[string]any)
-	if view["tokenSet"] != true || view["backupPasswordSet"] != true {
+	view = put(1, map[string]any{"enabled": true, "chatIds": "1001,-2002", "serverName": "美国01", "reportTime": "09:00", "reportPeriod": "weekly", "backupPeriod": "monthly", "notifyLogin": true, "backupEnabled": true}, 200)["data"].(map[string]any)
+	if view["tokenSet"] != true || view["backupPasswordSet"] != true || view["serverName"] != "美国01" || view["reportPeriod"] != "weekly" || view["backupPeriod"] != "monthly" {
 		t.Fatal("empty secret fields should keep saved values", view)
 	}
 	if result := call("POST", "/api/panel/telegram/test", "{}", cookie, 200); result["sent"] != float64(2) {
@@ -142,7 +146,7 @@ func TestTelegramSettingsAndNotifications(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if alert := sent()[before].text; !strings.Contains(alert, "失败") || !strings.Contains(alert, "evilname") || !strings.Contains(alert, "127.0.0.1") {
+	if alert := sent()[before].text; !strings.Contains(alert, "失败") || !strings.Contains(alert, "evilname") || !strings.Contains(alert, "127.0.0.1") || !strings.Contains(alert, "服务器公网 IP：<code>192.0.2.10</code>") {
 		t.Fatal("login alert", alert)
 	}
 
@@ -157,11 +161,12 @@ func TestTelegramSettingsAndNotifications(t *testing.T) {
 		t.Fatal(err)
 	}
 	rt.sendTelegramReport(context.Background(), settings, time.Now())
+	rt.sendTelegramBackup(context.Background(), settings, time.Now())
 	got := sent()[before:]
 	if len(got) != 4 || got[0].method != "sendMessage" || got[2].method != "sendDocument" {
 		t.Fatal("report and backup", got)
 	}
-	for _, part := range []string{"📊 <b>o-ui 每日报告</b>", "📡 Xray：🔴 已停止", "👥 客户端：共 1 个 · 启用 1 个", "⏳ 3 天内到期：client", "🚦 业务流量累计："} {
+	for _, part := range []string{"📊 <b>o-ui 状态报告</b>", "📡 Xray：🔴 已停止", "👥 客户端：共 1 个 · 启用 1 个", "⏳ 3 天内到期：client", "🚦 业务流量累计："} {
 		if !strings.Contains(got[0].text, part) {
 			t.Fatalf("report missing %q:\n%s", part, got[0].text)
 		}
@@ -184,6 +189,7 @@ func TestTelegramSettingsAndNotifications(t *testing.T) {
 	}
 	before = len(sent())
 	rt.sendTelegramReport(context.Background(), settings, time.Now())
+	rt.sendTelegramBackup(context.Background(), settings, time.Now())
 	got = sent()[before:]
 	if len(got) != 4 || !strings.HasSuffix(got[2].document, ".json") || !strings.Contains(got[2].text, "未加密") {
 		t.Fatal("plain backup", got)

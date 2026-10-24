@@ -23,8 +23,8 @@ import (
 	"unicode"
 )
 
-// Telegram通知（参照OUI的Telegram设置）：登录提醒、每日报告、CPU超阈值提醒、客户端上线/离线，
-// 以及随每日报告发送加密业务备份。消息按HTML排版，用户可控的文字一律转义；管理菜单见telegram_bot.go。
+// Telegram通知：登录、日周月报告/备份、CPU提醒、客户端上线/离线。
+// 消息按HTML排版，用户可控的文字一律转义；管理菜单见telegram_bot.go。
 const telegramDocument = "telegram"
 
 var (
@@ -40,20 +40,27 @@ type telegramSettings struct {
 	Enabled        bool   `json:"enabled"`
 	Token          string `json:"token"`
 	ChatIDs        string `json:"chatIds"`
+	ServerName     string `json:"serverName"`
 	ReportTime     string `json:"reportTime"`
+	ReportPeriod   string `json:"reportPeriod"`
+	BackupPeriod   string `json:"backupPeriod"`
 	NotifyLogin    bool   `json:"notifyLogin"`
 	CPUThreshold   int    `json:"cpuThreshold"`
 	BackupEnabled  bool   `json:"backupEnabled"`
 	BackupPassword string `json:"backupPassword"`
 	// ClearBackupPassword只在保存请求中出现：清除已设置的备份口令，之后Telegram备份不加密；不落库。
 	ClearBackupPassword bool `json:"clearBackupPassword,omitempty"`
+	serverIP            string
 }
 
 // telegramView是返回网页的设置：机器人令牌与备份口令只写不读，只显示是否已设置。
 type telegramView struct {
 	Enabled           bool   `json:"enabled"`
 	ChatIDs           string `json:"chatIds"`
+	ServerName        string `json:"serverName"`
 	ReportTime        string `json:"reportTime"`
+	ReportPeriod      string `json:"reportPeriod"`
+	BackupPeriod      string `json:"backupPeriod"`
 	NotifyLogin       bool   `json:"notifyLogin"`
 	CPUThreshold      int    `json:"cpuThreshold"`
 	BackupEnabled     bool   `json:"backupEnabled"`
@@ -62,7 +69,7 @@ type telegramView struct {
 }
 
 func (s telegramSettings) view() telegramView {
-	return telegramView{Enabled: s.Enabled, ChatIDs: s.ChatIDs, ReportTime: s.ReportTime, NotifyLogin: s.NotifyLogin, CPUThreshold: s.CPUThreshold, BackupEnabled: s.BackupEnabled, TokenSet: s.Token != "", BackupPasswordSet: s.BackupPassword != ""}
+	return telegramView{Enabled: s.Enabled, ChatIDs: s.ChatIDs, ServerName: s.ServerName, ReportTime: s.ReportTime, ReportPeriod: telegramPeriod(s.ReportPeriod), BackupPeriod: telegramPeriod(s.BackupPeriod), NotifyLogin: s.NotifyLogin, CPUThreshold: s.CPUThreshold, BackupEnabled: s.BackupEnabled, TokenSet: s.Token != "", BackupPasswordSet: s.BackupPassword != ""}
 }
 
 func (s telegramSettings) chats() []string {
@@ -109,8 +116,16 @@ func validateTelegram(next, current telegramSettings) (telegramSettings, error) 
 		}
 	}
 	next.ChatIDs = strings.Join(chats, ",")
+	next.ServerName = strings.TrimSpace(next.ServerName)
+	if len([]rune(next.ServerName)) > 64 || strings.IndexFunc(next.ServerName, unicode.IsControl) >= 0 {
+		return next, i18n.New("服务器名称最多64个字符，不能包含控制字符", "Server name must be at most 64 characters without control characters")
+	}
+	next.ReportPeriod, next.BackupPeriod = telegramPeriod(next.ReportPeriod), telegramPeriod(next.BackupPeriod)
+	if !validTelegramPeriod(next.ReportPeriod) || !validTelegramPeriod(next.BackupPeriod) {
+		return next, i18n.New("报告和备份周期只能选择日、周或月", "Report and backup periods must be daily, weekly or monthly")
+	}
 	if next.ReportTime != "" && !telegramClock.MatchString(next.ReportTime) {
-		return next, i18n.New("每日报告时间格式应为HH:MM，留空表示不发送", "Daily report time must be HH:MM, or empty to disable")
+		return next, i18n.New("报告时间格式应为HH:MM，留空表示不发送", "Report time must be HH:MM, or empty to disable")
 	}
 	if next.CPUThreshold < 0 || next.CPUThreshold > 100 {
 		return next, i18n.New("CPU提醒阈值须为0至100（0表示关闭）", "CPU alert threshold must be 0–100 (0 turns it off)")
@@ -119,7 +134,7 @@ func validateTelegram(next, current telegramSettings) (telegramSettings, error) 
 		return next, i18n.New("启用机器人须填写Bot Token和至少一个Chat ID", "Enabling the bot needs a bot token and at least one chat ID")
 	}
 	if next.BackupEnabled && next.ReportTime == "" {
-		return next, i18n.New("发送备份须设置每日报告时间", "Sending backups needs a daily report time")
+		return next, i18n.New("发送备份须设置报告时间", "Sending backups needs a report time")
 	}
 	return next, nil
 }
@@ -182,6 +197,7 @@ func telegramDocumentSend(ctx context.Context, token, chat, name string, file []
 
 // telegramBroadcast发给全部管理员Chat；只在机器人启用时发送，返回成功条数与第一个错误。
 func telegramBroadcast(ctx context.Context, s telegramSettings, text string) (int, error) {
+	text = s.identify(text)
 	sent := 0
 	var first error
 	for _, chat := range s.chats() {
@@ -204,7 +220,7 @@ func telegramLang() string {
 }
 
 // notifyLogin在后台发送登录提醒，不拖慢登录；用户名可能来自攻击者，去掉控制字符并截断。
-func notifyLogin(state *store.Store, username, remote string, err error) {
+func notifyLogin(state *store.Store, rt *Runtime, username, remote string, err error) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
@@ -212,6 +228,7 @@ func notifyLogin(state *store.Store, username, remote string, err error) {
 		if readErr != nil || !s.Enabled || !s.NotifyLogin {
 			return
 		}
+		s = rt.telegramIdentity(s)
 		lang := telegramLang()
 		name := []rune(strings.Map(func(r rune) rune {
 			if unicode.IsControl(r) {
@@ -250,11 +267,8 @@ func percent(value *float64) string {
 func (rt *Runtime) telegramReport(ctx context.Context, now time.Time) string {
 	lang := telegramLang()
 	say := func(zh, en string) string { return i18n.Pick(lang, zh, en) }
-	lines := []string{say("📊 <b>o-ui 每日报告</b>", "📊 <b>o-ui daily report</b>"), say("⏰ 时间：", "⏰ Time: ") + now.Format("2006-01-02 15:04")}
+	lines := []string{say("📊 <b>o-ui 状态报告</b>", "📊 <b>o-ui status report</b>"), say("⏰ 时间：", "⏰ Time: ") + now.Format("2006-01-02 15:04")}
 	snapshot := rt.monitor.Snapshot()
-	if snapshot.Host != nil && snapshot.Host.Name != "" {
-		lines = append(lines, say("💻 主机：", "💻 Host: ")+html.EscapeString(snapshot.Host.Name))
-	}
 	status := rt.engine.Status()
 	if status.Running {
 		lines = append(lines, say("📡 Xray：🟢 运行中 ", "📡 Xray: 🟢 running ")+html.EscapeString(status.Version))
@@ -303,11 +317,11 @@ func (rt *Runtime) telegramReport(ctx context.Context, now time.Time) string {
 	return strings.Join(lines, "\n")
 }
 
-// RunTelegram按设置定时发送每日报告/备份与CPU提醒，直到ctx结束；每30秒检查一次。
+// RunTelegram按设置定时发送报告/备份与CPU提醒，直到ctx结束；每30秒检查一次。
 func (rt *Runtime) RunTelegram(ctx context.Context) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
-	lastReport, lastCPU, sessions := "", time.Time{}, map[string]onlineSession{}
+	lastCPU, sessions := time.Time{}, map[string]onlineSession{}
 	for {
 		select {
 		case <-ctx.Done():
@@ -318,6 +332,11 @@ func (rt *Runtime) RunTelegram(ctx context.Context) {
 				clear(sessions)
 				continue
 			}
+			// 复用公网查询的六小时缓存，不在每条通知里发起网络请求。
+			if rt.public != nil {
+				rt.public.get()
+			}
+			s = rt.telegramIdentity(s)
 			rt.notifyOnline(ctx, s, sessions, now)
 			if s.CPUThreshold > 0 && now.Sub(lastCPU) >= 30*time.Minute {
 				if cpu := rt.monitor.Snapshot().CPU; cpu != nil && *cpu >= float64(s.CPUThreshold) {
@@ -326,22 +345,21 @@ func (rt *Runtime) RunTelegram(ctx context.Context) {
 					_, _ = telegramBroadcast(ctx, s, fmt.Sprintf(i18n.Pick(lang, "🔥 <b>o-ui CPU 提醒</b>\n🖥 当前 CPU：%s\n⚠️ 阈值：%d%%\n⏰ 30 分钟内不再重复提醒", "🔥 <b>o-ui CPU alert</b>\n🖥 CPU now: %s\n⚠️ Threshold: %d%%\n⏰ No repeat within 30 minutes"), percent(cpu), s.CPUThreshold))
 				}
 			}
-			if s.ReportTime != "" && now.Format("15:04") == s.ReportTime && lastReport != now.Format("2006-01-02") {
-				lastReport = now.Format("2006-01-02")
-				rt.sendTelegramReport(ctx, s, now)
-			}
+			rt.sendScheduledTelegram(ctx, s, now)
 		}
 	}
 }
 
 func (rt *Runtime) sendTelegramReport(ctx context.Context, s telegramSettings, now time.Time) {
+	s = rt.telegramIdentity(s)
 	rt.mu.Lock()
 	report := rt.telegramReport(ctx, now)
 	rt.mu.Unlock()
 	_, _ = telegramBroadcast(ctx, s, report)
-	if !s.BackupEnabled {
-		return
-	}
+}
+
+func (rt *Runtime) sendTelegramBackup(ctx context.Context, s telegramSettings, now time.Time) {
+	s = rt.telegramIdentity(s)
 	// 与网页备份、核心操作串行；正在忙时跳过本次，不排队占用内存。
 	if !rt.backupMu.TryLock() {
 		return
@@ -356,8 +374,8 @@ func (rt *Runtime) sendTelegramReport(ctx context.Context, s telegramSettings, n
 		return
 	}
 	for _, chat := range s.chats() {
-		if err := telegramDocumentSend(ctx, s.Token, chat, name, file, backupCaption(now, s.BackupPassword != "", lang), nil); err != nil {
-			_ = telegramMessage(ctx, s.Token, chat, i18n.Pick(lang, "❌ 备份文件发送失败：", "❌ Failed to send the backup file: ")+html.EscapeString(i18n.Translate(err.Error(), lang)))
+		if err := telegramDocumentSend(ctx, s.Token, chat, name, file, s.identify(backupCaption(now, s.BackupPassword != "", lang)), nil); err != nil {
+			_ = telegramMessage(ctx, s.Token, chat, s.identify(i18n.Pick(lang, "❌ 备份文件发送失败：", "❌ Failed to send the backup file: ")+html.EscapeString(i18n.Translate(err.Error(), lang))))
 		}
 	}
 }
@@ -420,6 +438,7 @@ func registerTelegram(mux *http.ServeMux, rt *Runtime, state *store.Store) {
 			respond(w, 409, map[string]string{"error": i18n.T("请先保存Bot Token和Chat ID", "Save the bot token and chat ID first")})
 			return
 		}
+		s = rt.telegramIdentity(s)
 		text := i18n.Pick(telegramLang(), "✅ <b>o-ui 测试消息</b>\n🤖 机器人配置正确。", "✅ <b>o-ui test message</b>\n🤖 The bot is configured correctly.")
 		if rt != nil && r.URL.Query().Get("report") == "1" {
 			rt.mu.Lock()

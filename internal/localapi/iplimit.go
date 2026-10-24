@@ -366,7 +366,7 @@ func (rt *Runtime) ipLimitTick(ctx context.Context, now time.Time) {
 				rt.logs.Add("iplimit.ban")
 				if now.Sub(l.notified[clientID]) >= ipNotifyCooldown {
 					l.notified[clientID] = now
-					notifyIPLimit(rt.state, target, keep, added)
+					notifyIPLimit(rt.state, rt, target, keep, added)
 				}
 			}
 		}
@@ -381,7 +381,7 @@ func (rt *Runtime) ipLimitTick(ctx context.Context, now time.Time) {
 }
 
 // notifyIPLimit经Telegram（已启用时）发送超限提醒；同一客户端30分钟内只提醒一次。
-func notifyIPLimit(state *store.Store, target ipLimitTarget, keep, banned []string) {
+func notifyIPLimit(state *store.Store, rt *Runtime, target ipLimitTarget, keep, banned []string) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
@@ -392,7 +392,7 @@ func notifyIPLimit(state *store.Store, target ipLimitTarget, keep, banned []stri
 		lang := telegramLang()
 		text := fmt.Sprintf(i18n.Pick(lang, "🚫 <b>o-ui IP 上限</b>\n👤 客户端：<code>%s</code>（上限 %d）\n🔌 端口：%d/%s\n⛔ 已封禁 10 分钟：%s\n✅ 保留：%s", "🚫 <b>o-ui IP limit</b>\n👤 Client: <code>%s</code> (limit %d)\n🔌 Port: %d/%s\n⛔ Banned for 10 minutes: %s\n✅ Kept: %s"),
 			html.EscapeString(target.name), target.limit, target.port, target.protocol, html.EscapeString(strings.Join(banned, ", ")), html.EscapeString(strings.Join(keep, ", ")))
-		_, _ = telegramBroadcast(ctx, s, text)
+		_, _ = telegramBroadcast(ctx, rt.telegramIdentity(s), text)
 	}()
 }
 

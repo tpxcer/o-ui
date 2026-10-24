@@ -142,6 +142,7 @@ func (rt *Runtime) RunTelegramBot(ctx context.Context) {
 }
 
 func (rt *Runtime) handleTelegram(ctx context.Context, s telegramSettings, update tgUpdate) {
+	s = rt.telegramIdentity(s)
 	lang := telegramLang()
 	say := func(zh, en string) string { return i18n.Pick(lang, zh, en) }
 	var chat, text, data string
@@ -170,9 +171,9 @@ func (rt *Runtime) handleTelegram(ctx context.Context, s telegramSettings, updat
 	}
 	switch {
 	case command == "/start" || command == "/help" || command == "/menu" || data == "m":
-		telegramReply(ctx, s.Token, chat, say("🤖 <b>o-ui 管理菜单</b>\n👇 请选择：", "🤖 <b>o-ui admin menu</b>\n👇 Choose an action:"), rt.telegramMenu(lang))
+		telegramReply(ctx, s.Token, chat, s.identify(say("🤖 <b>o-ui 管理菜单</b>\n👇 请选择：", "🤖 <b>o-ui admin menu</b>\n👇 Choose an action:")), rt.telegramMenu(lang))
 	case command == "/status" || data == "st":
-		telegramReply(ctx, s.Token, chat, rt.telegramStatus(ctx, lang), backButton(lang))
+		telegramReply(ctx, s.Token, chat, s.identify(rt.telegramStatus(ctx, lang)), backButton(lang))
 	case data != "":
 		rt.telegramAction(ctx, s, chat, data, lang)
 	}
@@ -254,7 +255,7 @@ func (rt *Runtime) telegramStatus(ctx context.Context, lang string) string {
 	rt.mu.Lock()
 	report := rt.telegramReport(ctx, time.Now())
 	rt.mu.Unlock()
-	lines := []string{strings.Replace(report, i18n.Pick(lang, "o-ui 每日报告", "o-ui daily report"), i18n.Pick(lang, "o-ui 服务器状态", "o-ui server status"), 1)}
+	lines := []string{strings.Replace(report, i18n.Pick(lang, "o-ui 状态报告", "o-ui status report"), i18n.Pick(lang, "o-ui 服务器状态", "o-ui server status"), 1)}
 	if node, _ := rt.business.network(); node != nil && node.Upload != nil && node.Download != nil {
 		lines = append(lines, fmt.Sprintf(i18n.Pick(lang, "⚡ 节点网速：🔼 %s/s · 🔽 %s/s", "⚡ Node speed: 🔼 %s/s · 🔽 %s/s"), humanBytes(uint64(*node.Upload)), humanBytes(uint64(*node.Download))))
 	}
@@ -275,7 +276,10 @@ func (rt *Runtime) telegramStatus(ctx context.Context, lang string) string {
 
 func (rt *Runtime) telegramAction(ctx context.Context, s telegramSettings, chat, data, lang string) {
 	say := func(zh, en string) string { return i18n.Pick(lang, zh, en) }
-	reply := func(text string, keyboard [][]tgButton) { telegramReply(ctx, s.Token, chat, text, keyboard) }
+	s = rt.telegramIdentity(s)
+	reply := func(text string, keyboard [][]tgButton) {
+		telegramReply(ctx, s.Token, chat, s.identify(text), keyboard)
+	}
 	failed := func(prefix string, err error) {
 		reply("❌ "+prefix+html.EscapeString(i18n.Translate(err.Error(), lang)), backButton(lang))
 	}
@@ -472,7 +476,7 @@ func (rt *Runtime) telegramAction(ctx context.Context, s telegramSettings, chat,
 			failed(say("备份失败：", "Backup failed: "), err)
 			return
 		}
-		if err := telegramDocumentSend(ctx, s.Token, chat, name, file, backupCaption(time.Now(), s.BackupPassword != "", lang), backButton(lang)); err != nil {
+		if err := telegramDocumentSend(ctx, s.Token, chat, name, file, s.identify(backupCaption(time.Now(), s.BackupPassword != "", lang)), backButton(lang)); err != nil {
 			failed(say("备份文件发送失败：", "Failed to send the backup file: "), err)
 		}
 	case "rx":

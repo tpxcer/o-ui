@@ -134,7 +134,7 @@ func handler(manager *core.Manager, state *store.Store, dist string, hosts []str
 				session, err = state.Initialize(r.Context(), request.Username, request.Password)
 			} else {
 				session, err = state.LoginWithCode(r.Context(), request.Username, request.Password, request.Code)
-				notifyLogin(state, request.Username, r.RemoteAddr, err)
+				notifyLogin(state, rt, request.Username, r.RemoteAddr, err)
 			}
 			if err != nil {
 				code, message := 500, i18n.T("登录服务暂不可用", "Sign-in service temporarily unavailable")
