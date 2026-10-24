@@ -201,16 +201,20 @@ test('本机实际包从外部工作目录启动、静态资源完整、临时�
   try {
     const first = await start(); assert.equal(first.initialized, false); assert.equal(first.authenticated, false);
     const page = await request('/'); assert.equal(page.status, 200); const html = await page.text();
-    const assets = [...html.matchAll(/(?:src|href)="(\/assets\/[^"?]+)"/g)].map(match => match[1]); assert.ok(assets.length >= 2);
+    const assets = [...html.matchAll(/(?:src|href)="([^"]+)"/g)].map(match => new URL(match[1]!, base)).filter(url => url.origin === base && url.pathname.startsWith('/assets/')).map(url => url.pathname); assert.ok(assets.length >= 2);
     for (const asset of assets) { const response = await request(asset); assert.equal(response.status, 200); assert.ok((await response.arrayBuffer()).byteLength > 0); }
     const setup = await request('/api/auth/setup', 'POST', { username, password }); assert.equal(setup.status, 200);
     cookie = setup.headers.get('set-cookie')!.split(';')[0]; assert.ok(cookie);
+    const order = await request('/api/panel/list-order/clients', 'PUT', { revision: 0, data: ['display-b', 'display-a'] });
+    assert.equal(order.status, 200); assert.equal((await order.json()).revision, 1);
     const saved = await request('/api/settings', 'PUT', { revision: 0, data: marker }); assert.equal(saved.status, 200); assert.equal((await saved.json()).revision, 1);
     const core = await (await request('/api/core/status')).json(); assert.equal(core.selected, '26.7.28'); assert.deepEqual(core.installed, []);
     await stop();
     assert.equal((await stat(join(data, 'panel', 'panel.sqlite'))).mode & 0o777, 0o600);
     const next = await start(); assert.equal(next.initialized, true); assert.equal(next.authenticated, true);
     const settings = await (await request('/api/settings')).json(); assert.equal(settings.revision, 1); assert.deepEqual(settings.data, marker);
+    assert.deepEqual(await (await request('/api/panel/list-order/clients')).json(), { revision: 1, data: ['display-b', 'display-a'] });
+    assert.deepEqual(await (await request('/api/workspace')).json(), { revision: 0, data: null });
     const runtime = await (await request('/api/runtime/status')).json(); assert.equal(runtime.running, false);
     await stop();
   } finally { await stop(); }

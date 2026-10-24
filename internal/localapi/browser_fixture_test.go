@@ -74,6 +74,23 @@ func TestBrowserFixture(t *testing.T) {
 		rt.logs.Add("core.port_busy")
 		rt.logs.Add("core.hidden")
 	}
+	if os.Getenv("PANEL_BROWSER_ORDER_QA") == "1" {
+		var draft workspaceDraft
+		_ = json.Unmarshal(validWorkspace(), &draft)
+		baseInbound, baseClient := draft.Inbounds[0], draft.Clients[0]
+		draft.Inbounds, draft.Clients = nil, nil
+		for index := 1; index <= 4; index++ {
+			inbound, client := baseInbound, baseClient
+			inbound.ID, inbound.Name, inbound.Port = fmt.Sprintf("in-%d", index), fmt.Sprintf("排序入站 %d", index), 52000+index
+			client.ID, client.Name, client.InboundID = fmt.Sprintf("client-%d", index), fmt.Sprintf("排序客户端 %d", index), inbound.ID
+			draft.Inbounds = append(draft.Inbounds, inbound)
+			draft.Clients = append(draft.Clients, client)
+		}
+		data, _ := json.Marshal(draft)
+		if _, err = s.SaveDocument(context.Background(), "workspace", 0, data); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if os.Getenv("PANEL_BROWSER_SUBSCRIPTION_QA") == "1" {
 		var draft workspaceDraft
 		_ = json.Unmarshal(validWorkspace(), &draft)

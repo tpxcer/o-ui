@@ -5,6 +5,7 @@ const npmCatalog = {
   lucide: ['1.59.0', 'ISC', ['LICENSE']],
   qrcode: ['1.5.4', 'MIT', ['license']],
   dijkstrajs: ['1.0.3', 'MIT', ['LICENSE.md']],
+  sortablejs: ['1.15.7', 'MIT', ['LICENSE']],
 };
 const buildRuntimeCatalog = {
   vite: ['8.3.4', ['LICENSE.md']],

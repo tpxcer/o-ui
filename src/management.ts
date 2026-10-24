@@ -3,6 +3,8 @@ import { addClient, chineseDate, clientStatus, createQuick, defaultConnection, d
 import type { Client, ClientInput, Connection, Inbound, Preset, Workspace } from './workspace.ts';
 import { api, APIError, confirmSaved, jsonBody, uncertainSave } from './api.ts';
 import { initCalendar } from './calendar.ts';
+import Sortable from 'sortablejs';
+import { mergeVisibleOrder, orderedRecords, type ListKind, type ListOrder } from './list-order.ts';
 import { initConnections } from './connections.ts';
 import { expiryLeft, formatBytes, onlineWindowMs, relativeTime, trafficStatus, usedBytes } from './traffic.ts';
 import type { TrafficSnapshot } from './traffic.ts';
@@ -28,6 +30,9 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
   let state: Workspace = persistent ? { inbounds: [], clients: [] } : seedWorkspace();
   let revision = 0, loaded = !persistent, loading = false, loadError = '', submitting = false, pendingNotice = '', reloadRequired = false;
   let page: 'inbounds' | 'clients' = 'inbounds';
+  const orders: Record<ListKind, ListOrder> = { inbounds: { revision: 0, data: [] }, clients: { revision: 0, data: [] } };
+  const orderReady = { inbounds: !persistent, clients: !persistent };
+  let orderSaving = false, sortable: Sortable | null = null;
   let search = '', filter = 'all', inboundFilter = '';
   let traffic: TrafficSnapshot | null = null, trafficError = '', trafficLoading = false;
   type IPLimitView = { enforced: boolean; issue: string; clients: Record<string, { online: { ip: string; lastSeen: string }[]; banned: { ip: string; until: string }[]; exempt: { ip: string; until: string }[] }> };
@@ -366,7 +371,7 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
   // 在线IP数/上限与封禁数（真实模式点开看明细与解封）；演示数据只显示上限。
   const notifyCell = (item: Client) => {
     const hint = notifyView && !notifyView.botEnabled ? t('Telegram 机器人未启用：开启后也暂不发送', 'The Telegram bot is off: nothing is sent until it is enabled') : t('通过 Telegram 通知上线（本次累计 1 MB 流量）和离线（10 分钟无流量）', 'Telegram alerts when the client comes online (1 MB this session) or goes offline (10 minutes without traffic)');
-    return `<label class="switch" title="${hint}"><input type="checkbox" data-toggle-notify="${esc(item.id)}" ${notifyView?.clients.has(item.id) ? 'checked' : ''} ${notifyView ? '' : 'disabled'} aria-label="${t('上线/离线通知', 'Online/offline alerts')} ${esc(item.name)}"><span aria-hidden="true"></span></label>`;
+    return `<label class="switch" title="${hint}"><input type="checkbox" data-toggle-notify="${esc(item.id)}" ${notifyView?.clients.has(item.id) ? 'checked' : ''} ${notifyView ? '' : 'disabled'} aria-label="${t('TG 上线通知', 'TG online alerts')} ${esc(item.name)}"><span aria-hidden="true"></span></label>`;
   };
   async function toggleNotify(input: HTMLInputElement): Promise<void> {
     const id = input.dataset.toggleNotify!, enabled = input.checked, name = state.clients.find(item => item.id === id)?.name ?? '';
@@ -374,7 +379,7 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
     try {
       const view = await api<{ clients: string[]; botEnabled: boolean }>('panel/telegram/notify', jsonBody('PUT', { clientId: id, enabled }));
       notifyView = { clients: new Set(view.clients), botEnabled: view.botEnabled };
-      announce(`${enabled ? t('已开启 ', 'Alerts on for ') : t('已关闭 ', 'Alerts off for ')}${name}${t(' 的上线/离线通知', '')}${enabled && !view.botEnabled ? t('（Telegram 机器人未启用，暂不发送）', ' (the Telegram bot is off, so nothing is sent yet)') : ''}`);
+      announce(`${enabled ? t('已开启 ', 'TG alerts on for ') : t('已关闭 ', 'TG alerts off for ')}${name}${t(' 的 TG 上线通知', '')}${enabled && !view.botEnabled ? t('（Telegram 机器人未启用，暂不发送）', ' (the Telegram bot is off, so nothing is sent yet)') : ''}`);
     } catch (reason) { input.checked = !enabled; announce((reason as Error).message); }
     finally { input.disabled = false; }
   }
@@ -410,7 +415,7 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
     }
     return formatBytes(total);
   };
-  const selectCell = (item: Client | Inbound) => `<td class="select-cell"><input type="checkbox" data-select="${esc(item.id)}" ${selected.has(item.id) ? 'checked' : ''} aria-label="${t('选择', 'Select')} ${esc(item.name)}"></td>`;
+  const selectCell = (item: Client | Inbound) => `<td class="select-cell"><div class="record-controls"><button type="button" class="icon-button row-drag-handle" data-reorder="${esc(item.id)}" title="${t('拖动排序；聚焦后按上下方向键调整', 'Drag to reorder; use arrow keys when focused')}" aria-label="${t('调整顺序', 'Reorder')} ${esc(item.name)}" ${!orderReady[page] || orderSaving || loading || submitting || reloadRequired ? 'disabled' : ''}>${icon('grip-vertical')}</button><input type="checkbox" data-select="${esc(item.id)}" ${selected.has(item.id) ? 'checked' : ''} aria-label="${t('选择', 'Select')} ${esc(item.name)}"></div></td>`;
   function updateSelection(): void {
     const boxes = [...root.querySelectorAll<HTMLInputElement>('[data-select]')], all = root.querySelector<HTMLInputElement>('[data-select-all]');
     if (all) { all.checked = boxes.length > 0 && boxes.every(box => box.checked); all.indeterminate = !all.checked && boxes.some(box => box.checked); }
@@ -428,11 +433,12 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
     }
   }
   function listRows(): void {
+    sortable?.destroy(); sortable = null;
     const query = search.trim().toLocaleLowerCase();
     const contains = (text: string) => text.toLocaleLowerCase().includes(query);
-    const inboundRows = state.inbounds.filter(item => contains(`${item.name} ${presets[item.preset].label} ${item.port}`) && (filter === 'all' || item.enabled === (filter === 'enabled')));
+    const inboundRows = orderedRecords(state.inbounds, orders.inbounds.data).filter(item => contains(`${item.name} ${presets[item.preset].label} ${item.port}`) && (filter === 'all' || item.enabled === (filter === 'enabled')));
     const now = Date.now();
-    const clientRows = state.clients.filter(item => {
+    const clientRows = orderedRecords(state.clients, orders.clients.data).filter(item => {
       const inbound = state.inbounds.find(record => record.id === item.inboundId);
       return contains(`${item.name} ${inbound?.name ?? ''}`) && (!inboundFilter || item.inboundId === inboundFilter) && (filter === 'all' || (filter === 'available' ? clientStatus(viewClient(item), inbound, now) === t('可用', 'Available') : clientStatus(viewClient(item), inbound, now) !== t('可用', 'Available')));
     });
@@ -441,7 +447,7 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
     const count = visible.size;
     root.querySelector('#result-count')!.textContent = `${t('显示', 'Showing')} ${count} / ${page === 'inbounds' ? state.inbounds.length : state.clients.length} ${t('条', '')}`;
     const headers = page === 'inbounds' ? [t('入站名称', 'Inbound name'), t('类型 / 端口', 'Type / port'), t('状态', 'Status'), t('客户端', 'Clients'), t('总流量', 'Total traffic'), t('操作', 'Actions')]
-      : [t('客户端 / 入站', 'Client / inbound'), t('流量', 'Traffic'), t('到期', 'Expiry'), t('最近上线', 'Last online'), t('IP / 订阅', 'IP / subscription'), ...(persistent ? [t('上线通知', 'Online alerts')] : []), t('操作', 'Actions')];
+      : [t('客户端 / 入站', 'Client / inbound'), t('流量', 'Traffic'), t('到期', 'Expiry'), t('最近上线', 'Last online'), t('IP / 订阅', 'IP / subscription'), ...(persistent ? [t('TG 上线通知', 'TG online alerts')] : []), t('操作', 'Actions')];
     root.querySelector('#list-content')!.innerHTML = count ? `<table class="data-table ${page}-table${page === 'clients' && persistent ? ' with-notify' : ''}"><caption class="sr-only">${page === 'inbounds' ? persistent ? t('入站列表', 'Inbounds') : t('入站演示列表', 'Demo inbounds') : persistent ? t('客户端列表', 'Clients') : t('客户端演示列表', 'Demo clients')}</caption><thead><tr><th scope="col" class="select-cell"><input type="checkbox" data-select-all aria-label="${t('全选', 'Select all')}"></th>${headers.map(label => `<th scope="col">${label}</th>`).join('')}</tr></thead><tbody>${page === 'inbounds' ? inboundRows.map(item => `<tr>${selectCell(item)}
       <td data-label="${t('入站名称', 'Inbound name')}"><strong class="record-name">${esc(item.name)}</strong><small class="table-secondary">${presets[item.preset].protocol} · ${presets[item.preset].security}</small></td>
       <td data-label="${t('类型 / 端口', 'Type / port')}"><span class="tag preset-${item.preset}">${presets[item.preset].label}</span><small class="table-secondary">${presets[item.preset].transport} / ${item.port}${item.portHopping ? ` · ${t('跳跃', 'hop')} ${item.portHopping}` : ''}</small></td>
@@ -453,12 +459,61 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
           <td data-label="${t('流量', 'Traffic')}" data-client-traffic>${trafficCell(item)}</td>
           <td data-label="${t('到期', 'Expiry')}">${item.expiresAt === null ? `<span class="date-value">${t('永不过期', 'Never expires')}</span>` : `<span class="date-value">${expiryLeft(item.expiresAt, now)}</span><small class="table-secondary">${chineseDate(item.expiresAt)}</small>`}</td>
           <td data-label="${t('最近上线', 'Last online')}" data-client-last>${lastOnlineCell(item)}</td>
-          <td data-label="${t('IP / 订阅', 'IP / subscription')}" data-client-ip>${ipCell(item)}<small class="table-secondary">${subscriptionLabel(item)}</small></td>${persistent ? `<td data-label="${t('上线通知', 'Online alerts')}" data-client-notify>${notifyCell(item)}</td>` : ''}<td data-label="${t('操作', 'Actions')}">${rowActions(item, 'client')}</td></tr>`;
+          <td data-label="${t('IP / 订阅', 'IP / subscription')}" data-client-ip>${ipCell(item)}<small class="table-secondary">${subscriptionLabel(item)}</small></td>${persistent ? `<td data-label="${t('TG 上线通知', 'TG online alerts')}" data-client-notify>${notifyCell(item)}</td>` : ''}<td data-label="${t('操作', 'Actions')}">${rowActions(item, 'client')}</td></tr>`;
       }).join('')}</tbody></table>` : (page === 'inbounds' ? state.inbounds : state.clients).length === 0 ? `<div class="empty-state">${icon(page === 'inbounds' ? 'log-in' : 'users')}<h2>${page === 'inbounds' ? t('还没有入站', 'No inbounds yet') : t('还没有客户端', 'No clients yet')}</h2><p>${page === 'inbounds' ? t('用右上角的“添加入站”或“一键创建”开始。', 'Start with Add inbound or Quick create at the top right.') : t('先创建入站，再为它添加客户端。', 'Create an inbound first, then add clients to it.')}</p></div>`
       : `<div class="empty-state">${icon('search')}<h2>${page === 'inbounds' ? t('没有匹配的入站', 'No matching inbounds') : t('没有匹配的客户端', 'No matching clients')}</h2><p>${t('试试其他关键词或清除筛选。', 'Try other keywords or clear the filters.')}</p><button class="secondary-button" data-clear>${t('清除搜索与筛选', 'Clear search and filters')}</button></div>`;
     updateSelection();
     refreshIcons();
+    const body = root.querySelector<HTMLTableSectionElement>('.data-table tbody');
+    body?.querySelectorAll<HTMLTableRowElement>('tr').forEach(row => { row.dataset.orderId = row.querySelector<HTMLElement>('[data-reorder]')!.dataset.reorder; });
+    if (body) sortable = Sortable.create(body, {
+      handle: '.row-drag-handle', draggable: 'tr', dataIdAttr: 'data-order-id',
+      disabled: !orderReady[page] || orderSaving || loading || submitting || reloadRequired,
+      animation: matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 140,
+      ghostClass: 'row-sort-ghost', chosenClass: 'row-sort-chosen',
+      onEnd(event) {
+        if (event.oldIndex === event.newIndex) return;
+        const ids = [...body.rows].map(row => row.dataset.orderId!);
+        const kind = page, id = event.item.dataset.orderId!;
+        queueMicrotask(() => { void saveOrder(kind, ids, id); });
+      },
+    });
   }
+
+  async function readOrder(kind: ListKind): Promise<void> {
+    orderReady[kind] = false;
+    orders[kind] = await api<ListOrder>(`panel/list-order/${kind}`);
+    orderReady[kind] = true;
+  }
+  async function saveOrder(kind: ListKind, visible: string[], focusId: string): Promise<void> {
+    if (orderSaving || loading || submitting || reloadRequired || !orderReady[kind]) return;
+    const previous = orders[kind];
+    const data = mergeVisibleOrder(state[kind], previous.data, visible);
+    if (JSON.stringify(data) === JSON.stringify(orderedRecords<{ id: string }>(state[kind], previous.data).map(item => item.id))) return;
+    orderSaving = true; orders[kind] = { ...previous, data }; listRows();
+    try {
+      if (persistent) orders[kind] = await api<ListOrder>(`panel/list-order/${kind}`, jsonBody('PUT', { revision: previous.revision, data }));
+      announce(t('列表顺序已保存', 'List order saved'));
+    } catch (reason) {
+      orders[kind] = previous;
+      // 写入结果不明或修订冲突时只重新读取，绝不覆盖其他页面的顺序。
+      try { await readOrder(kind); } catch { orderReady[kind] = false; }
+      announce(`${(reason as Error).message} ${orderReady[kind] ? t('已重新读取列表顺序。', 'List order reloaded.') : t('顺序未确认，请刷新列表后重试。', 'Order unconfirmed; reload the list before retrying.')}`);
+    } finally {
+      orderSaving = false; listRows();
+      if (page === kind) [...root.querySelectorAll<HTMLButtonElement>('[data-reorder]')].find(button => button.dataset.reorder === focusId)?.focus();
+    }
+  }
+  root.addEventListener('keydown', event => {
+    const button = (event.target as Element).closest<HTMLButtonElement>('[data-reorder]');
+    if (!button || button.disabled || !['ArrowUp', 'ArrowDown'].includes(event.key)) return;
+    event.preventDefault();
+    const ids = [...root.querySelectorAll<HTMLElement>('tbody tr')].map(row => row.dataset.orderId!);
+    const index = ids.indexOf(button.dataset.reorder!), next = index + (event.key === 'ArrowUp' ? -1 : 1);
+    if (next < 0 || next >= ids.length) return;
+    [ids[index], ids[next]] = [ids[next]!, ids[index]!];
+    void saveOrder(page, ids, button.dataset.reorder!);
+  });
   function renderList(): void {
     const available = state.clients.filter(item => clientStatus(viewClient(item), state.inbounds.find(record => record.id === item.inboundId)) === t('可用', 'Available')).length;
     root.innerHTML = `<header class="page-heading"><div><h1 class="page-title" tabindex="-1">${page === 'inbounds' ? t('入站列表', 'Inbounds') : t('客户端', 'Clients')}</h1><p>${page === 'inbounds' ? t('创建和管理入站，保存后立即生效。', 'Create and manage inbounds; changes apply as soon as you save.') : persistent ? t('管理客户端，查看累计流量与到期时间。', 'Manage clients and view traffic totals and expiry.') : t('管理客户端演示数据与到期时间。', 'Manage demo client data and expiry.')}</p></div>${page === 'inbounds' && persistent ? `<div class="create-actions"><button class="primary-button create-button" data-create ${!loaded || loading || reloadRequired ? 'disabled' : ''}>${icon('plus')}${t('添加入站', 'Add inbound')}</button><div class="quick-create"><button class="secondary-button" data-quick-toggle aria-haspopup="menu" aria-expanded="false" ${!loaded || loading || submitting || reloadRequired ? 'disabled' : ''}>${icon('zap')}${t('一键创建', 'Quick create')}</button><div class="quick-menu" role="menu" hidden>${(Object.keys(quickLabels) as Preset[]).map(key => `<button type="button" role="menuitem" data-quick-preset="${key}">${quickLabels[key]}</button>`).join('')}</div></div></div>` : `<button class="primary-button create-button" data-create ${!loaded || loading || reloadRequired ? 'disabled' : ''}>${icon('plus')}${page === 'inbounds' ? t('一键创建', 'Quick create') : t('添加客户端', 'Add client')}</button>`}</header>
@@ -491,7 +546,7 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
     if (button.hasAttribute('data-reload')) { void load(true); return; }
     if (button.dataset.firewallRetry) { void retryFirewall(button.dataset.firewallRetry); return; }
     if (button.dataset.firewallCleanup) { void cleanupFirewall(button.dataset.firewallCleanup); return; }
-    if (!loaded || loading || submitting || reloadRequired) return;
+    if (!loaded || loading || submitting || orderSaving || reloadRequired) return;
     if (button.hasAttribute('data-create')) { if (page === 'inbounds') quickCreate(); else clientEditor(); }
     if (button.hasAttribute('data-quick-toggle')) { quickMenu(root.querySelector<HTMLElement>('.quick-menu')!.hidden === true); return; }
     if (button.dataset.quickPreset) { quickMenu(false); void quickCreateNow(button.dataset.quickPreset as Preset); }
@@ -508,7 +563,7 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
     if (target.dataset.toggleNotify !== undefined) void toggleNotify(target);
   });
   async function load(force = false): Promise<void> {
-    if ((!force && loaded) || loading || submitting) return;
+    if ((!force && loaded) || loading || submitting || orderSaving) return;
     if (force && loaded && !await confirmAction(t('重新读取将丢弃当前入站或客户端弹窗中未保存的输入，并使用数据库最新列表。请先复制需要保留的内容。只读取，不保存、不应用核心。', 'Reloading discards unsaved input in the inbound or client dialog and uses the latest list from the database. Copy anything you need first. It only reads; nothing is saved or applied.'), { title: t('重新读取列表', 'Reload list'), confirmLabel: t('重新读取', 'Reload') })) return;
     const controls = [...modal.querySelectorAll<HTMLInputElement | HTMLButtonElement | HTMLSelectElement | HTMLTextAreaElement>('input,button,select,textarea')];
     const disabled = controls.map(control => control.disabled); controls.forEach(control => { control.disabled = true; });
@@ -516,6 +571,9 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
     try {
       const document = await api<{ revision: number; data: Workspace | null }>('workspace');
       state = document.data ?? { inbounds: [], clients: [] }; revision = document.revision; loaded = true; reloadRequired = false;
+      for (const kind of ['inbounds', 'clients'] as const) {
+        try { await readOrder(kind); } catch { announce(t('列表顺序读取失败，拖动暂不可用；请刷新重试。', 'List order could not be loaded; reload to enable reordering.')); }
+      }
       await refreshFirewall();
       if (inboundFilter && !state.inbounds.some(item => item.id === inboundFilter)) inboundFilter = '';
       if (force && modal.open) modal.close();

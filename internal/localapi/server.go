@@ -65,6 +65,7 @@ func handler(manager *core.Manager, state *store.Store, dist string, hosts []str
 	registerOutboundTraffic(mux, rt)
 	registerFreePort(mux, state)
 	registerFirewall(mux, rt, state)
+	registerListOrder(mux, state)
 	mux.HandleFunc("GET /api/logs", func(w http.ResponseWriter, r *http.Request) {
 		if rt == nil || rt.logs == nil {
 			respond(w, 503, map[string]string{"error": i18n.T("诊断日志尚未启动", "Diagnostics log is not running")})

@@ -1,7 +1,7 @@
 import { createIcons, Gauge, LogIn, Users, Settings, Wrench, PanelLeftClose,
   PanelLeftOpen, Moon, Sun, Eye, EyeOff, ArrowUp, ArrowDown, List, Power, RotateCw,
   RefreshCw, SlidersHorizontal, DatabaseBackup, ChartArea, ChartNoAxesCombined, Menu, X,
-  Info, Plus, Search, Pencil, Trash2, CalendarDays, Shuffle, QrCode, Zap, LogOut } from 'lucide';
+  Info, Plus, Search, Pencil, Trash2, CalendarDays, Shuffle, QrCode, Zap, LogOut, GripVertical } from 'lucide';
 import { demo, linePath, percent, resourceColor, samples } from './model.ts';
 import { initManagement } from './management.ts';
 import { initCore } from './core.ts';
@@ -30,7 +30,7 @@ document.addEventListener('click', event => {
 const icons = { Gauge, LogIn, Users, Settings, Wrench, PanelLeftClose,
   PanelLeftOpen, Moon, Sun, Eye, EyeOff, ArrowUp, ArrowDown, List, Power, RotateCw,
   RefreshCw, SlidersHorizontal, DatabaseBackup, ChartArea, ChartNoAxesCombined, Menu, X,
-  Info, Plus, Search, Pencil, Trash2, CalendarDays, Shuffle, QrCode, Zap, LogOut };
+  Info, Plus, Search, Pencil, Trash2, CalendarDays, Shuffle, QrCode, Zap, LogOut, GripVertical };
 const icon = (name: string) => `<i data-lucide="${name}" aria-hidden="true"></i>`;
 const action = (label: string, name: string, id: string) =>
   `<button class="action" data-action="${id}">${icon(name)}<span>${label}</span></button>`;

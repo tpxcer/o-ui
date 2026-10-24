@@ -4,6 +4,7 @@ import { registerHooks } from 'node:module';
 import { seedWorkspace } from '../src/workspace.ts';
 
 const hooks = registerHooks({ load(url, context, next) {
+  if (url.includes('/node_modules/sortablejs/')) return { format: 'module', source: 'export default { create() { return { destroy() {} }; } };', shortCircuit: true };
   return url.endsWith('.css') ? { format: 'module', source: '', shortCircuit: true } : next(url, context);
 } });
 const { initManagement } = await import('../src/management.ts');
@@ -60,7 +61,7 @@ async function withPage(fetcher: typeof fetch, run: (root: Control, dialogs: Con
   const timers: { delay: number; callback: () => void }[] = [];
   root.hidden = true;
   const values = {
-    fetch: ((url, options) => String(url).endsWith('/api/runtime/firewall') ? firewallFetcher ? firewallFetcher(url, options) : Promise.resolve(Response.json({ data: null })) : fetcher(url, options)) as typeof fetch, location: { protocol: 'http:' }, HTMLInputElement: Control, HTMLButtonElement: Control, setTimeout() { return 0; }, clearTimeout() {},
+    fetch: ((url, options) => String(url).includes('/api/panel/list-order/') ? Promise.resolve(Response.json({ revision: 0, data: [] })) : String(url).endsWith('/api/runtime/firewall') ? firewallFetcher ? firewallFetcher(url, options) : Promise.resolve(Response.json({ data: null })) : fetcher(url, options)) as typeof fetch, location: { protocol: 'http:' }, HTMLInputElement: Control, HTMLButtonElement: Control, matchMedia() { return { matches: false }; }, setTimeout() { return 0; }, clearTimeout() {},
     window: { setInterval(callback: () => void, delay: number) { timers.push({ delay, callback }); }, addEventListener() {}, removeEventListener() {} },
     document: { createElement: (tag: string) => { const item = new Control(); item.onConfirm = () => { confirmation.count++; return confirmation.answer; }; if (tag === 'dialog') dialogs.push(item); return item; }, body: new Control(), activeElement: null, hidden: false, addEventListener() {}, querySelector() { return null; } },
   };
