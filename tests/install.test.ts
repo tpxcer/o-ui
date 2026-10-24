@@ -1038,7 +1038,8 @@ test('已安装时o-ui进入编号菜单：查看信息、改访问路径、重�
   const answers = ['1', '3', 'newPath', '4', 'newadmin', '', '2', '34567', 'y', 'y', '0'];
   const { status, out } = box.run([], answers, { FAKE_UFW: '1' });
   assert.equal(status, 0, out);
-  for (const item of ['1) 查看当前设置', '2) 修改端口', '3) 修改访问路径', '4) 重置用户名和密码', '5) 证书管理', '6) 启动', '10) 日志', '11) 更新', '12) 卸载', '13) BBR', '0) 退出']) assert.ok(out.includes(item), item);
+  for (const item of ['1) 查看当前设置', '2) 修改端口', '3) 修改访问路径', '4) 重置用户名和密码', '5) 证书管理', '6) 面板管理', '7) BBR', '0) 退出']) assert.ok(out.includes(item), item);
+  assert.doesNotMatch(out, /\d+\) (启动|卸载)\n/, '启停、更新、卸载等收进面板管理二级菜单');
   assert.match(out, /访问地址：https:\/\/example\.com:23456\/panelqa\//);
   assert.match(out, /用户名：admin-test/);
   assert.match(out, /密码：已加密保存，无法查看/);
@@ -1056,6 +1057,19 @@ test('已安装时o-ui进入编号菜单：查看信息、改访问路径、重�
   assert.match(out, /端口已改为 34567：https:\/\/example\.com:34567\/newPath\//);
   assert.deepEqual([(await conf(box)).OUI_PORT, (await conf(box)).OUI_PATH], ['34567', '/newPath/']);
   assert.ok(existsSync(join(box.state, 'active')));
+});
+
+test('面板管理二级菜单：启停、日志、更新、卸载收在里面，开机自启可关闭再开启', async () => {
+  const box = await sandbox();
+  assert.equal(box.run(['install', '--package', box.pkg], [...start(), ...acme(), 'n', 'y'], { FAKE_UFW: '1' }).status, 0);
+  assert.ok(existsSync(join(box.state, 'enabled')));
+  const { status, out } = box.run([], ['6', '6', 'y', '6', '0', '0'], { FAKE_UFW: '1' });
+  assert.equal(status, 0, out);
+  for (const item of ['1) 启动', '2) 停止', '3) 重启', '4) 状态', '5) 日志', '7) 更新', '8) 卸载', '0) 返回上一级']) assert.ok(out.includes(item), item);
+  assert.match(out, /6\) 开机自启（当前：已启用）[\s\S]*已关闭开机自启[\s\S]*6\) 开机自启（当前：未启用）[\s\S]*已设为开机自启/);
+  const calls = await box.log('calls.log');
+  assert.ok(calls.lastIndexOf('systemctl disable o-ui') >= 0 && calls.lastIndexOf('systemctl disable o-ui') < calls.lastIndexOf('systemctl enable o-ui'), calls);
+  assert.ok(existsSync(join(box.state, 'enabled')));
 });
 
 test('o-ui info显示完整信息；菜单回车即退出；未安装时o-ui进入安装', async () => {

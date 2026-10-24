@@ -1887,6 +1887,50 @@ cmd_bbr_menu() {
 
 menu_item() { printf ' %2d) %s\n' "$1" "$(t "$2" "$3")"; }
 
+# 开机自启开关：只改是否随系统启动，不改变当前运行状态
+panel_boot_toggle() {
+  if systemctl is-enabled --quiet o-ui; then
+    ask_yes "o-ui已设为开机自启，是否关闭？" "o-ui starts at boot; turn this off?" n || return 0
+    systemctl disable o-ui >/dev/null || die "关闭开机自启失败" "failed to disable start at boot"
+    info "已关闭开机自启；当前运行状态不变。" "Start at boot is off; the current running state is unchanged."
+  else
+    systemctl enable o-ui >/dev/null || die "设置开机自启失败" "failed to enable start at boot"
+    info "已设为开机自启；当前运行状态不变。" "Start at boot is on; the current running state is unchanged."
+  fi
+}
+
+# 面板管理二级菜单（用户2026-10-24要求）：启停、状态、日志、开机自启、更新、卸载
+cmd_panel_menu() {
+  local n boot
+  while :; do
+    if systemctl is-enabled --quiet o-ui; then boot=$(t 已启用 enabled); else boot=$(t 未启用 disabled); fi
+    info "面板管理：" "Panel management:"
+    menu_item 1 "启动" "Start"
+    menu_item 2 "停止" "Stop"
+    menu_item 3 "重启" "Restart"
+    menu_item 4 "状态" "Status"
+    menu_item 5 "日志" "Logs"
+    menu_item 6 "开机自启（当前：$boot）" "Start at boot (now: $boot)"
+    menu_item 7 "更新" "Update"
+    menu_item 8 "卸载" "Uninstall"
+    menu_item 0 "返回上一级" "Back to previous menu"
+    choose n 0 8 0
+    case $n in
+      0) return 0 ;;
+      1) systemctl start o-ui || true ;;
+      2) systemctl stop o-ui || true ;;
+      3) systemctl restart o-ui || true ;;
+      4) (cmd_status) || true ;;
+      5) journalctl -u o-ui --no-pager -n 100 || true ;;
+      6) (panel_boot_toggle) || true ;;
+      7) (cmd_update) || true ;;
+      8) (cmd_uninstall) || true ;;
+    esac
+    installed || return 0
+    conf_load
+  done
+}
+
 # 已安装时不带参数运行o-ui进入的编号菜单；每项在子shell中执行，出错只结束该项
 cmd_menu() {
   require_installed
@@ -1899,16 +1943,10 @@ cmd_menu() {
     menu_item 3 "修改访问路径" "Change access path"
     menu_item 4 "重置用户名和密码" "Reset username and password"
     menu_item 5 "证书管理" "Certificates"
-    menu_item 6 "启动" "Start"
-    menu_item 7 "停止" "Stop"
-    menu_item 8 "重启" "Restart"
-    menu_item 9 "状态" "Status"
-    menu_item 10 "日志" "Logs"
-    menu_item 11 "更新" "Update"
-    menu_item 12 "卸载" "Uninstall"
-    menu_item 13 "BBR" "BBR"
+    menu_item 6 "面板管理" "Panel management"
+    menu_item 7 "BBR" "BBR"
     menu_item 0 "退出" "Exit"
-    choose n 0 13 0
+    choose n 0 7 0
     case $n in
       0) return 0 ;;
       1) (show_info) || true ;;
@@ -1916,14 +1954,8 @@ cmd_menu() {
       3) (cmd_path) || true ;;
       4) (cmd_reset_admin) || true ;;
       5) (cmd_cert_menu) || true ;;
-      6) systemctl start o-ui || true ;;
-      7) systemctl stop o-ui || true ;;
-      8) systemctl restart o-ui || true ;;
-      9) (cmd_status) || true ;;
-      10) journalctl -u o-ui --no-pager -n 100 || true ;;
-      11) (cmd_update) || true ;;
-      12) (cmd_uninstall) || true ;;
-      13) (cmd_bbr_menu) || true ;;
+      6) (cmd_panel_menu) || true ;;
+      7) (cmd_bbr_menu) || true ;;
     esac
     installed || return 0
     conf_load
