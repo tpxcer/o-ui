@@ -54,28 +54,42 @@ exec "$@"`,
 echo "systemctl $*" >>"$s/calls.log"
 unit="$O_UI_ROOT_PREFIX/etc/systemd/system/o-ui.service"
 case "$1" in
-  show) case "$4" in ControlGroup) echo "/system.slice/$2" ;; TriggeredBy) printf '%s' "\${FAKE_WEBSITE_SOCKET:-}" ;; esac; exit 0 ;;
-  is-active) for u; do :; done; case $u in nginx.service|apache2.service|httpd.service|caddy.service) [ -f "$s/website-active" ] ;; o-ui-update) [ -f "$s/update-active" ] ;; o-ui-cert-renew.timer) [ -z "$FAKE_TIMER_FAIL" ] && [ -f "$s/timer" ] ;; *) [ -f "$s/active" ] ;; esac; exit ;;
+  show) case "$4" in Id) echo "\${FAKE_SERVICE_ID:-$2}" ;; ControlGroup) echo "\${FAKE_WEBSITE_CGROUP:-/system.slice/$2}" ;; LoadState) echo "\${FAKE_WEBSITE_LOAD:-loaded}" ;; TriggeredBy) printf '%s' "\${FAKE_WEBSITE_SOCKET:-}" ;; esac; exit 0 ;;
+  is-active) for u; do :; done; if [ "$u" = "$(cat "$s/website-unit" 2>/dev/null)" ]; then [ -f "$s/website-active" ]; exit; fi; case $u in o-ui-update) [ -f "$s/update-active" ] ;; o-ui-cert-renew.timer) [ -z "$FAKE_TIMER_FAIL" ] && [ -f "$s/timer" ] ;; *) [ -f "$s/active" ] ;; esac; exit ;;
   is-enabled) for u; do :; done; case $u in o-ui-cert-renew.timer) [ -f "$s/timer" ] ;; ufw) [ -f "$s/ufw-enabled" ] ;; *) [ -f "$s/enabled" ] ;; esac; exit ;;
   enable) for u; do :; done; case $u in o-ui) : >"$s/enabled" ;; o-ui-cert-renew.timer) : >"$s/timer" ;; ufw) : >"$s/ufw-enabled" ;; esac; exit 0 ;;
   start|restart)
-    case "$2" in nginx.service|apache2.service|httpd.service|caddy.service) [ -z "\${FAKE_WEBSITE_START_FAIL:-}" ] || exit 1; : >"$s/website-active"; exit 0 ;; esac
+    if [ "$2" = "$(cat "$s/website-unit" 2>/dev/null)" ]; then [ -z "\${FAKE_WEBSITE_START_FAIL:-}" ] || exit 1; : >"$s/website-active"; exit 0; fi
     [ "$2" = o-ui ] || exit 0
     if [ -n "\${FAKE_FAIL_VERSION:-}" ] && [ "$(cat "$O_UI_ROOT_PREFIX/opt/o-ui/VERSION")" = "$FAKE_FAIL_VERSION" ]; then rm -f "$s/active" "$s/listening"; exit 0; fi
     : >"$s/active"; awk '/^ExecStart=/ { print $NF }' "$unit" >"$s/listening"; exit 0 ;;
-  stop) case "$2" in nginx.service|apache2.service|httpd.service|caddy.service) rm -f "$s/website-active"; [ -z "\${FAKE_WEBSITE_STOP_FAIL:-}" ]; exit ;; esac; [ "$2" = o-ui ] && rm -f "$s/active" "$s/listening"; exit 0 ;;
+  stop) if [ "$2" = "$(cat "$s/website-unit" 2>/dev/null)" ]; then rm -f "$s/website-active"; [ -z "\${FAKE_WEBSITE_STOP_FAIL:-}" ]; exit; fi; [ "$2" = o-ui ] && rm -f "$s/active" "$s/listening"; exit 0 ;;
   disable) case " $* " in *" o-ui "*) rm -f "$s/active" "$s/listening" "$s/enabled" ;; esac; exit 0 ;;
   status) echo "o-ui.service fake status"; exit 0 ;;
 esac
 exit 0`,
   ss: `if [ "$1" = -H ]; then
   [ -z "\${FAKE_SS_FAIL:-}" ] || exit 1
-  if [ -f "$FAKE_STATE/website-active" ]; then cat "$FAKE_STATE/website-listeners"; fi
+  if [ -f "$FAKE_STATE/website-active" ] || [ -n "\${FAKE_PORT_STAYS:-}" ]; then cat "$FAKE_STATE/website-listeners"; fi
   if grep -qx 80 "$FAKE_STATE/listening-extra" 2>/dev/null; then echo 'LISTEN 0 4096 0.0.0.0:80 0.0.0.0:*'; fi
   exit 0
 fi
 echo 'State Recv-Q Send-Q Local Address:Port Peer Address:Port'
 for p in $(cat "$FAKE_STATE/listening" "$FAKE_STATE/listening-extra" 2>/dev/null); do echo "LISTEN 0 4096 0.0.0.0:$p 0.0.0.0:*"; done`,
+  docker: `s=$FAKE_STATE
+[ "$1" = --host ] && [ "$2" = unix:///var/run/docker.sock ] || exit 97
+[ -z "$DOCKER_CONTEXT$DOCKER_TLS_VERIFY$DOCKER_CERT_PATH" ] || exit 97
+shift 2
+echo "docker $*" >>"$s/calls.log"
+container=$(cat "$s/docker-id" 2>/dev/null)
+case $1 in
+  ps) [ -z "$container" ] || echo "$container" ;;
+  inspect)
+    [ -n "$container" ] && { [ "$4" = "$container" ] || [ "$4" = web-container ]; } || exit 1
+    case $3 in '{{.Id}}') echo "$container" ;; '{{.State.Running}}') [ -f "$s/website-active" ] && echo true || echo false ;; *NetworkSettings.Ports*) printf '%s\\n' "\${FAKE_DOCKER_PORT:-80}" ;; esac ;;
+  stop) [ "$2" = "$container" ] || exit 1; rm -f "$s/website-active"; [ -z "\${FAKE_WEBSITE_STOP_FAIL:-}" ] ;;
+  start) [ "$2" = "$container" ] && [ -z "\${FAKE_WEBSITE_START_FAIL:-}" ] || exit 1; : >"$s/website-active" ;;
+esac`,
   sysctl: `echo "sysctl $*" >>"$FAKE_STATE/calls.log"
 [ -z "\${FAKE_SYSCTL_FAIL:-}" ] || exit 1
 put() { f="$O_UI_ROOT_PREFIX/proc/sys/$(printf '%s' "\${1%%=*}" | tr . /)"; printf '%s\\n' "\${1#*=}" >"$f"; }
@@ -310,6 +324,7 @@ const start = (port = '23456', path = '/panelqa/') => ['1', port, path, 'admin-t
 const acme = (host = 'example.com') => [host, '1', ''];
 
 async function website(box: Awaited<ReturnType<typeof sandbox>>, unit = 'nginx.service') {
+  await writeFile(join(box.state, 'website-unit'), unit);
   await mkdir(join(box.root, 'proc/4242'), { recursive: true });
   await writeFile(join(box.root, 'proc/4242/cgroup'), `0::/system.slice/${unit}\n`);
   await writeFile(join(box.state, 'website-listeners'), 'LISTEN 0 4096 0.0.0.0:80 0.0.0.0:* users:(("website",pid=4242,fd=6))\nLISTEN 0 4096 [::]:80 [::]:* users:(("website",pid=4242,fd=7))\n');
@@ -446,8 +461,8 @@ test('历史导入证书在普通升级时保留，不擅自申请或替换', as
   assert.equal(await box.log('acme.log'), acmeBefore);
 });
 
-test('HTTP-01确认临停网站：只在验证窗口停止，随后恢复并保存未来续期授权', async () => {
-  for (const unit of ['nginx.service', 'apache2.service', 'httpd.service', 'caddy.service']) {
+test('HTTP-01确认临停网站：支持自定义服务，只在验证窗口停止并恢复，保存未来续期授权', async () => {
+  for (const unit of ['nginx.service', 'apache2.service', 'httpd.service', 'caddy.service', 'my-web@main.service']) {
     const box = await sandbox();
     await website(box, unit);
     const result = box.run(['install', '--package', box.pkg], [...start(), 'example.com', '1', 'y', '', 'n']);
@@ -482,6 +497,17 @@ test('HTTP-01签发失败、post钩子缺失及stop部分失败都恢复网站',
   }
 });
 
+test('HTTP-01自定义slice中的网站服务按实际ControlGroup识别，不要求system.slice固定路径', async () => {
+  const box = await sandbox();
+  await website(box, 'custom-web.service');
+  const group = '/web.slice/custom-web.service';
+  await writeFile(join(box.root, 'proc/4242/cgroup'), `0::${group}/workers\n`);
+  const result = box.run(['install', '--package', box.pkg], [...start(), 'example.com', '1', 'y', '', 'n'], { FAKE_WEBSITE_CGROUP: group });
+  assert.equal(result.status, 0, result.out);
+  assert.equal((await conf(box)).OUI_HTTP_SERVICE, 'custom-web.service');
+  assert.doesNotMatch(result.out, /无法自动确定临停目标/);
+});
+
 test('HTTP-01恢复失败明确报错并保留救援记录，后续救援不重复签发', async () => {
   const fresh = await sandbox();
   await website(fresh);
@@ -503,7 +529,7 @@ test('HTTP-01恢复失败明确报错并保留救援记录，后续救援不重�
   assert.equal(existsSync(join(box.state, 'website-active')), true);
 });
 
-test('HTTP-01拒绝授权或未知/Docker/混合/socket监听者时不停止网站，可重选DNS', async () => {
+test('HTTP-01拒绝授权或手动目标为空、socket触发、ss失败时不停止网站，可重选DNS', async () => {
   for (const kind of ['decline', 'docker', 'mixed', 'socket', 'ss-fail']) {
     const box = await sandbox();
     await website(box);
@@ -516,11 +542,81 @@ test('HTTP-01拒绝授权或未知/Docker/混合/socket监听者时不停止网�
     }
     if (kind === 'socket') env.FAKE_WEBSITE_SOCKET = 'caddy.socket';
     if (kind === 'ss-fail') env.FAKE_SS_FAIL = '1';
-    const result = box.run(['install', '--package', box.pkg], [...start(), 'example.com', '1', ...(kind === 'decline' ? [''] : []), 'example.com', '2', 'token-x', '', '', 'n'], env);
+    const result = box.run(['install', '--package', box.pkg], [...start(), 'example.com', '1', ...(kind !== 'ss-fail' ? [''] : []), 'example.com', '2', 'token-x', '', '', 'n'], env);
     assert.equal(result.status, 0, result.out);
     assert.equal((await conf(box)).OUI_CHALLENGE, 'cf');
     assert.equal((await conf(box)).OUI_HTTP_SERVICE, '');
     assert.doesNotMatch(await box.log('calls.log'), /systemctl (stop|start|restart) (nginx|caddy|docker)/);
+  }
+});
+
+test('HTTP-01归属识别失败可手动指定服务，用户确认后临停；未释放80则恢复并停止签发', async () => {
+  for (const stays of [false, true]) {
+    const box = await sandbox();
+    await website(box, 'custom-web.service');
+    await writeFile(join(box.root, 'proc/4242/cgroup'), '0::/unusual.slice/application.scope\n');
+    const result = box.run(['install', '--package', box.pkg], [...start(), 'example.com', '1', 'custom-web.service', 'y', '', 'n', 'n'], stays ? { FAKE_PORT_STAYS: '1' } : {});
+    assert.equal(result.status, 0, result.out);
+    assert.equal((await conf(box)).OUI_MODE, stays ? 'local' : 'acme');
+    assert.match(await box.log('calls.log'), /systemctl stop custom-web.service/);
+    assert.match(await box.log('calls.log'), /systemctl start custom-web.service/);
+    assert.equal(existsSync(join(box.state, 'website-active')), true);
+    assert.equal(existsSync(join(box.root, 'etc/o-ui/acme/http-paused')), false);
+    assert.equal((await box.log('calls.log')).includes('validation issue'), !stays);
+  }
+});
+
+test('HTTP-01仅临停明确确认的Docker容器，固定完整ID，续期跳过/失败及救援均不操作守护进程', async () => {
+  const box = await sandbox();
+  await website(box);
+  const id = 'a'.repeat(64);
+  await writeFile(join(box.state, 'docker-id'), id);
+  await writeFile(join(box.root, 'proc/4242/cgroup'), '0::/system.slice/docker-deadbeef.scope\n');
+  const install = box.run(['install', '--package', box.pkg], [...start(), 'example.com', '1', 'y', '', 'n'], { DOCKER_HOST: 'tcp://remote.invalid:2375', DOCKER_CONTEXT: 'remote', DOCKER_TLS_VERIFY: '1', DOCKER_CERT_PATH: '/remote' });
+  assert.equal(install.status, 0, install.out);
+  assert.equal((await conf(box)).OUI_HTTP_SERVICE, `docker:${id}`);
+  const calls = await box.log('calls.log');
+  assert.ok(calls.indexOf(`docker stop ${id}`) < calls.indexOf('validation issue'), calls);
+  assert.ok(calls.indexOf('validation issue') < calls.indexOf(`docker start ${id}`), calls);
+  const before = (await box.log('calls.log')).length;
+  assert.equal(box.run(['cert', 'renew'], [], { FAKE_ACME_RENEW_RC: '2' }).status, 0);
+  assert.doesNotMatch((await box.log('calls.log')).slice(before), /docker (stop|start)/);
+  const fail = box.run(['cert', 'renew'], [], { FAKE_ACME_RENEW_RC: '1', FAKE_ACME_SKIP_POST: '1' });
+  assert.equal(fail.status, 1, fail.out);
+  assert.equal(existsSync(join(box.state, 'website-active')), true);
+  const restoreFail = box.run(['cert', 'renew'], [], { FAKE_WEBSITE_START_FAIL: '1' });
+  assert.equal(restoreFail.status, 1, restoreFail.out);
+  assert.equal(await box.read('etc/o-ui/acme/http-paused'), `docker:${id}\n`);
+  assert.equal(box.run(['cert-http-resume']).status, 0);
+  assert.doesNotMatch(await box.log('calls.log'), /systemctl (stop|start|restart) docker|docker (kill|rm|restart)/);
+});
+
+test('HTTP-01容器仅内部80/非标准宿主映射不能误当宿主80，手动指定后须确认，重建同名容器不继承授权', async () => {
+  const box = await sandbox();
+  await website(box);
+  const id = 'b'.repeat(64);
+  await writeFile(join(box.state, 'docker-id'), id);
+  await writeFile(join(box.root, 'proc/4242/cgroup'), '0::/unknown.scope\n');
+  const install = box.run(['install', '--package', box.pkg], [...start(), 'example.com', '1', 'docker:web-container', 'y', '', 'n'], { FAKE_DOCKER_PORT: '8080' });
+  assert.equal(install.status, 0, install.out);
+  assert.match(install.out, /临停目标（完整服务名/);
+  assert.equal((await conf(box)).OUI_HTTP_SERVICE, `docker:${id}`);
+  await writeFile(join(box.state, 'docker-id'), 'c'.repeat(64));
+  const before = (await box.log('calls.log')).length;
+  const renew = box.run(['cert', 'renew']);
+  assert.equal(renew.status, 1, renew.out);
+  assert.doesNotMatch((await box.log('calls.log')).slice(before), /docker (stop|start)/);
+});
+
+test('HTTP-01不得通过手动确认停止SSH、Docker守护进程、网络或面板，拒绝命令注入', async () => {
+  for (const target of ['ssh.service', 'docker.service', 'systemd-networkd.service', 'o-ui.service', 'nginx.service;id', 'docker:--all', 'ssh-alias.service']) {
+    const box = await sandbox();
+    await website(box);
+    await writeFile(join(box.root, 'proc/4242/cgroup'), '0::/unknown.scope\n');
+    const result = box.run(['install', '--package', box.pkg], [...start(), 'example.com', '1', target, 'example.com', '2', 'token-x', '', '', 'n'], target === 'ssh-alias.service' ? { FAKE_SERVICE_ID: 'ssh.service' } : {});
+    assert.equal(result.status, 0, result.out);
+    assert.match(result.out, /临停目标无效或不允许/);
+    assert.doesNotMatch(await box.log('calls.log'), /systemctl stop |docker stop /);
   }
 });
 
@@ -608,12 +704,12 @@ test('HTTP-01中断时终止本次ACME进程并恢复；同时运行的证书操
   }
 });
 
-test('80端口被占用时拒绝HTTP-01，重新选择DNS且不停止已有服务', async () => {
+test('80端口监听者未知时手动目标留空可重新选择DNS，不停止已有服务', async () => {
   const box = await sandbox();
   await writeFile(join(box.state, 'listening-extra'), '80\n');
-  const { status, out } = box.run(['install', '--package', box.pkg], [...start('25000'), 'example.com', '1', 'example.com', '2', 'token-x', '', '', 'n']);
+  const { status, out } = box.run(['install', '--package', box.pkg], [...start('25000'), 'example.com', '1', '', 'example.com', '2', 'token-x', '', '', 'n']);
   assert.equal(status, 0, out);
-  assert.match(out, /80端口已被占用，HTTP-01无法使用/);
+  assert.match(out, /80端口已被占用，无法自动确定临停目标/);
   assert.doesNotMatch(await box.log('calls.log'), /systemctl (stop|restart) (nginx|apache|docker)/);
   assert.match(await box.log('acme.log'), /\[--dns\] \[dns_cf\]/);
   assert.equal((await conf(box)).OUI_MODE, 'acme');

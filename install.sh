@@ -475,12 +475,51 @@ acme() {
 }
 
 http_service_allowed() {
-  case $1 in nginx.service|apache2.service|httpd.service|caddy.service) return 0 ;; *) return 1 ;; esac
+  [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9_.@-]*\.service$ ]] || return 1
+  case $1 in ssh.service|sshd.service|ssh@*.service|sshd@*.service|docker.service|containerd.service|dbus*.service|systemd-*.service|NetworkManager*.service|network*.service|networking.service|o-ui*.service) return 1 ;; esac
 }
 
-# 所有监听PID必须能归属同一个允许的systemd网站服务；无监听返回空，不能识别返回失败。
+# 忽略调用者的远程Docker context/TLS设置，始终使用本机rootful守护进程。
+http_docker() {
+  DOCKER_CONTEXT= DOCKER_TLS_VERIFY= DOCKER_CERT_PATH= docker --host unix:///var/run/docker.sock "$@"
+}
+
+# 固定实际unit名称或容器完整ID；不执行用户输入的命令，不以容器名称保存长期授权。
+http_target_resolve() {
+  local target=$1 id triggered
+  case $target in
+    docker:*)
+      target=${target#docker:}
+      [[ $target =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || return 1
+      command -v docker >/dev/null 2>&1 || return 1
+      id=$(http_docker inspect --format '{{.Id}}' "$target" 2>/dev/null) || return 1
+      [[ $id =~ ^[0-9a-f]{64}$ ]] || return 1
+      printf 'docker:%s' "$id" ;;
+    *)
+      http_service_allowed "$target" || return 1
+      id=$(systemctl show "$target" -p Id --value) || return 1
+      http_service_allowed "$id" || return 1
+      [ "$(systemctl show "$id" -p LoadState --value)" = loaded ] || return 1
+      triggered=$(systemctl show "$id" -p TriggeredBy --value) || return 1
+      [ -z "$triggered" ] || return 1
+      printf '%s' "$id" ;;
+  esac
+}
+
+http_target_active() {
+  case $1 in
+    docker:*) [ "$(http_docker inspect --format '{{.State.Running}}' "${1#docker:}" 2>/dev/null)" = true ] ;;
+    *) systemctl is-active --quiet "$1" ;;
+  esac
+}
+
+http_target_action() {
+  case $2 in docker:*) http_docker "$1" "${2#docker:}" >/dev/null ;; *) systemctl "$1" "$2" ;; esac
+}
+
+# 自动发现只用于给出建议；无法匹配时，交互流程允许用户明确指定临停目标。
 http_listener_service() {
-  local listeners line pids pid unit found='' triggered
+  local listeners line pids pid unit found='' group
   command -v ss >/dev/null 2>&1 || return 1
   listeners=$(ss -H -lntp 'sport = :80' 2>/dev/null) || return 1
   [ -n "$listeners" ] || return 0
@@ -488,15 +527,32 @@ http_listener_service() {
     pids=$(printf '%s\n' "$line" | grep -oE 'pid=[0-9]+' | cut -d= -f2) || return 1
     [ -n "$pids" ] || return 1
     for pid in $pids; do
-      unit=$(awk -F: '$3 ~ /^\/system.slice\/(nginx|apache2|httpd|caddy)\.service(\/|$)/ {split($3,a,"/"); print a[3]}' "$F_PROC/$pid/cgroup" 2>/dev/null | sort -u) || return 1
-      http_service_allowed "$unit" || return 1
+      unit=$(awk -F: '{n=split($3,a,"/"); for(i=n;i>0;i--) if(a[i] ~ /\.service$/) {print a[i]; break}}' "$F_PROC/$pid/cgroup" 2>/dev/null | sort -u) || return 1
+      unit=$(http_target_resolve "$unit") || return 1
+      group=$(systemctl show "$unit" -p ControlGroup --value) || return 1
+      [ -n "$group" ] && [ "$group" != / ] || return 1
+      awk -F: -v g="$group" '$3 == g || index($3,g"/") == 1 {found=1} END {exit !found}' "$F_PROC/$pid/cgroup" || return 1
       [ -z "$found" ] || [ "$found" = "$unit" ] || return 1
       found=$unit
     done
   done <<<"$listeners"
-  [ "$(systemctl show "$found" -p ControlGroup --value)" = "/system.slice/$found" ] || return 1
-  triggered=$(systemctl show "$found" -p TriggeredBy --value) || return 1
-  [ -z "$triggered" ] && systemctl is-active --quiet "$found" || return 1
+  http_target_active "$found" || return 1
+  printf '%s' "$found"
+}
+
+http_listener_container() {
+  local ids id ports found=''
+  command -v docker >/dev/null 2>&1 || return 1
+  ids=$(http_docker ps --no-trunc --format '{{.ID}}' 2>/dev/null) || return 1
+  for id in $ids; do
+    [[ $id =~ ^[0-9a-f]{64}$ ]] || return 1
+    ports=$(http_docker inspect --format '{{range .NetworkSettings.Ports}}{{range .}}{{println .HostPort}}{{end}}{{end}}' "$id" 2>/dev/null) || return 1
+    if printf '%s\n' "$ports" | grep -qx 80; then
+      [ -z "$found" ] || return 1
+      found=docker:$id
+    fi
+  done
+  [ -n "$found" ] && http_target_active "$found" || return 1
   printf '%s' "$found"
 }
 
@@ -505,12 +561,13 @@ http_resume() {
   [ -e "$F_ACME/http-paused" ] || return 0
   [ -f "$F_ACME/http-paused" ] && [ ! -L "$F_ACME/http-paused" ] || return 1
   unit=$(cat "$F_ACME/http-paused")
-  http_service_allowed "$unit" || return 1
-  if systemctl start "$unit" && systemctl is-active --quiet "$unit"; then
+  [ "$(http_target_resolve "$unit")" = "$unit" ] || {
+    warn "临停目标 $unit 已不存在或不允许恢复；记录保留，请立即人工检查" "paused target $unit is missing or cannot be restored; record retained, inspect immediately"; return 1; }
+  if http_target_action start "$unit" && http_target_active "$unit"; then
     rm -f "$F_ACME/http-paused" || return 1
     info "已恢复网站服务：$unit" "Website service restored: $unit"
   else
-    warn "网站服务 $unit 恢复失败！请立即检查 systemctl status ${unit}；恢复记录已保留" "FAILED to restore website service $unit! Inspect systemctl status $unit immediately; recovery record retained"
+    warn "网站服务 $unit 恢复失败！请立即检查该服务或容器；恢复记录已保留" "FAILED to restore website service $unit! Inspect the service or container immediately; recovery record retained"
     return 1
   fi
 }
@@ -519,18 +576,21 @@ cmd_cert_http_stop() {
   need_root
   [ "${O_UI_HTTP_GUARD:-}" = 1 ] || die "请通过o-ui证书命令运行，拒绝单独临停网站" "run through an o-ui certificate command; refusing an unguarded website stop"
   [ "${1-}" = http ] && [ "${O_UI_HTTP_CHALLENGE:-}" = http ] || return 0
-  local unit i listeners
-  unit=$(http_listener_service) || { warn "80端口归属无法安全确认，不停止任何服务；请用DNS验证" "cannot safely identify port 80 ownership; no service stopped; use DNS validation"; return 1; }
-  [ -n "$unit" ] || return 0
-  [ "$unit" = "${O_UI_HTTP_SERVICE:-}" ] && http_service_allowed "$unit" || {
+  local unit=${O_UI_HTTP_SERVICE:-} detected i listeners
+  listeners=$(ss -H -lntp 'sport = :80' 2>/dev/null) || return 1
+  [ -n "$listeners" ] || return 0
+  [ -n "$unit" ] && [ "$(http_target_resolve "$unit")" = "$unit" ] && http_target_active "$unit" || {
     warn "80端口被未授权的服务占用，不能自动停止；请重新配置证书或使用DNS验证" "port 80 is held by an unauthorized service; reconfigure the certificate or use DNS validation"; return 1; }
+  if detected=$(http_listener_service) && [ -n "$detected" ] && [ "$detected" != "$unit" ]; then
+    warn "80端口监听者已变为未授权的 ${detected}，请重新确认临停目标" "port 80 listener changed to unauthorized $detected; confirm a new pause target"; return 1
+  fi
   # 先记录再停，即使stop部分失败，退出兜底仍会尝试恢复。
   (umask 077; printf '%s\n' "$unit" >"$F_ACME/http-paused") || return 1
   info "临时停止网站服务：${unit}（申请结束后恢复）" "Temporarily stopping website service: $unit (restored after validation)"
-  systemctl stop "$unit" || return 1
+  http_target_action stop "$unit" || return 1
   for ((i=0; i<10; i++)); do
     listeners=$(ss -H -lntp 'sport = :80' 2>/dev/null) || return 1
-    if [ -z "$listeners" ] && ! systemctl is-active --quiet "$unit"; then return 0; fi
+    if [ -z "$listeners" ] && ! http_target_active "$unit"; then return 0; fi
     sleep 1
   done
   warn "80端口未成功释放，停止申请并恢复网站" "port 80 was not released; aborting issuance and restoring the website"
@@ -664,7 +724,7 @@ cert_end() { { openssl x509 -in "$1" -noout -enddate 2>/dev/null || true; } | se
 # 证书统一由ACME申请并自动续期；不扫描或导入外部证书。
 CERT_EMAIL= CERT_CF_TOKEN= CERT_CF_ZONE= CERT_FORCE= CERT_PREVIOUS=
 ask_access() {
-  local n host unit
+  local n host unit target listeners
   info "面板证书：ACME / Let's Encrypt，自动申请并续期。" "Panel certificate: ACME / Let's Encrypt, automatically issued and renewed."
   OUI_MODE=acme OUI_RENEW=timer
   OUI_HTTP_SERVICE=
@@ -687,14 +747,26 @@ ask_access() {
     if [ "$n" = 2 ]; then OUI_CHALLENGE=cf; fi
   fi
   if [ "$OUI_CHALLENGE" = http ]; then
-    if ! unit=$(http_listener_service); then
-      warn "80端口已被占用，HTTP-01无法使用或无法安全识别监听者；请改用DNS验证，不停止Docker或未知服务" "port 80 is occupied or ownership cannot be safely identified; use DNS validation; Docker and unknown services are not stopped"
+    if ! command -v ss >/dev/null 2>&1 || ! listeners=$(ss -H -lntp 'sport = :80' 2>/dev/null); then
+      warn "无法检查80端口，请安装iproute2或改用DNS验证；未临停任何服务" "cannot inspect port 80; install iproute2 or use DNS validation; no service paused"
       ask_access
       return 0
     fi
+    if ! unit=$(http_listener_service) && ! unit=$(http_listener_container); then
+      warn "80端口已被占用，无法自动确定临停目标；可手动指定服务或Docker容器，确认后临停，不直接终止未知进程" "port 80 is occupied; specify a service or Docker container to pause after confirmation; unknown processes will not be killed"
+      printf '%s\n' "$listeners"
+      info "可用 docker ps 查看容器；例如 nginx.service 或 docker:容器名。多个监听者须先自行协调，脚本每次只临停一个目标。" "Use docker ps to find containers; enter e.g. nginx.service or docker:container-name. Coordinate multiple listeners separately; only one target is paused."
+      ask target "临停目标（完整服务名或docker:容器名，留空返回验证方式选择）" "Pause target (full service name or docker:container-name; empty to choose validation again)" ""
+      if [ -z "$target" ]; then ask_access; return 0; fi
+      if ! unit=$(http_target_resolve "$target") || ! http_target_active "$unit"; then
+        warn "临停目标无效或不允许：须为运行中的网站服务/容器，不允许SSH、网络、Docker守护进程、面板或socket激活服务" "invalid or prohibited pause target: use an active website service/container; SSH, networking, Docker daemon, panel and socket-activated services are prohibited"
+        ask_access
+        return 0
+      fi
+    fi
     if [ -n "$unit" ]; then
-      warn "80端口由 $unit 占用；临停整个服务也会中断它承载的HTTPS网站。申请失败或可捕获中断也会尝试恢复；强杀或断电不能保证恢复。不会修改网站配置、开机状态或防火墙" "port 80 is held by $unit; stopping the whole service also interrupts its HTTPS websites. Restoration is attempted on failure or catchable interruption; SIGKILL or power loss cannot guarantee restoration. Website configuration, enablement and firewall are unchanged"
-      if ask_yes "授权申请及今后真正续期时临停 $unit，并在结束后恢复？" "Authorize temporarily stopping $unit during issuance and future due renewals, then restoring it?" n; then
+      warn "待临停目标：${unit}；临停整个服务或容器也会中断它承载的HTTPS网站及其他业务。申请失败或可捕获中断也会尝试恢复；强杀或断电不能保证恢复。不会修改网站配置、开机状态或防火墙" "Pause target: $unit; stopping the whole service/container also interrupts its HTTPS websites and other workloads. Restoration is attempted on failure or catchable interruption; SIGKILL or power loss cannot guarantee restoration. Website configuration, enablement and firewall are unchanged"
+      if ask_yes "授权申请及今后真正续期时临停 ${unit}，并在结束后恢复？" "Authorize temporarily stopping $unit during issuance and future due renewals, then restoring it?" n; then
         OUI_HTTP_SERVICE=$unit
       else
         ask_access
