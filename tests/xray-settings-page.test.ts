@@ -12,22 +12,26 @@ hooks.deregister();
 const settle = async () => { for (let i = 0; i < 6; i++) await new Promise(resolve => setImmediate(resolve)); };
 // 只模拟页面用到的根节点事件与查询，不作为真实DOM或浏览器验收。
 class Node {
-  innerHTML = ''; hidden = false; textContent = ''; disabled = false; open = false;
+  innerHTML = ''; hidden = false; textContent = ''; disabled = false; open = false; className = '';
+  elements = new Map<string, Node>();
+  onConfirm?: () => boolean;
   handlers = new Map<string, (event: any) => void>();
   addEventListener(name: string, handler: (event: any) => void) { this.handlers.set(name, handler); }
-  querySelector() { return null; }
+  querySelector(selector: string): Node | null { if (this.className !== 'confirm-dialog') return null; if (!this.elements.has(selector)) this.elements.set(selector, new Node()); return this.elements.get(selector)!; }
   querySelectorAll() { return []; }
   contains() { return false; }
   focus() {}
-  showModal() { this.open = true; }
+  setAttribute() {}
+  remove() {}
+  showModal() { this.open = true; if (this.className === 'confirm-dialog') queueMicrotask(() => this.querySelector(this.onConfirm?.() ? '[data-confirm-accept]' : '[data-confirm-cancel]')!.handlers.get('click')!({})); }
   close() { this.open = false; }
 }
 function page(fetcher: (url: string, options?: RequestInit) => Promise<Response>, confirmation = { answer: true, count: 0 }) {
   const root = new Node();
   const values = {
     fetch: fetcher, location: { protocol: 'http:' }, CSS: { escape: (value: string) => value },
-    window: { setInterval() {}, confirm() { confirmation.count++; return confirmation.answer; }, addEventListener() {} },
-    document: { createElement: () => new Node(), body: { append() {} }, hidden: false, activeElement: null },
+    window: { setInterval() {}, addEventListener() {}, removeEventListener() {} },
+    document: { createElement: () => { const node = new Node(); node.onConfirm = () => { confirmation.count++; return confirmation.answer; }; return node; }, body: { append() {} }, hidden: false, activeElement: null },
   };
   const previous = Object.fromEntries(Object.keys(values).map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
   for (const [key, value] of Object.entries(values)) Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });

@@ -9,6 +9,7 @@ import { telegramForm, telegramRequest, type TelegramForm, type TelegramStatus }
 import { parsePlanForm, type PlanStatus } from './server-plan-model.ts';
 import { passwordChangeError } from './password.ts';
 import { connectionQR } from './connection-qr.ts';
+import { confirmAction } from './confirm.ts';
 import './panel-settings.css';
 
 export interface PanelTLSStatus {
@@ -199,7 +200,7 @@ export function initPanelSettings(root: HTMLElement, persistent: boolean): { ren
       if (changed('subscription')) subscriptionBody = subscriptionRequest(now.subscription);
       if (changed('telegram')) telegramBody = telegramRequest(now.telegram, telegram.data);
     } catch (reason) { note = ''; error = (reason as Error).message; status(); root.querySelector<HTMLElement>('#settings-error')?.focus(); return; }
-    if (generalBody?.enablesRemote && !window.confirm(t('确认允许从其他设备经 HTTPS 访问面板和订阅？持有订阅链接者可取得代理凭据。', 'Allow the panel and subscriptions to be reached over HTTPS from other devices? Anyone with a subscription link can obtain proxy credentials.'))) return;
+    if (generalBody?.enablesRemote && !await confirmAction(t('允许从其他设备经 HTTPS 访问面板和订阅。持有订阅链接者可取得代理凭据。', 'Allow the panel and subscriptions to be reached over HTTPS from other devices. Anyone with a subscription link can obtain proxy credentials.'), { title: t('开启远程访问', 'Enable remote access'), confirmLabel: t('允许访问', 'Allow access') })) return;
     saving = true; error = ''; note = ''; status();
     try {
       // 每个分区保存成功即更新基线，后续分区失败时不会重复提交已保存的部分。
@@ -232,7 +233,7 @@ export function initPanelSettings(root: HTMLElement, persistent: boolean): { ren
 
   async function reload(): Promise<void> {
     if (saving || loading || !persistent) return;
-    if (dirty() && !window.confirm(t('重新读取会丢弃未保存的修改，请先复制需要保留的内容。是否继续？', 'Reloading discards unsaved changes; copy anything you want to keep first. Continue?'))) return;
+    if (dirty() && !await confirmAction(t('重新读取会丢弃未保存的修改，请先复制需要保留的内容。', 'Reloading discards unsaved changes; copy anything you want to keep first.'), { title: t('重新读取设置', 'Reload settings'), confirmLabel: t('重新读取', 'Reload') })) return;
     await load();
   }
 
@@ -289,9 +290,8 @@ export function initPanelSettings(root: HTMLElement, persistent: boolean): { ren
   }
 
   async function restart(button: HTMLButtonElement): Promise<void> {
-    if (saving) return;
-    if (dirty() && !window.confirm(t('还有未保存的修改，重启后会丢失。仍要重启面板？', 'You have unsaved changes that will be lost. Restart the panel anyway?'))) return;
-    if (!window.confirm(t('确定要重启面板吗？若重启后无法访问面板，请到服务器上查看面板日志。', 'Restart the panel? If you cannot reach it afterwards, check the panel log on the server.'))) return;
+    if (saving || loading) return;
+    if (!await confirmAction((dirty() ? t('还有未保存的修改，重启后会丢失。\n\n', 'Unsaved changes will be lost after restarting.\n\n') : '') + t('面板会短暂不可访问。若重启后无法访问，请到服务器上查看面板日志。', 'The panel will be briefly unavailable. If you cannot reach it afterwards, check the panel log on the server.'), { title: t('重启面板', 'Restart panel'), confirmLabel: t('重启', 'Restart'), danger: true })) return;
     const access = general ? general.access.data ?? general.access.active : null;
     const target = general && access && (general.access.pending || general.tls.pending) ? accessURL(access) : '';
     button.disabled = true; error = ''; note = t('正在重启面板…', 'Restarting the panel…'); status();

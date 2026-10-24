@@ -13,6 +13,7 @@ import {
 } from './xray-config.ts';
 import './xray-settings.css';
 import { t } from './i18n.ts';
+import { confirmAction } from './confirm.ts';
 
 type Tab = 'basic' | 'routing' | 'outbounds' | 'balancers' | 'dns' | 'advanced';
 type AdvancedPart = 'rules' | 'outbounds' | 'balancers' | 'dns' | 'advanced' | 'preview';
@@ -288,8 +289,8 @@ export function initXraySettings(root: HTMLElement, icons: () => void, persisten
         change(now => ({ ...now, outbounds: now.outbounds.some(item => item.tag === 'warp') ? now.outbounds.map(item => item.tag === 'warp' ? outbound : item) : [...now.outbounds, outbound] }));
         message = t('已把 warp 出站加入设置；点“保存”后生效。', 'The warp outbound is in the settings; click Save to apply.'); failure = ''; render(); return;
       }
-      if (action === 'register' && !window.confirm(t('确认由服务器向 Cloudflare 注册一个免费 WARP 设备？', 'Register a free WARP device with Cloudflare from the server?'))) return;
-      if (action === 'delete' && !window.confirm(t('删除本机保存的 WARP 账户记录？已加入的 warp 出站需在出站列表里另行删除。', 'Delete the WARP account record saved on this server? A warp outbound already added must be removed from the outbound list separately.'))) return;
+      if (action === 'register' && !await confirmAction(t('由服务器向 Cloudflare 注册一个免费 WARP 设备。', 'Register a free WARP device with Cloudflare from the server.'), { title: t('注册 WARP 设备', 'Register WARP device'), confirmLabel: t('注册', 'Register') })) return;
+      if (action === 'delete' && !await confirmAction(t('删除本机保存的 WARP 账户记录。已加入的 warp 出站需在出站列表里另行删除。', 'Delete the WARP account record saved on this server. A warp outbound already added must be removed from the outbound list separately.'), { title: t('删除 WARP 记录', 'Delete WARP record'), confirmLabel: t('删除', 'Delete'), danger: true })) return;
       const license = action === 'license' ? String(new FormData(dialog.querySelector('form')!).get('license') ?? '').trim() : '';
       busy = true; failure = ''; message = t('正在处理…', 'Working…'); render();
       try {
@@ -343,7 +344,7 @@ export function initXraySettings(root: HTMLElement, icons: () => void, persisten
   }
 
   function move<T>(list: T[], index: number, offset: number): T[] { const next = [...list]; const [item] = next.splice(index, 1); next.splice(index + offset, 0, item); return next; }
-  function operate(op: string, index: number): void {
+  async function operate(op: string, index: number): Promise<void> {
     const [kind, action] = op.split(':');
     if (kind === 'warp') { void warpDialog(); return; }
     const p = parts(); if (!p) return;
@@ -360,7 +361,7 @@ export function initXraySettings(root: HTMLElement, icons: () => void, persisten
       }
       if (kind === 'balancer' && p.rules.some(rule => rule.balancerTag === p.balancers[index].tag)) { error = t('该负载均衡正被路由使用，请先修改路由。', 'This balancer is used by routing; change the rules first.'); paint(); return; }
       if (kind === 'dns' && (Array.isArray(p.dns.servers) ? p.dns.servers.length : 0) <= 1) { error = t('至少保留一个 DNS 服务器。', 'Keep at least one DNS server.'); paint(); return; }
-      if (!window.confirm(t('确认删除这一项？保存后生效。', 'Delete this item? It takes effect after saving.'))) return;
+      if (!await confirmAction(t('删除这一项，保存后生效。', 'Delete this item. It takes effect after saving.'), { title: t('删除设置项', 'Delete setting'), confirmLabel: t('删除', 'Delete'), danger: true })) return;
       change(now => kind === 'rule' ? { ...now, rules: now.rules.filter((_, i) => i !== index) } : kind === 'outbound' ? { ...now, outbounds: now.outbounds.filter((_, i) => i !== index) } : kind === 'balancer' ? syncObservatory({ ...now, balancers: now.balancers.filter((_, i) => i !== index) }, draft.probeURL) : { ...now, dns: { ...now.dns, servers: (Array.isArray(now.dns.servers) ? now.dns.servers : []).filter((_, i) => i !== index) } });
     }
   }
@@ -373,7 +374,7 @@ export function initXraySettings(root: HTMLElement, icons: () => void, persisten
     if (target.id === 'xray-save') { void save(); return; }
     if (target.id === 'xray-restart') { onApply(); return; }
     if (target.id === 'xray-reload') { void load(true); return; }
-    if (target.dataset.op && loaded && !saving && !loading) operate(target.dataset.op, Number(target.dataset.index));
+    if (target.dataset.op && loaded && !saving && !loading) void operate(target.dataset.op, Number(target.dataset.index));
   });
   root.addEventListener('change', event => {
     const element = event.target as HTMLInputElement;
@@ -435,7 +436,7 @@ export function initXraySettings(root: HTMLElement, icons: () => void, persisten
   }
   async function load(force = false): Promise<void> {
     if ((!force && loaded) || loading || saving) return;
-    if (force && loaded && dirty() && !window.confirm(t('刷新会丢弃未保存的修改，确认继续？', 'Refreshing discards unsaved changes. Continue?'))) return;
+    if (force && loaded && dirty() && !await confirmAction(t('刷新会丢弃未保存的修改。', 'Refreshing discards unsaved changes.'), { title: t('刷新 Xray 设置', 'Refresh Xray settings'), confirmLabel: t('刷新', 'Refresh') })) return;
     loading = true; error = ''; feedback = ''; paint();
     try {
       const [document, current] = await Promise.all([api<{ revision: number; data: SettingsDraft | null }>('settings'), api<{ data: Workspace | null }>('workspace').catch(() => null)]);

@@ -15,6 +15,7 @@ import { initPanelSettings } from './panel-settings.ts';
 import { initServerInfo } from './server-info.ts';
 import { requireLogin } from './auth.ts';
 import { api, jsonBody } from './api.ts';
+import { confirmAction } from './confirm.ts';
 import { downloadIcon, startUpgrade, type PanelVersion } from './upgrade.ts';
 import './style.css';
 import { lang, languageButton, locale, setLang, t } from './i18n.ts';
@@ -282,7 +283,7 @@ function paintUpdate(progress: number | null = null): void {
 }
 async function quickRuntime(action: 'restart' | 'stop'): Promise<void> {
   const stop = action === 'stop';
-  if (!window.confirm(stop ? t('确认停止 Xray？所有代理连接会断开。', 'Stop Xray? All proxy connections will drop.') : t('确认重启 Xray？现有连接会短暂中断。', 'Restart Xray? Existing connections will drop briefly.'))) return;
+  if (!await confirmAction(stop ? t('所有代理连接会断开。', 'All proxy connections will drop.') : t('现有连接会短暂中断。', 'Existing connections will drop briefly.'), { title: stop ? t('停止 Xray', 'Stop Xray') : t('重启 Xray', 'Restart Xray'), confirmLabel: stop ? t('停止', 'Stop') : t('重启', 'Restart'), danger: true })) return;
   showDetail(stop ? t('停止 Xray', 'Stop Xray') : t('重启 Xray', 'Restart Xray'), t('正在处理…', 'Working…'));
   let text: string;
   try {

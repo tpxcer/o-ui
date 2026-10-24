@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { packBundle } from '../scripts/build-release.mjs';
 
 // install.sh只在临时根目录内运行，systemctl/runuser/acme.sh/sysctl等系统命令全部由桩记录；不触碰本机系统。
-// 证书扫描使用真实openssl生成的临时测试证书。
+// 证书部署校验使用真实openssl生成的临时测试证书。
 const installer = fileURLToPath(new URL('../install.sh', import.meta.url));
 const startScript = fileURLToPath(new URL('../scripts/start-local.sh', import.meta.url));
 const sha = (data: Buffer | string) => createHash('sha256').update(data).digest('hex');
@@ -48,9 +48,9 @@ exec "$@"`,
 echo "systemctl $*" >>"$s/calls.log"
 unit="$O_UI_ROOT_PREFIX/etc/systemd/system/o-ui.service"
 case "$1" in
-  is-active) for u; do :; done; if [ "$u" = o-ui-update ]; then [ -f "$s/update-active" ]; else [ -f "$s/active" ]; fi; exit ;;
-  is-enabled) [ -f "$s/enabled" ]; exit ;;
-  enable) [ "$2" = o-ui ] && : >"$s/enabled"; exit 0 ;;
+  is-active) for u; do :; done; case $u in o-ui-update) [ -f "$s/update-active" ] ;; o-ui-cert-renew.timer) [ -z "$FAKE_TIMER_FAIL" ] && [ -f "$s/timer" ] ;; *) [ -f "$s/active" ] ;; esac; exit ;;
+  is-enabled) for u; do :; done; case $u in o-ui-cert-renew.timer) [ -f "$s/timer" ] ;; ufw) [ -f "$s/ufw-enabled" ] ;; *) [ -f "$s/enabled" ] ;; esac; exit ;;
+  enable) for u; do :; done; case $u in o-ui) : >"$s/enabled" ;; o-ui-cert-renew.timer) : >"$s/timer" ;; ufw) : >"$s/ufw-enabled" ;; esac; exit 0 ;;
   start|restart)
     [ "$2" = o-ui ] || exit 0
     if [ -n "\${FAKE_FAIL_VERSION:-}" ] && [ "$(cat "$O_UI_ROOT_PREFIX/opt/o-ui/VERSION")" = "$FAKE_FAIL_VERSION" ]; then rm -f "$s/active" "$s/listening"; exit 0; fi
@@ -74,11 +74,18 @@ esac`,
 printf 'reno cubic bbr\\n' >"$O_UI_ROOT_PREFIX/proc/sys/net/ipv4/tcp_available_congestion_control"`,
   ufw: `s=$FAKE_STATE
 case $1 in
-  status) if [ -n "\${FAKE_UFW:-}" ]; then echo 'Status: active'; echo; echo 'To Action From'; cat "$s/ufw-rules" 2>/dev/null || true; else echo 'Status: inactive'; fi ;;
-  allow) echo "ufw $*" >>"$s/calls.log"; echo "$2 ALLOW Anywhere" >>"$s/ufw-rules" ;;
+  status) if [ -n "\${FAKE_UFW:-}" ] || [ -f "$s/ufw-active" ]; then echo 'Status: active'; echo; echo 'To Action From'; cat "$s/ufw-rules" 2>/dev/null || true; else echo 'Status: inactive'; fi ;;
+  show) [ -z "$FAKE_UFW_SAVED" ] || echo 'ufw allow 443/tcp' ;;
+  allow) echo "ufw $*" >>"$s/calls.log"; [ -z "$FAKE_UFW_FAIL" ] || exit 1; echo "$2 ALLOW Anywhere" >>"$s/ufw-rules" ;;
+  --force) echo "ufw $*" >>"$s/calls.log"; : >"$s/ufw-active" ;;
   delete) echo "ufw $*" >>"$s/calls.log"; grep -v "^$3 " "$s/ufw-rules" >"$s/ufw-rules.tmp" || true; mv "$s/ufw-rules.tmp" "$s/ufw-rules" ;;
   *) echo "ufw $*" >>"$s/calls.log" ;;
 esac`,
+  'apt-get': `echo "apt-get $*" >>"$FAKE_STATE/calls.log"; [ -z "$FAKE_PKG_FAIL" ] || exit 1
+mkdir -p "$O_UI_ROOT_PREFIX/etc/default"
+[ -f "$O_UI_ROOT_PREFIX/etc/default/ufw" ] || printf 'IPV6=yes\\n' >"$O_UI_ROOT_PREFIX/etc/default/ufw"`,
+  'iptables-save': `echo "iptables-save" >>"$FAKE_STATE/calls.log"; [ -z "$FAKE_IPTABLES_SAVED" ] || printf '%s\\n' '-A INPUT -j DROP'`,
+  'ip6tables-save': `exit 0`,
   'firewall-cmd': `s=$FAKE_STATE
 echo "firewall-cmd $*" >>"$s/calls.log"
 case "$*" in
@@ -96,6 +103,10 @@ args = sys.argv[1:]
 with open(s / 'calls.log', 'a') as f: f.write('nft ' + ' '.join(args) + '\\n')
 path = s / 'nft.json'
 data = json.loads(path.read_text()) if path.exists() else {'nftables': []}
+if args == ['list', 'ruleset']:
+    if os.environ.get('FAKE_NFT_READ_FAIL'): sys.exit(1)
+    if data['nftables']: print('table inet existing { }')
+    sys.exit(0)
 if args[:2] == ['-j', 'list']:
     result = data
     if args[2] == 'chain':
@@ -177,7 +188,7 @@ esac
 exit 0
 `;
 
-// 仅测试用的已过期证书与私钥（2020-01-01至2020-01-02），用于验证扫描会排除过期证书
+// 仅测试用的已过期证书与私钥（2020-01-01至2020-01-02），验证续期部署拒绝过期产物。
 const expiredCert = `-----BEGIN CERTIFICATE-----
 MIIBsTCCAVegAwIBAgIUUiaHdGpZf6Jj6MFbZOtkRlIl6q0wCgYIKoZIzj0EAwIw
 HjEcMBoGA1UEAwwTZXhwaXJlZC5leGFtcGxlLmNvbTAeFw0yMDAxMDEwMDAwMDBa
@@ -244,7 +255,8 @@ async function sandbox(options: { acme?: boolean } = {}) {
   const run = (args: string[], answers: string[] = [], env: Record<string, string> = {}) => {
     const script = existsSync(join(root, 'usr/local/bin/o-ui')) && !env.USE_SOURCE ? join(root, 'usr/local/bin/o-ui') : installer;
     const child = spawnSync('bash', [script, ...args], {
-      input: answers.map(line => line + '\n').join(''), encoding: 'utf8',
+      // 旧有场景默认拒绝新增的防火墙安装询问；专项场景在answers里明确同意。
+      input: [...answers, 'n'].map(line => line + '\n').join(''), encoding: 'utf8',
       env: { PATH: `${bin}:/usr/bin:/bin`, HOME: base, LANG: 'C', O_UI_ROOT_PREFIX: root, O_UI_STDIN_ANSWERS: '1', FAKE_STATE: state, FAKE_DOWNLOADS: downloads, FAKE_ACME_CERT: issued.cert, FAKE_ACME_KEY: issued.key, ...env },
     });
     return { status: child.status, out: child.stdout + child.stderr };
@@ -262,8 +274,8 @@ async function sandbox(options: { acme?: boolean } = {}) {
 const conf = async (box: Awaited<ReturnType<typeof sandbox>>) => Object.fromEntries((await box.read('etc/o-ui/o-ui.conf')).trim().split('\n').map(line => line.split('=', 2)));
 // 常用问答：语言、端口、访问路径、用户名、密码（回车随机）
 const start = (port = '23456', path = '/panelqa/') => ['1', port, path, 'admin-test', ''];
-// ACME：域名、HTTP-01、邮箱留空、手动续期
-const acme = (host = 'example.com') => ['1', host, '1', '', '2'];
+// ACME：域名、HTTP-01、邮箱留空，自动续期
+const acme = (host = 'example.com') => [host, '1', ''];
 
 test('脚本可被bash解析，以main调用收尾避免下载不完整时执行半截脚本，且不再提供仅本机选项', async () => {
   execFileSync('bash', ['-n', installer]);
@@ -278,7 +290,7 @@ test('脚本可被bash解析，以main调用收尾避免下载不完整时执行
 
 test('全新安装：中文、随机访问路径、HTTP-01域名证书自动续期、BBR与UFW，结束显示完整信息', async () => {
   const box = await sandbox();
-  const answers = ['1', '23456', '', 'admin-test', '', '1', 'Example.COM', '1', '', '1', 'y', 'y'];
+  const answers = ['1', '23456', '', 'admin-test', '', 'Example.COM', '1', '', 'y', 'y'];
   const { status, out } = box.run(['install', '--package', box.pkg], answers, { FAKE_UFW: '1' });
   assert.equal(status, 0, out);
   assert.equal(await box.read('usr/local/bin/o-ui'), await readFile(installer, 'utf8'));
@@ -309,7 +321,7 @@ test('全新安装：中文、随机访问路径、HTTP-01域名证书自动续�
   assert.ok(calls.indexOf('systemctl enable o-ui') < calls.indexOf('systemctl start o-ui'));
   const acmeLog = await box.log('acme.log');
   assert.ok(acmeLog.includes('[--issue] [--server] [letsencrypt] [-d] [example.com] [--keylength] [ec-256] [--standalone]'), acmeLog);
-  assert.ok(acmeLog.includes('[--reloadcmd] [/usr/local/bin/o-ui cert-reload]'));
+  assert.ok(acmeLog.includes('[--reloadcmd] [/usr/local/bin/o-ui cert-reload --pending]'));
   assert.equal((await stat(join(box.root, 'etc/o-ui/tls/key.pem'))).mode & 0o777, 0o640);
   assert.equal(await box.read('etc/sysctl.d/99-o-ui-bbr.conf'), '# o-ui: BBR，删除本文件并运行 o-ui bbr off 可回退\nnet.core.default_qdisc=fq\nnet.ipv4.tcp_congestion_control=bbr\n');
   assert.match(calls, /^ufw allow 23456\/tcp comment o-ui panel$/m);
@@ -329,9 +341,9 @@ test('全新安装：中文、随机访问路径、HTTP-01域名证书自动续�
   assert.doesNotMatch(out, /http:\/\//);
 });
 
-test('英文安装：自定义访问路径、Cloudflare DNS验证、手动续期，令牌只经环境变量传给acme.sh', async () => {
+test('英文安装：自定义访问路径、Cloudflare DNS验证、自动续期，令牌只经环境变量传给acme.sh', async () => {
   const box = await sandbox();
-  const answers = ['2', '30001', 'myPanel', 'ops_admin', 'correct-horse-battery', 'correct-horse-battery', '1', 'panel.example.org', '2', 'cf-secret-token-123', 'zone123', 'ops@example.org', '2', 'n'];
+  const answers = ['2', '30001', 'myPanel', 'ops_admin', 'correct-horse-battery', 'correct-horse-battery', 'panel.example.org', '2', 'cf-secret-token-123', 'zone123', 'ops@example.org', 'n'];
   const { status, out } = box.run(['install', '--package', box.pkg], answers);
   assert.equal(status, 0, out);
   const acmeLog = await box.log('acme.log'), unit = await box.read('etc/systemd/system/o-ui.service');
@@ -343,13 +355,13 @@ test('英文安装：自定义访问路径、Cloudflare DNS验证、手动续期
   assert.ok(!out.includes('correct-horse-battery'), '用户输入的密码不回显');
   assert.match(out, /URL: https:\/\/panel\.example\.org:30001\/myPanel\//);
   assert.match(out, /Password: stored hashed and cannot be shown/);
-  assert.match(out, /Certificate: Let's Encrypt \(manual renewal\)/);
+  assert.match(out, /Certificate: Let's Encrypt \(auto renewal\)/);
   assert.doesNotMatch(out.slice(out.indexOf('2) English') + 10), /[一-鿿]/u, '选英文后不再出现中文提示');
 });
 
 test('IP证书只用HTTP-01并选择短期证书，按3天续期', async () => {
   const box = await sandbox();
-  const { status, out } = box.run(['install', '--package', box.pkg], [...start('24000', '/'), '1', '203.0.113.10', '', '1', 'n']);
+  const { status, out } = box.run(['install', '--package', box.pkg], [...start('24000', '/'), '203.0.113.10', '', 'n']);
   assert.equal(status, 0, out);
   assert.match(await box.log('acme.log'), /\[-d\] \[203\.0\.113\.10\] \[--keylength\] \[ec-256\] \[--standalone\] \[--cert-profile\] \[shortlived\] \[--days\] \[3\]/);
   assert.match(await box.log('oui.log'), /\[-panel-listen\] \[0\.0\.0\.0:24000\] \[-panel-origin\] \[https:\/\/203\.0\.113\.10:24000\]/);
@@ -364,63 +376,56 @@ test('访问路径只接受单段字母数字_-，非法输入会重问', async 
   assert.equal(await box.log('panel-path'), '/good_path-1/');
 });
 
-test('已有证书：扫描常见位置只列有效配对，编号选择后自动写入面板', async () => {
+test('安装不再扫描导入已有证书；由ACME签发且默认自动续期，外部证书保持原样', async () => {
   const box = await sandbox();
-  await makeCert(join(box.root, 'root/cert/files.example.com'), 'fullchain.pem', 'privkey.pem', ['files.example.com', 'www.files.example.com']);
-  await makeCert(join(box.root, 'root/.acme.sh/acme.example.com_ecc'), 'fullchain.cer', 'acme.example.com.key', ['acme.example.com']);
-  await makeCert(join(box.root, 'etc/letsencrypt/live/le.example.com'), 'fullchain.pem', 'privkey.pem', ['le.example.com']);
-  await mkdir(join(box.root, 'root/cert/expired.example.com'), { recursive: true });
-  await writeFile(join(box.root, 'root/cert/expired.example.com/fullchain.pem'), expiredCert);
-  await writeFile(join(box.root, 'root/cert/expired.example.com/privkey.pem'), expiredKey);
-  const a = await makeCert(join(box.base, 'mix-a'), 'c.pem', 'k.pem', ['mismatch.example.com']), b = await makeCert(join(box.base, 'mix-b'), 'c.pem', 'k.pem', ['other.example.com']);
-  await mkdir(join(box.root, 'root/cert/mismatch.example.com'), { recursive: true });
-  await writeFile(join(box.root, 'root/cert/mismatch.example.com/fullchain.pem'), await readFile(a.cert));
-  await writeFile(join(box.root, 'root/cert/mismatch.example.com/privkey.pem'), await readFile(b.key));
-  await makeCert(join(box.root, 'root/cert/nosan.example.com'), 'fullchain.pem', 'privkey.pem', []);
-  const { status, out } = box.run(['install', '--package', box.pkg], [...start('27000'), '2', '3', 'n']);
+  const external = await makeCert(join(box.root, 'root/cert/files.example.com'), 'fullchain.pem', 'privkey.pem', ['files.example.com', 'www.files.example.com']);
+  const original = await readFile(external.cert), originalKey = await readFile(external.key);
+  const { status, out } = box.run(['install', '--package', box.pkg], [...start('27000'), ...acme(), 'n']);
   assert.equal(status, 0, out);
-  const from = out.indexOf('找到以下有效证书'), listing = out.slice(from, out.indexOf('请输入序号', from));
-  assert.equal((listing.match(/^ {2}\d\) /gm) ?? []).length, 3, listing);
-  for (const host of ['files.example.com,www.files.example.com', 'acme.example.com', 'le.example.com']) assert.ok(listing.includes(host), host);
-  for (const hidden of ['expired.example.com', 'mismatch.example.com', 'nosan.example.com']) assert.ok(!listing.includes(hidden), hidden);
-  // 扫描顺序：/etc/o-ui/tls、/root/cert、/root/.acme.sh、/etc/letsencrypt/live
-  assert.match(listing, /  1\) files\.example\.com[\s\S]*  2\) acme\.example\.com[\s\S]*  3\) le\.example\.com .*\/etc\/letsencrypt\/live\/le\.example\.com\/fullchain\.pem/);
-  assert.equal(await box.read('etc/o-ui/tls/fullchain.pem'), await box.read('etc/letsencrypt/live/le.example.com/fullchain.pem'));
+  assert.doesNotMatch(out, /使用本机已有证书|找到以下有效证书|files\.example\.com/);
+  assert.deepEqual(await readFile(external.cert), original);
+  assert.deepEqual(await readFile(external.key), originalKey);
+  assert.equal(await box.read('etc/o-ui/tls/fullchain.pem'), await readFile(box.base + '/issued/fullchain.pem', 'utf8'));
   assert.equal((await stat(join(box.root, 'etc/o-ui/tls/key.pem'))).mode & 0o777, 0o640);
-  assert.match(await box.log('oui.log'), /\[-panel-origin\] \[https:\/\/le\.example\.com:27000\]/);
-  assert.equal(await box.log('acme.log'), '');
-  assert.equal((await conf(box)).OUI_MODE, 'file');
-  assert.match(out, /证书：已有证书；域名\/IP：le\.example\.com；到期：/);
+  assert.equal((await conf(box)).OUI_MODE, 'acme');
+  assert.equal((await conf(box)).OUI_RENEW, 'timer');
+  assert.match(await box.log('calls.log'), /systemctl enable --now o-ui-cert-renew.timer/);
+  assert.match(out, /自动续期/);
 });
 
-test('已有证书含多个名称时编号选择面板域名', async () => {
+test('历史导入证书在普通升级时保留，不擅自申请或替换', async () => {
   const box = await sandbox();
-  await makeCert(join(box.root, 'root/cert/files.example.com'), 'fullchain.pem', 'privkey.pem', ['files.example.com', 'www.files.example.com']);
-  const { status, out } = box.run(['install', '--package', box.pkg], [...start('27001'), '2', '1', '2', 'n']);
+  assert.equal(box.run(['install', '--package', box.pkg], [...start('27001'), ...acme(), 'n']).status, 0);
+  const config = await box.read('etc/o-ui/o-ui.conf');
+  await writeFile(join(box.root, 'etc/o-ui/o-ui.conf'), config.replace('OUI_MODE=acme', 'OUI_MODE=file').replace('OUI_RENEW=timer', 'OUI_RENEW='));
+  const original = await box.read('etc/o-ui/tls/fullchain.pem'), acmeBefore = await box.log('acme.log');
+  const pkg = await makePackage(box.downloads, { version: 'v0.2.0' });
+  const { status, out } = box.run(['update', '--package', pkg]);
   assert.equal(status, 0, out);
-  assert.match(await box.log('oui.log'), /\[-panel-origin\] \[https:\/\/www\.files\.example\.com:27001\]/);
+  assert.equal((await conf(box)).OUI_MODE, 'file');
+  assert.equal(await box.read('etc/o-ui/tls/fullchain.pem'), original);
+  assert.equal(await box.log('acme.log'), acmeBefore);
 });
 
-test('没有可用的已有证书时自动改为申请证书；80端口被占用时不使用HTTP-01', async () => {
+test('80端口被占用时拒绝HTTP-01，重新选择DNS且不停止已有服务', async () => {
   const box = await sandbox();
   await writeFile(join(box.state, 'listening-extra'), '80\n');
-  const { status, out } = box.run(['install', '--package', box.pkg], [...start('25000'), '2', 'example.com', '1', '1', 'example.com', '2', 'token-x', '', '', '2', 'n']);
+  const { status, out } = box.run(['install', '--package', box.pkg], [...start('25000'), 'example.com', '1', 'example.com', '2', 'token-x', '', '', 'n']);
   assert.equal(status, 0, out);
-  assert.match(out, /未在 \/root\/cert、\/root\/\.acme\.sh、\/etc\/letsencrypt\/live、\/etc\/o-ui 找到有效的证书与私钥配对/);
-  assert.match(out, /80端口已被占用，HTTP-01无法使用；请改用Cloudflare DNS或已有证书/);
+  assert.match(out, /80端口已被占用，HTTP-01无法使用/);
+  assert.doesNotMatch(await box.log('calls.log'), /systemctl (stop|restart) (nginx|apache|docker)/);
   assert.match(await box.log('acme.log'), /\[--dns\] \[dns_cf\]/);
   assert.equal((await conf(box)).OUI_MODE, 'acme');
 });
 
 test('证书申请失败可重新选择方式；放弃时只以本机启动，不开放HTTP', async () => {
   const retry = await sandbox();
-  await makeCert(join(retry.root, 'root/cert/files.example.com'), 'fullchain.pem', 'privkey.pem', ['files.example.com']);
-  const ok = retry.run(['install', '--package', retry.pkg], [...start('26000'), ...acme(), 'n', 'y', '2', '1'], { FAKE_ACME_ISSUE_RC: '1' });
+  const ok = retry.run(['install', '--package', retry.pkg], [...start('26000'), ...acme(), 'n', 'y', 'retry.example.com', '2', 'token-x', '', '', 'n'], { FAKE_ACME_ISSUE_RC: '1' });
   assert.equal(ok.status, 0, ok.out);
-  assert.match(ok.out, /HTTPS证书未配置成功，是否重新选择证书方式并重试/);
+  assert.match(ok.out, /HTTPS证书未配置成功，是否重新填写域名或验证方式并重试/);
   assert.match(await retry.log('acme.log'), /\[--remove\] \[-d\] \[example\.com\] \[--ecc\]/);
-  assert.match(await retry.log('oui.log'), /\[-panel-origin\] \[https:\/\/files\.example\.com:26000\]/);
-  assert.equal((await conf(retry)).OUI_MODE, 'file');
+  assert.match(await retry.log('acme.log'), /\[--dns\] \[dns_cf\]/);
+  assert.equal((await conf(retry)).OUI_MODE, 'local');
   const giveUp = await sandbox();
   const local = giveUp.run(['install', '--package', giveUp.pkg], [...start('26001'), ...acme(), 'n', 'n'], { FAKE_ACME_ISSUE_RC: '1' });
   assert.equal(local.status, 0, local.out);
@@ -479,7 +484,7 @@ test('acme.sh只按固定版本摘要安装到独立目录，摘要不符时拒�
   const box = await sandbox({ acme: false });
   const dir = join(box.base, 'acme-src', 'acme.sh-3.1.6'); await mkdir(dir, { recursive: true }); await writeFile(join(dir, 'acme.sh'), fakeAcme, { mode: 0o755 });
   execFileSync('tar', ['-czf', join(box.downloads, '3.1.6.tar.gz'), '-C', join(box.base, 'acme-src'), 'acme.sh-3.1.6'], { env: { ...process.env, COPYFILE_DISABLE: '1' } });
-  const { status, out } = box.run(['install', '--package', box.pkg], [...start(), '1', 'example.com', '1', '', '1', 'n']);
+  const { status, out } = box.run(['install', '--package', box.pkg], [...start(), ...acme(), 'n']);
   assert.notEqual(status, 0);
   assert.match(out, /acme\.sh摘要不符/);
   assert.match(await box.log('calls.log'), /^curl https:\/\/github\.com\/acmesh-official\/acme\.sh\/archive\/refs\/tags\/3\.1\.6\.tar\.gz$/m);
@@ -526,7 +531,7 @@ test('升级保留数据并保留上一版本；新版本启动失败自动回�
 
 test('卸载默认保留数据与证书；重新安装沿用数据；--purge须输入DELETE并删除全部', async () => {
   const box = await sandbox();
-  const installed = box.run(['install', '--package', box.pkg], [...start(), '1', 'example.com', '1', '', '1', 'y', 'y'], { FAKE_UFW: '1' });
+  const installed = box.run(['install', '--package', box.pkg], [...start(), ...acme(), 'y', 'y'], { FAKE_UFW: '1' });
   assert.equal(installed.status, 0, installed.out);
   assert.equal((await conf(box)).OUI_FW, 'ufw', installed.out);
   await writeFile(join(box.state, 'ufw-rules'), '52890/tcp ALLOW Anywhere\n');
@@ -539,7 +544,7 @@ test('卸载默认保留数据与证书；重新安装沿用数据；--purge须�
   for (const keep of ['var/lib/o-ui/panel/panel.sqlite', 'etc/o-ui/tls/key.pem', 'etc/o-ui/o-ui.conf', 'etc/sysctl.d/99-o-ui-bbr.conf']) assert.ok(existsSync(join(box.root, keep)), keep + kept.out);
   assert.match(await box.log('calls.log'), /^ufw delete allow 23456\/tcp$/m);
   // 重新安装：沿用管理员与核心选择；证书仍可从/etc/o-ui/tls扫描选用
-  const again = box.run(['install', '--package', box.pkg], ['1', '23456', '/panelqa/', '2', '1'], { USE_SOURCE: '1' });
+  const again = box.run(['install', '--package', box.pkg], ['1', '23456', '/panelqa/', ...acme(), 'n'], { USE_SOURCE: '1' });
   assert.equal(again.status, 0, again.out);
   assert.match(again.out, /检测到已有数据目录/);
   assert.equal(((await box.log('oui.log')).match(/-init-panel-admin/g) ?? []).length, 1);
@@ -593,18 +598,141 @@ test('续期回调修正证书权限，仅在面板运行时重启；手动续�
   assert.equal(notDue.status, 0); assert.match(notDue.out, /尚未到续期时间/);
 });
 
-test('o-ui cert：由申请证书改为扫描到的已有证书，先停面板再离线写入并停用旧ACME条目', async () => {
+test('o-ui cert：更换ACME域名，先停面板再离线写入，移除旧条目并保持自动续期', async () => {
   const box = await sandbox();
-  assert.equal(box.run(['install', '--package', box.pkg], [...start(), '1', 'example.com', '1', '', '1', 'n']).status, 0);
-  await makeCert(join(box.root, 'root/cert/later.example.com'), 'fullchain.pem', 'privkey.pem', ['later.example.com']);
-  const { status, out } = box.run(['cert'], ['2', '2']);
+  assert.equal(box.run(['install', '--package', box.pkg], [...start(), ...acme(), 'n']).status, 0);
+  const { status, out } = box.run(['cert'], acme('later.example.com'));
   assert.equal(status, 0, out);
   const calls = await box.log('calls.log'), https = calls.lastIndexOf('-enable-panel-https');
   assert.ok(calls.lastIndexOf('systemctl stop o-ui', https) > 0 && calls.indexOf('systemctl start o-ui', https) > https);
   assert.match(await box.log('acme.log'), /\[--remove\] \[-d\] \[example\.com\] \[--ecc\]/);
-  assert.equal(existsSync(join(box.root, 'etc/systemd/system/o-ui-cert-renew.timer')), false);
+  assert.equal(existsSync(join(box.root, 'etc/systemd/system/o-ui-cert-renew.timer')), true);
   assert.match(out, /https:\/\/later\.example\.com:23456\/panelqa\//);
-  assert.equal((await conf(box)).OUI_MODE, 'file');
+  assert.equal((await conf(box)).OUI_MODE, 'acme');
+  assert.equal((await conf(box)).OUI_RENEW, 'timer');
+});
+
+test('续期产物先验证：过期、不配对和损坏证书不得覆盖在线文件或重启，正确产物才部署', async () => {
+  const box = await sandbox();
+  assert.equal(box.run(['install', '--package', box.pkg], [...start(), ...acme(), 'n']).status, 0);
+  const cert = await box.read('etc/o-ui/tls/fullchain.pem'), key = await box.read('etc/o-ui/tls/key.pem');
+  const other = await makeCert(join(box.base, 'other'), 'cert.pem', 'key.pem', ['example.com']);
+  for (const [c, k] of [[expiredCert, expiredKey], [cert, await readFile(other.key, 'utf8')], ['broken', key]]) {
+    await writeFile(join(box.root, 'etc/o-ui/acme/deploy/fullchain.pem'), c);
+    await writeFile(join(box.root, 'etc/o-ui/acme/deploy/key.pem'), k);
+    const before = await box.log('calls.log');
+    const result = box.run(['cert-reload', '--pending']);
+    assert.notEqual(result.status, 0, result.out);
+    assert.equal(await box.read('etc/o-ui/tls/fullchain.pem'), cert);
+    assert.equal(await box.read('etc/o-ui/tls/key.pem'), key);
+    assert.doesNotMatch((await box.log('calls.log')).slice(before.length), /systemctl restart/);
+  }
+  await writeFile(join(box.root, 'etc/o-ui/acme/deploy/fullchain.pem'), await readFile(other.cert));
+  await writeFile(join(box.root, 'etc/o-ui/acme/deploy/key.pem'), await readFile(other.key));
+  assert.equal(box.run(['cert-reload', '--pending']).status, 0);
+  assert.equal(await box.read('etc/o-ui/tls/fullchain.pem'), await readFile(other.cert, 'utf8'));
+  assert.equal((await stat(join(box.root, 'etc/o-ui/tls/key.pem'))).mode & 0o777, 0o640);
+});
+
+test('自动续期定时器失败不能显示安装成功', async () => {
+  const box = await sandbox();
+  const result = box.run(['install', '--package', box.pkg], [...start(), ...acme(), 'n'], { FAKE_TIMER_FAIL: '1' });
+  assert.notEqual(result.status, 0);
+  assert.match(result.out, /自动续期定时器未正常启用/);
+  assert.doesNotMatch(result.out, /==== o-ui 安装完成 ====/);
+});
+
+test('强制重新申请需确认，使用issue --force，成功后写入面板并启用HTTPS、自动续期和重启', async () => {
+  const box = await sandbox();
+  assert.equal(box.run(['install', '--package', box.pkg], [...start(), ...acme(), 'n']).status, 0);
+  const oldLog = await box.log('acme.log');
+  const cancelled = box.run(['cert', '--force'], ['n']);
+  assert.equal(cancelled.status, 0, cancelled.out);
+  assert.equal(await box.log('acme.log'), oldLog);
+  const before = (await box.log('calls.log')).length;
+  const result = box.run(['cert', '--force'], ['y', ...acme()]);
+  assert.equal(result.status, 0, result.out);
+  assert.match((await box.log('acme.log')).slice(oldLog.length), /\[--issue\].*\[--force\]/);
+  const calls = (await box.log('calls.log')).slice(before);
+  const enable = calls.indexOf('-enable-panel-https');
+  assert.ok(enable >= 0 && calls.indexOf('systemctl stop o-ui') < enable && calls.indexOf('systemctl start o-ui') > enable, calls);
+  assert.match(calls, /systemctl enable --now o-ui-cert-renew.timer/);
+  assert.match(result.out, /证书已写入面板并启用HTTPS，自动续期已启用/);
+  const menu = box.run([], ['5', '0', '0']);
+  assert.equal(menu.status, 0, menu.out);
+  assert.match(menu.out, /4\) 强制重新申请并启用证书/);
+  assert.match(menu.out, /0\) 返回上一级/);
+});
+
+test('重新申请写入面板失败时恢复旧证书、保持旧配置并恢复服务，不宣称启用成功', async () => {
+  const box = await sandbox();
+  assert.equal(box.run(['install', '--package', box.pkg], [...start(), ...acme(), 'n']).status, 0);
+  const cert = await box.read('etc/o-ui/tls/fullchain.pem'), key = await box.read('etc/o-ui/tls/key.pem'), config = await box.read('etc/o-ui/o-ui.conf');
+  const next = await makeCert(join(box.base, 'new-issued'), 'fullchain.pem', 'key.pem', ['later.example.com']);
+  const result = box.run(['cert', '--force'], ['y', ...acme('later.example.com')], { FAKE_ACME_CERT: next.cert, FAKE_ACME_KEY: next.key, FAKE_HTTPS_RC: '1' });
+  assert.notEqual(result.status, 0);
+  assert.match(result.out, /写入面板HTTPS设置失败/);
+  assert.doesNotMatch(result.out, /证书已写入面板并启用HTTPS/);
+  assert.equal(await box.read('etc/o-ui/tls/fullchain.pem'), cert);
+  assert.equal(await box.read('etc/o-ui/tls/key.pem'), key);
+  assert.equal(await box.read('etc/o-ui/o-ui.conf'), config);
+  assert.equal(existsSync(join(box.state, 'active')), true);
+});
+
+test('首次安装整套UFW：先允许当前SSH、面板及HTTP-01，再默认拒绝并启用、自启和部署助手', async () => {
+  const box = await sandbox();
+  const result = box.run(['install', '--package', box.pkg], [...start(), ...acme(), 'n', 'y'], { SSH_CONNECTION: '192.0.2.1 45678 192.0.2.2 5522' });
+  assert.equal(result.status, 0, result.out);
+  const calls = await box.log('calls.log'), enable = calls.indexOf('ufw --force enable');
+  assert.ok(enable > 0, calls);
+  for (const rule of ['ufw allow 5522/tcp', 'ufw allow 23456/tcp', 'ufw allow 80/tcp', 'ufw default deny incoming', 'ufw default allow outgoing']) assert.ok(calls.indexOf(rule) >= 0 && calls.indexOf(rule) < enable, rule);
+  assert.match(calls, /apt-get install -y ufw sudo nftables python3 iptables/);
+  assert.match(calls, /systemctl enable ufw/);
+  assert.equal((await conf(box)).OUI_FW, 'ufw');
+  assert.match(result.out, /UFW已启用并持久化/);
+  const backups = (await readdir(join(box.root, 'etc/o-ui'))).filter(n => n.startsWith('firewall-backup.'));
+  assert.equal(backups.length, 1);
+  assert.equal((await stat(join(box.root, 'etc/o-ui', backups[0]))).mode & 0o777, 0o700);
+});
+
+test('DNS验证无需80端口；缺少SSH环境时必须明确输入SSH端口', async () => {
+  const box = await sandbox();
+  const result = box.run(['install', '--package', box.pkg], [...start(), 'example.com', '2', 'token-test', '', '', 'n', 'y', '2200']);
+  assert.equal(result.status, 0, result.out);
+  assert.match(await box.log('calls.log'), /ufw allow 2200\/tcp/);
+  assert.doesNotMatch(await box.log('calls.log'), /ufw allow 80\/tcp/);
+});
+
+test('拒绝整套防火墙或SSH端口无效时不安装、不启用', async () => {
+  for (const port of ['', '0', '65536', '0022', '22;true']) {
+    const box = await sandbox();
+    const result = box.run(['install', '--package', box.pkg], [...start(), ...acme(), 'n', port ? 'y' : 'n', port]);
+    assert.equal(result.status, 0, result.out);
+    assert.doesNotMatch(await box.log('calls.log'), /apt-get|ufw (allow|default|--force)/);
+  }
+});
+
+test('已有nft、iptables或未启用UFW保存规则时不安装第二套；读取失败也不启用', async () => {
+  for (const type of ['nft', 'iptables', 'saved', 'read-failure']) {
+    const box = await sandbox();
+    if (type === 'nft') await writeFile(join(box.state, 'nft.json'), JSON.stringify({ nftables: [{ table: { family: 'inet', name: 'existing' } }] }));
+    const env = { SSH_CONNECTION: '192.0.2.1 45678 192.0.2.2 5522', ...(type === 'iptables' ? { FAKE_IPTABLES_SAVED: '1' } : {}), ...(type === 'saved' ? { FAKE_UFW_SAVED: '1' } : {}), ...(type === 'read-failure' ? { FAKE_NFT_READ_FAIL: '1' } : {}) };
+    const result = box.run(['install', '--package', box.pkg], [...start(), ...acme(), 'n', 'y'], env);
+    assert.equal(result.status, 0, result.out);
+    assert.doesNotMatch(await box.log('calls.log'), /ufw (allow|default|--force)/);
+    if (type !== 'read-failure') assert.doesNotMatch(await box.log('calls.log'), /apt-get/);
+  }
+});
+
+test('依赖安装、规则写入或IPv6检查失败都不能启用UFW', async () => {
+  for (const type of ['package', 'allow', 'ipv6']) {
+    const box = await sandbox();
+    if (type === 'ipv6') { await mkdir(join(box.root, 'etc/default'), { recursive: true }); await writeFile(join(box.root, 'etc/default/ufw'), 'IPV6=no\n'); }
+    const result = box.run(['install', '--package', box.pkg], [...start(), ...acme(), 'n', 'y'], { SSH_CONNECTION: '192.0.2.1 45678 192.0.2.2 5522', ...(type === 'package' ? { FAKE_PKG_FAIL: '1' } : {}), ...(type === 'allow' ? { FAKE_UFW_FAIL: '1' } : {}) });
+    assert.equal(result.status, 0, result.out);
+    assert.doesNotMatch(await box.log('calls.log'), /ufw --force enable/);
+    assert.doesNotMatch(result.out, /UFW已启用并持久化/);
+  }
 });
 
 test('已安装时o-ui进入编号菜单：查看信息、改访问路径、重置管理员、改端口后退出', async () => {
@@ -638,7 +766,7 @@ test('o-ui info显示完整信息；菜单回车即退出；未安装时o-ui进�
   assert.equal(box.run(['install', '--package', box.pkg], [...start(), ...acme(), 'n']).status, 0);
   const info = box.run(['info']);
   assert.equal(info.status, 0, info.out);
-  for (const line of [/访问地址：https:\/\/example\.com:23456\/panelqa\//, /用户名：admin-test/, /证书：Let's Encrypt（手动续期）；域名\/IP：example\.com/, /Xray：26\.3\.27/, /服务：运行中；开机自启：已启用/, /BBR/]) assert.match(info.out, line);
+  for (const line of [/访问地址：https:\/\/example\.com:23456\/panelqa\//, /用户名：admin-test/, /证书：Let's Encrypt（自动续期）；域名\/IP：example\.com/, /Xray：26\.3\.27/, /服务：运行中；开机自启：已启用/, /BBR/]) assert.match(info.out, line);
   // 证书文件损坏或Xray未安装时信息页仍完整输出
   await writeFile(join(box.root, 'etc/o-ui/tls/fullchain.pem'), 'not a certificate');
   await rm(join(box.root, 'var/lib/o-ui/core/selection.json'));
@@ -784,7 +912,7 @@ const hostFirewall = 'table inet host_hardening {\n  chain input {\n    type fil
 
 async function nftSandbox() {
   const box = await sandbox();
-  const result = box.run(['install', '--package', box.pkg], ['1', '23456', '', 'admin-test', '', '1', 'example.com', '1', '', '1', 'n']);
+  const result = box.run(['install', '--package', box.pkg], ['1', '23456', '', 'admin-test', '', ...acme(), 'n']);
   assert.equal(result.status, 0, result.out);
   await mkdir(join(box.root, 'etc/nftables.d'), { recursive: true });
   await writeFile(join(box.root, 'etc/nftables.d/host_hardening.nft'), hostFirewall, { mode: 0o640 });
@@ -857,6 +985,49 @@ test('nft与UFW同时存在须均放行，已有外部规则不接管、不删�
   assert.match(box.helper(['delete', '50574', 'udp']).out, /不是o-ui添加/);
   assert.deepEqual(JSON.parse(await box.log('nft.json')), external);
   assert.equal(await box.read('etc/nftables.d/host_hardening.nft'), hostFirewall);
+});
+
+test('nft旧OUI共存：检查空链和纯计数返回链，不按链名放过阻断或未知跳转', async () => {
+  const box = await nftSandbox();
+  const legacy = structuredClone(box.initial) as { nftables: any[] };
+  for (const family of ['ip', 'ip6']) {
+    legacy.nftables.push(
+      { chain: { family, table: 'filter', name: 'INPUT', type: 'filter', hook: 'input', policy: 'accept' } },
+      { chain: { family, table: 'filter', name: 'f2b-3x-ipl' } },
+      { rule: { family, table: 'filter', chain: 'INPUT', expr: [{ match: { op: '==', left: { meta: { key: 'l4proto' } }, right: 'tcp' } }, { counter: { packets: 12, bytes: 1200 } }, { jump: { target: 'f2b-3x-ipl' } }] } },
+    );
+  }
+  legacy.nftables.push(
+    { chain: { family: 'ip', table: 'filter', name: 'oui-ipacct-in' } },
+    { rule: { family: 'ip', table: 'filter', chain: 'INPUT', expr: [{ counter: { packets: 1, bytes: 100 } }, { jump: { target: 'oui-ipacct-in' } }] } },
+  );
+  await writeFile(join(box.state, 'nft.json'), JSON.stringify(legacy));
+  for (const proto of ['tcp', 'udp']) {
+    const result = box.helper(['allow', '50575', proto]);
+    assert.equal(result.status, 0, result.out);
+    assert.equal(box.helper(['delete', '50575', proto]).status, 0);
+  }
+  assert.deepEqual(JSON.parse(await box.log('nft.json')), legacy, '旧链、跳转和计数器不变');
+  const accounting = structuredClone(legacy);
+  accounting.nftables.push({ rule: { family: 'ip', table: 'filter', chain: 'oui-ipacct-in', expr: [{ match: { op: '==', left: { payload: { protocol: 'tcp', field: 'dport' } }, right: 50575 } }, { counter: { packets: 3, bytes: 300 } }, { return: null }] } });
+  await writeFile(join(box.state, 'nft.json'), JSON.stringify(accounting));
+  assert.equal(box.helper(['allow', '50575', 'udp']).status, 0, '纯计数/返回链可共存');
+  assert.equal(box.helper(['delete', '50575', 'udp']).status, 0);
+  assert.deepEqual(JSON.parse(await box.log('nft.json')), accounting);
+  for (const expr of [[{ drop: null }], [{ reject: null }], [{ jump: { target: 'unknown' } }], [{ goto: { target: 'unknown' } }], [{ queue: null }], [{ mangle: { key: { meta: { key: 'mark' } }, value: 1 } }]]) {
+    const blocked = structuredClone(legacy);
+    blocked.nftables.push({ rule: { family: 'ip', table: 'filter', chain: 'f2b-3x-ipl', expr } });
+    await writeFile(join(box.state, 'nft.json'), JSON.stringify(blocked));
+    const result = box.helper(['allow', '50575', 'udp']);
+    assert.equal(result.status, 3, result.out);
+    assert.match(result.out, /尚不支持的nftables INPUT拦截层/);
+    assert.deepEqual(JSON.parse(await box.log('nft.json')), blocked);
+    assert.equal(await box.read('etc/nftables.d/host_hardening.nft'), hostFirewall);
+  }
+  const missing = structuredClone(legacy);
+  missing.nftables = missing.nftables.filter((e: any) => e.chain?.name !== 'f2b-3x-ipl');
+  await writeFile(join(box.state, 'nft.json'), JSON.stringify(missing));
+  assert.equal(box.helper(['allow', '50575', 'udp']).status, 3, '目标缺失仍拒绝');
 });
 
 test('nft安全边界：拒绝提前阻断、跳转、外部改写的自有规则与可写配置', async () => {

@@ -44,6 +44,87 @@ func TestSyncFirewallAllowsNewAndRemovesDeletedPorts(t *testing.T) {
 	}
 }
 
+func TestQuickCreateWorkspaceAutomaticallyAllowsAllPresets(t *testing.T) {
+	for _, preset := range []string{"reality", "xhttp-reality", "xhttp-tls", "hy2"} {
+		t.Run(preset, func(t *testing.T) {
+			state, _, handler, cookie := subscriptionFixture(t)
+			previousFirewall, previousHopping := runFirewall, runPortHopping
+			t.Cleanup(func() { runFirewall, runPortHopping = previousFirewall, previousHopping })
+			var calls []string
+			runFirewall = func(_ context.Context, action, port, protocol string) (string, error) {
+				calls = append(calls, action+" "+port+"/"+protocol)
+				return "automatically allowed", nil
+			}
+			runPortHopping = func(_ context.Context, args ...string) (string, error) {
+				calls = append(calls, "redirect "+strings.Join(args, " "))
+				return "redirect configured", nil
+			}
+			doc, err := state.ReadDocument(context.Background(), "workspace")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var draft workspaceDraft
+			if err := json.Unmarshal(doc.Data, &draft); err != nil {
+				t.Fatal(err)
+			}
+			inbound := draft.Inbounds[0]
+			inbound.ID, inbound.Name, inbound.Preset, inbound.Port = "in-quick", "测试新建", preset, 58443
+			inbound.Listen, inbound.ShareHost = "0.0.0.0", "panel.example.com"
+			if preset == "hy2" || preset == "xhttp-tls" {
+				inbound.Connection = &connectionDraft{UsePanelCertificate: true}
+			}
+			if preset == "hy2" {
+				inbound.PortHopping = "48000-48199"
+			}
+			draft.Inbounds = append(draft.Inbounds, inbound)
+			client := draft.Clients[0]
+			client.ID, client.InboundID, client.Name = "client-quick", inbound.ID, "测试客户端"
+			draft.Clients = append(draft.Clients, client)
+			body, _ := json.Marshal(map[string]any{"revision": doc.Revision, "data": draft})
+			request := httptest.NewRequest("PUT", "/api/workspace", strings.NewReader(string(body)))
+			request.Host, request.RemoteAddr = "127.0.0.1:5180", "127.0.0.1:1234"
+			request.Header.Set("Origin", "http://127.0.0.1:5180")
+			request.Header.Set("Content-Type", "application/json")
+			request.AddCookie(cookie)
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != 200 {
+				t.Fatal(response.Code, response.Body.String())
+			}
+			protocol := "tcp"
+			want := "allow 58443/tcp"
+			if preset == "hy2" {
+				protocol, want = "udp", "allow 58443/udp,redirect add 48000-48199 58443"
+			}
+			if strings.Join(calls, ",") != want {
+				t.Fatal("新建保存未自动放行", calls)
+			}
+			var result savedDocument
+			if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(result.Firewall, "automatically allowed") {
+				t.Fatal("自动放行结果未返回")
+			}
+			// 无测试核心可应用，仍必须完成自动放行并记录，不能依赖用户点重试。
+			if result.Applied || result.ApplyError == "" {
+				t.Fatal("夹具应处于尚未安装核心状态")
+			}
+			status, err := state.ReadDocument(context.Background(), "firewall-status")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var report firewallReport
+			if err := json.Unmarshal(status.Data, &report); err != nil {
+				t.Fatal(err)
+			}
+			if report.Revision != result.Revision || report.Endpoints["58443/"+protocol].State != "allowed" {
+				t.Fatal("自动放行状态未持久保存", report)
+			}
+		})
+	}
+}
+
 func TestFirewallReportPersistsFailuresAndRetryDoesNotRestartCore(t *testing.T) {
 	state, rt, handler, cookie := subscriptionFixture(t)
 	previous := runFirewall
@@ -112,6 +193,96 @@ func TestFirewallReportMarksPortHoppingFailure(t *testing.T) {
 		if report.Endpoints["50574/udp"].State != "failed" {
 			t.Fatal("NAT failure hidden by port allow status", report)
 		}
+	}
+}
+
+func TestOldFirewallCleanupRequiresPendingUnusedEndpointAndKeepsFailures(t *testing.T) {
+	state, rt, handler, cookie := subscriptionFixture(t)
+	ctx := context.Background()
+	previous := runFirewall
+	t.Cleanup(func() { runFirewall = previous })
+	doc, err := state.ReadDocument(ctx, "workspace")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var commands []string
+	fail := true
+	runFirewall = func(_ context.Context, action, port, protocol string) (string, error) {
+		commands = append(commands, action+" "+port+"/"+protocol)
+		if fail {
+			return "unsupported input filter", errors.New("blocked")
+		}
+		return "not added by o-ui; unchanged", nil
+	}
+	seed := firewallReport{Revision: doc.Revision, Endpoints: map[string]firewallEndpoint{
+		"18443/tcp": {State: "failed", Message: "active"},
+		"18443/udp": {State: "failed", Message: "other protocol"},
+		"51514/tcp": {State: "failed", Message: "legacy failure"},
+		"60890/udp": {State: "failed", Operation: "delete"},
+		"62388/tcp": {State: "unverified", Operation: "delete"},
+		"52000/udp": {State: "failed", Operation: "redirect-delete", Message: "Port hopping update failed"},
+		"52001/udp": {State: "failed", Message: "端口跳跃转发操作失败"},
+	}}
+	data, _ := json.Marshal(seed)
+	if _, err = state.SaveDocument(ctx, "firewall-status", 0, data); err != nil {
+		t.Fatal(err)
+	}
+	call := func(endpoint string, authenticated bool) *httptest.ResponseRecorder {
+		body, _ := json.Marshal(map[string]string{"endpoint": endpoint})
+		r := httptest.NewRequest("POST", "/api/runtime/firewall/cleanup", strings.NewReader(string(body)))
+		r.Host, r.RemoteAddr = "127.0.0.1:5180", "127.0.0.1:1234"
+		r.Header.Set("Origin", "http://127.0.0.1:5180")
+		r.Header.Set("Content-Type", "application/json")
+		if authenticated {
+			r.AddCookie(cookie)
+		}
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		return w
+	}
+	for endpoint, code := range map[string]int{"18443/tcp": 409, "18443/udp": 409, "52000/udp": 409, "52001/udp": 409, "1023/tcp": 400, "65536/tcp": 400, "051514/tcp": 400, "51514/tcp;id": 400, "51515/tcp": 404} {
+		if result := call(endpoint, true); result.Code != code {
+			t.Fatalf("%s: %d %s", endpoint, result.Code, result.Body.String())
+		}
+	}
+	if result := call("51514/tcp", false); result.Code != 401 {
+		t.Fatal(result.Code)
+	}
+	if len(commands) != 0 {
+		t.Fatal("unsafe request invoked helper", commands)
+	}
+	before := rt.engine.Status()
+	result := call("51514/tcp", true)
+	if result.Code != 200 || !strings.Contains(result.Body.String(), "unsupported input filter") {
+		t.Fatal(result.Code, result.Body.String())
+	}
+	stored, _ := state.ReadDocument(ctx, "firewall-status")
+	var report firewallReport
+	_ = json.Unmarshal(stored.Data, &report)
+	if report.Endpoints["51514/tcp"].State != "failed" || report.Endpoints["51514/tcp"].Operation != "delete" {
+		t.Fatal("failure record lost", report)
+	}
+	fail = false
+	for _, endpoint := range []string{"51514/tcp", "60890/udp", "62388/tcp"} {
+		if result := call(endpoint, true); result.Code != 200 || strings.Contains(result.Body.String(), `"`+endpoint+`"`) {
+			t.Fatal(result.Code, result.Body.String())
+		}
+	}
+	stored, _ = state.ReadDocument(ctx, "firewall-status")
+	_ = json.Unmarshal(stored.Data, &report)
+	if !strings.Contains(string(stored.Data), `"18443/tcp"`) || !strings.Contains(string(stored.Data), `"52000/udp"`) {
+		t.Fatal("unrelated records changed", string(stored.Data))
+	}
+	if result := call("51514/tcp", true); result.Code != 404 || len(commands) != 4 {
+		t.Fatal("duplicate cleanup invoked helper", result.Code, commands)
+	}
+	after := rt.engine.Status()
+	if before.Running != after.Running || before.WorkspaceRevision != after.WorkspaceRevision {
+		t.Fatal("cleanup changed core state")
+	}
+	workspace, _ := state.ReadDocument(ctx, "workspace")
+	if workspace.Revision != doc.Revision || string(workspace.Data) != string(doc.Data) {
+		t.Fatal("cleanup changed business workspace")
 	}
 }
 

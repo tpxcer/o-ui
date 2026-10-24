@@ -11,7 +11,8 @@ import type { PanelTLSStatus } from './panel-settings.ts';
 import { readProxyEndpoint } from './proxy-endpoint.ts';
 import type { RuntimeStatus } from './runtime.ts';
 import { workspaceStatusText } from './workspace-status.ts';
-import { firewallStatusText, type FirewallReport } from './firewall-status.ts';
+import { firewallStatusText, oldFirewallCleanupAllowed, type FirewallReport } from './firewall-status.ts';
+import { confirmAction } from './confirm.ts';
 import { regionLabel, regionName, type PublicInfo } from './server-plan-model.ts';
 import './management.css';
 import { lang, locale, t } from './i18n.ts';
@@ -134,7 +135,7 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
     return { name: String(data.get('name') ?? ''), quotaGB: Number(data.get('quotaGB')), ipLimit: Number(data.get('ipLimit')), subscription: data.has('subscription'), expiresAt, reverseTag: String(data.get('reverseTag') ?? '').trim() || undefined };
   };
   const refreshField = (label: string, name: string, value: string, action: string, title: string, attrs = '') => `<div class="form-field"><label for="connection-${name}">${label}</label><div class="input-action"><input id="connection-${name}" name="${name}" value="${esc(value)}" maxlength="4096" autocomplete="off" ${attrs}><button type="button" class="icon-button" data-connection="${action}" title="${title}" aria-label="${title}">${icon('refresh-cw')}</button></div></div>`;
-  const endpointFields = (inbound?: Inbound) => `<fieldset class="sniffing-field"><legend>${t('代理监听与分享地址', 'Proxy listen and share address')}</legend>${input(t('代理监听 IP', 'Proxy listen IP'), 'listen', inbound ? inbound.listen || '127.0.0.1' : '0.0.0.0', 'required maxlength="45" list="proxy-listens" autocomplete="off"', t('0.0.0.0 监听所有地址，客户端可从外网连接；127.0.0.1 仅本机可用。只影响代理入站，不影响管理面板。', '0.0.0.0 listens on all addresses so clients can connect from outside; 127.0.0.1 is local only. Affects proxy inbounds only, not the panel.'))}<datalist id="proxy-listens"><option value="127.0.0.1"></option><option value="::1"></option><option value="0.0.0.0"></option><option value="::"></option></datalist>${input(t('分享主机（域名或 IP）', 'Share host (domain or IP)'), 'shareHost', inbound?.shareHost || '', 'maxlength="253" autocomplete="off"', t('写入节点链接的服务器地址；新建时优先填入面板证书里的域名，没有证书才填本机公网 IP。域名须直接解析到本机（不能开 CDN 代理）。不含协议、端口或路径。', 'Server address written into node links; new inbounds get the domain from the panel certificate, or the public IP when there is no certificate. The domain must resolve directly to this server (no CDN proxy). No scheme, port or path.'))}<p class="form-hint">${t('端口范围 1024–65535；服务器开了防火墙时请放行该端口。', 'Ports 1024–65535; if the server has a firewall, allow this port.')}</p></fieldset>`;
+  const endpointFields = (inbound?: Inbound) => `<fieldset class="sniffing-field"><legend>${t('代理监听与分享地址', 'Proxy listen and share address')}</legend>${input(t('代理监听 IP', 'Proxy listen IP'), 'listen', inbound ? inbound.listen || '127.0.0.1' : '0.0.0.0', 'required maxlength="45" list="proxy-listens" autocomplete="off"', t('0.0.0.0 监听所有地址，客户端可从外网连接；127.0.0.1 仅本机可用。只影响代理入站，不影响管理面板。', '0.0.0.0 listens on all addresses so clients can connect from outside; 127.0.0.1 is local only. Affects proxy inbounds only, not the panel.'))}<datalist id="proxy-listens"><option value="127.0.0.1"></option><option value="::1"></option><option value="0.0.0.0"></option><option value="::"></option></datalist>${input(t('分享主机（域名或 IP）', 'Share host (domain or IP)'), 'shareHost', inbound?.shareHost || '', 'maxlength="253" autocomplete="off"', t('写入节点链接的服务器地址；新建时优先填入面板证书里的域名，没有证书才填本机公网 IP。域名须直接解析到本机（不能开 CDN 代理）。不含协议、端口或路径。', 'Server address written into node links; new inbounds get the domain from the panel certificate, or the public IP when there is no certificate. The domain must resolve directly to this server (no CDN proxy). No scheme, port or path.'))}<p class="form-hint">${t('端口范围 1024–65535；保存时自动放行受支持的主机防火墙，失败会显示原因；云安全组需另行放行。', 'Ports 1024–65535; saving automatically allows supported host firewalls and reports failures. Cloud security groups must be configured separately.')}</p></fieldset>`;
   const connectionFields = (preset: Preset, connection: Connection = preset === 'hy2' || preset === 'xhttp-tls' ? { ...defaultConnection(), usePanelCertificate: true } : newRealityConnection(), portHopping = '') => `<fieldset class="sniffing-field"><legend>${t('连接参数', 'Connection parameters')}</legend><p class="form-hint">${t('UUID／认证值由服务端首次预检生成并保存。REALITY 必须使用公私钥：私钥保留服务端，客户端公钥随连接信息自动提供，无需手填；刷新目标不会更换密钥。', 'The UUID/auth value is generated and saved at the first server preflight. REALITY uses a key pair: the private key stays on the server and the public key is included in the connection info automatically. Changing the target does not change the keys.')}</p>
     ${preset === 'hy2' || preset === 'xhttp-tls' ? check(t('自动复用已生效的面板 HTTPS 证书', 'Reuse the active panel HTTPS certificate'), 'usePanelCertificate', !!connection.usePanelCertificate) + t('<p class="form-hint" data-panel-cert-status role="status">正在读取面板证书状态…</p>', '<p class="form-hint" data-panel-cert-status role="status">Reading panel certificate status…</p>') + `<div data-manual-cert ${connection.usePanelCertificate ? 'hidden' : ''}>` + input(t('证书绝对路径', 'Certificate absolute path'), 'certificateFile', connection.certificateFile, 'maxlength="4096" autocomplete="off"', t('读取本机PEM证书，不上传到远端。', 'Reads a local PEM certificate; nothing is uploaded.')) + input(t('私钥绝对路径', 'Private key absolute path'), 'keyFile', connection.keyFile, 'maxlength="4096" autocomplete="off"') + '</div>' + input(t('TLS 服务域名（SNI）', 'TLS server name (SNI)'), 'serverName', connection.serverName, 'maxlength="253" autocomplete="off"', t('复用时自动填写证书首个域名，可手动修改但必须匹配证书。', 'When reusing, the first certificate domain is filled in; you can change it, but it must match the certificate.')) : refreshField(t('REALITY 目标', 'REALITY target'), 'target', connection.target, 'target', t('换一个预设目标并同步 SNI', 'Pick another preset target and sync SNI'), t('placeholder="域名:443" list="reality-targets"', 'placeholder="domain:443" list="reality-targets"')) + `<datalist id="reality-targets">${realityTargets.map(host => `<option value="${host}:443"></option>`).join('')}</datalist>` + refreshField(t('REALITY 服务域名（SNI）', 'REALITY server name (SNI)'), 'serverName', connection.serverName, 'sni', t('从目标地址填入 SNI', 'Fill SNI from the target')) + t('<p class="form-hint">AMD、Microsoft、Apple、Amazon、特斯拉仅为常用填写候选，可手动修改；未探测外站，不保证在每台服务器可用。</p><p class="form-hint" data-connection-notice role="status"></p>', '<p class="form-hint">AMD, Microsoft, Apple, Amazon and Tesla are only common suggestions and can be changed; external sites are not probed and may not work from every server.</p><p class="form-hint" data-connection-notice role="status"></p>')}
     ${preset === 'reality' ? check(t('XTLS Vision 流控', 'XTLS Vision flow'), 'vision', !connection.noVision) + t('<p class="form-hint">默认开启。只有旧客户端没配置流控（如从 OUI 导入的无流控节点）时才关闭；两端流控不一致会连不上。</p>', '<p class="form-hint">On by default. Turn it off only when existing clients have no flow configured (such as flow-less nodes imported from OUI); a flow mismatch between the two ends fails to connect.</p>') : ''}
@@ -226,7 +227,7 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
       writing = true; sent = state; created = inbound.name;
       const document = await api<{ revision: number; data: Workspace; applied?: boolean; applyError?: string; firewall?: string }>('workspace', jsonBody('PUT', { revision, data: state }));
       revision = document.revision; state = document.data; submitting = false; search = ''; filter = 'all'; renderList(); onSaved(); void refreshFirewall();
-      announce(document.applied ? `${inbound.name} ${t('已创建并生效 · 端口', 'created and applied · port')} ${free.port}/${proto}${free.portHopping ? `${t(' · 端口跳跃 ', ' · port hopping ')}${free.portHopping}` : ''}${document.firewall ? `${t(' · 防火墙：', ' · firewall: ')}${document.firewall}` : ''}` : `${inbound.name} ${t('已创建，但未生效：', 'created, but not applied: ')}${document.applyError ?? ''}`);
+      announce((document.applied ? `${inbound.name} ${t('已创建并生效 · 端口', 'created and applied · port')} ${free.port}/${proto}${free.portHopping ? `${t(' · 端口跳跃 ', ' · port hopping ')}${free.portHopping}` : ''}` : `${inbound.name} ${t('已创建，但未生效：', 'created, but not applied: ')}${document.applyError ?? ''}`) + (document.firewall ? `${t(' · 防火墙：', ' · firewall: ')}${document.firewall}` : ''));
     } catch (reason) {
       if (writing && uncertainSave(reason)) {
         notice.textContent = t('连接中断，正在确认是否已保存…', 'Connection lost; confirming the save…');
@@ -440,7 +441,7 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
     const count = visible.size;
     root.querySelector('#result-count')!.textContent = `${t('显示', 'Showing')} ${count} / ${page === 'inbounds' ? state.inbounds.length : state.clients.length} ${t('条', '')}`;
     const headers = page === 'inbounds' ? [t('入站名称', 'Inbound name'), t('类型 / 端口', 'Type / port'), t('状态', 'Status'), t('客户端', 'Clients'), t('总流量', 'Total traffic'), t('操作', 'Actions')]
-      : [t('客户端 / 入站', 'Client / inbound'), t('启用', 'Enabled'), t('流量', 'Traffic'), t('到期', 'Expiry'), t('最近上线', 'Last online'), t('IP / 订阅', 'IP / subscription'), ...(persistent ? [t('上线通知', 'Online alerts')] : []), t('操作', 'Actions')];
+      : [t('客户端 / 入站', 'Client / inbound'), t('流量', 'Traffic'), t('到期', 'Expiry'), t('最近上线', 'Last online'), t('IP / 订阅', 'IP / subscription'), ...(persistent ? [t('上线通知', 'Online alerts')] : []), t('操作', 'Actions')];
     root.querySelector('#list-content')!.innerHTML = count ? `<table class="data-table ${page}-table${page === 'clients' && persistent ? ' with-notify' : ''}"><caption class="sr-only">${page === 'inbounds' ? persistent ? t('入站列表', 'Inbounds') : t('入站演示列表', 'Demo inbounds') : persistent ? t('客户端列表', 'Clients') : t('客户端演示列表', 'Demo clients')}</caption><thead><tr><th scope="col" class="select-cell"><input type="checkbox" data-select-all aria-label="${t('全选', 'Select all')}"></th>${headers.map(label => `<th scope="col">${label}</th>`).join('')}</tr></thead><tbody>${page === 'inbounds' ? inboundRows.map(item => `<tr>${selectCell(item)}
       <td data-label="${t('入站名称', 'Inbound name')}"><strong class="record-name">${esc(item.name)}</strong><small class="table-secondary">${presets[item.preset].protocol} · ${presets[item.preset].security}</small></td>
       <td data-label="${t('类型 / 端口', 'Type / port')}"><span class="tag preset-${item.preset}">${presets[item.preset].label}</span><small class="table-secondary">${presets[item.preset].transport} / ${item.port}${item.portHopping ? ` · ${t('跳跃', 'hop')} ${item.portHopping}` : ''}</small></td>
@@ -448,8 +449,7 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
       <td data-label="${t('客户端', 'Clients')}"><button class="text-button" data-op="clients" data-id="${esc(item.id)}">${state.clients.filter(client => client.inboundId === item.id).length} ${t('个客户端', 'clients')}</button></td>
       <td data-label="${t('总流量', 'Total traffic')}" data-inbound-traffic="${esc(item.id)}"><span class="date-value">${inboundTraffic(item.id)}</span></td><td data-label="${t('操作', 'Actions')}">${rowActions(item, 'inbound')}</td></tr>`).join('') : clientRows.map(item => {
         const inbound = state.inbounds.find(record => record.id === item.inboundId)!;
-        return `<tr data-client-row="${esc(item.id)}">${selectCell(item)}<td data-label="${t('客户端 / 入站', 'Client / inbound')}"><strong class="record-name">${esc(item.name)}</strong><small class="table-secondary">${esc(inbound.name)}</small></td>
-          <td data-label="${t('启用', 'Enabled')}"><div class="status-cell"><label class="switch" title="${item.enabled ? t('停用', 'Disable') : t('启用', 'Enable')}"><input type="checkbox" data-toggle-client="${esc(item.id)}" ${item.enabled ? 'checked' : ''} ${loading || reloadRequired ? 'disabled' : ''} aria-label="${t('启用客户端', 'Enable client')} ${esc(item.name)}"><span aria-hidden="true"></span></label></div></td>
+        return `<tr data-client-row="${esc(item.id)}">${selectCell(item)}<td data-label="${t('客户端 / 入站', 'Client / inbound')}"><div class="client-identity"><label class="switch" title="${item.enabled ? t('停用', 'Disable') : t('启用', 'Enable')}"><input type="checkbox" data-toggle-client="${esc(item.id)}" ${item.enabled ? 'checked' : ''} ${loading || submitting || reloadRequired ? 'disabled' : ''} aria-label="${t('启用客户端', 'Enable client')} ${esc(item.name)}"><span aria-hidden="true"></span></label><div class="client-identity-text"><strong class="record-name">${esc(item.name)}</strong><small class="table-secondary">${esc(inbound.name)}</small></div></div></td>
           <td data-label="${t('流量', 'Traffic')}" data-client-traffic>${trafficCell(item)}</td>
           <td data-label="${t('到期', 'Expiry')}">${item.expiresAt === null ? `<span class="date-value">${t('永不过期', 'Never expires')}</span>` : `<span class="date-value">${expiryLeft(item.expiresAt, now)}</span><small class="table-secondary">${chineseDate(item.expiresAt)}</small>`}</td>
           <td data-label="${t('最近上线', 'Last online')}" data-client-last>${lastOnlineCell(item)}</td>
@@ -464,6 +464,7 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
     root.innerHTML = `<header class="page-heading"><div><h1 class="page-title" tabindex="-1">${page === 'inbounds' ? t('入站列表', 'Inbounds') : t('客户端', 'Clients')}</h1><p>${page === 'inbounds' ? t('创建和管理入站，保存后立即生效。', 'Create and manage inbounds; changes apply as soon as you save.') : persistent ? t('管理客户端，查看累计流量与到期时间。', 'Manage clients and view traffic totals and expiry.') : t('管理客户端演示数据与到期时间。', 'Manage demo client data and expiry.')}</p></div>${page === 'inbounds' && persistent ? `<div class="create-actions"><button class="primary-button create-button" data-create ${!loaded || loading || reloadRequired ? 'disabled' : ''}>${icon('plus')}${t('添加入站', 'Add inbound')}</button><div class="quick-create"><button class="secondary-button" data-quick-toggle aria-haspopup="menu" aria-expanded="false" ${!loaded || loading || submitting || reloadRequired ? 'disabled' : ''}>${icon('zap')}${t('一键创建', 'Quick create')}</button><div class="quick-menu" role="menu" hidden>${(Object.keys(quickLabels) as Preset[]).map(key => `<button type="button" role="menuitem" data-quick-preset="${key}">${quickLabels[key]}</button>`).join('')}</div></div></div>` : `<button class="primary-button create-button" data-create ${!loaded || loading || reloadRequired ? 'disabled' : ''}>${icon('plus')}${page === 'inbounds' ? t('一键创建', 'Quick create') : t('添加客户端', 'Add client')}</button>`}</header>
       ${loading ? t('<p class="core-message" role="status">正在读取独立数据库…</p>', '<p class="core-message" role="status">Reading the database…</p>') : loadError ? `<p class="form-error" role="alert">${esc(loadError)}</p>` : ''}
       <p class="form-error" role="alert" id="firewall-read-error" ${firewallError ? '' : 'hidden'}>${esc(firewallError)}</p>
+      <div id="firewall-maintenance" class="firewall-maintenance" hidden></div>
       ${reloadRequired ? t('<p class="form-error" role="alert">保存失败或结果未确认，当前列表可能已过期；请重新读取草稿后再修改，不会自动覆盖最新数据。</p>', '<p class="form-error" role="alert">The save failed or was not confirmed, so this list may be stale. Reload the draft before editing; the latest data is never overwritten automatically.</p>') : ''}
       <div class="workspace-bar"><div class="workspace-summary"><span>${t('入站', 'Inbounds')} <strong>${state.inbounds.length}</strong></span><span>${t('客户端', 'Clients')} <strong>${state.clients.length}</strong></span><span>${persistent ? t('可用', 'Available') : t('演示可用', 'Demo available')} <strong>${available}</strong></span></div>${persistent ? `<div class="workspace-actions"><button class="icon-button bordered" data-reload title="${t('从服务器重新读取列表（别处修改过时使用）', 'Reload the list from the server (after changes elsewhere)')}" aria-label="${t('刷新', 'Refresh')}" ${loading || submitting ? 'disabled' : ''}>${icon('refresh-cw')}</button></div>` : ''}</div>
       ${persistent ? `<div class="workspace-status"><p class="form-hint" id="workspace-application-status" role="status"></p><p class="form-hint" id="traffic-status">${esc(trafficStatus(traffic, trafficError))}</p><p class="form-hint">${t('流量约每2秒统计一次；客户端到期或用尽额度时会自动停用。', 'Traffic is counted about every 2 seconds; clients stop working automatically when they expire or run out of quota.')}</p></div>` : ''}
@@ -489,6 +490,7 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
     if (!button) return;
     if (button.hasAttribute('data-reload')) { void load(true); return; }
     if (button.dataset.firewallRetry) { void retryFirewall(button.dataset.firewallRetry); return; }
+    if (button.dataset.firewallCleanup) { void cleanupFirewall(button.dataset.firewallCleanup); return; }
     if (!loaded || loading || submitting || reloadRequired) return;
     if (button.hasAttribute('data-create')) { if (page === 'inbounds') quickCreate(); else clientEditor(); }
     if (button.hasAttribute('data-quick-toggle')) { quickMenu(root.querySelector<HTMLElement>('.quick-menu')!.hidden === true); return; }
@@ -507,7 +509,7 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
   });
   async function load(force = false): Promise<void> {
     if ((!force && loaded) || loading || submitting) return;
-    if (force && loaded && !window.confirm(t('重新读取将丢弃当前入站或客户端弹窗中未保存的输入，并使用数据库最新列表。请先复制需要保留的内容。只读取，不保存、不应用核心。确认继续？', 'Reloading discards unsaved input in the inbound or client dialog and uses the latest list from the database. Copy anything you need first. It only reads; nothing is saved or applied. Continue?'))) return;
+    if (force && loaded && !await confirmAction(t('重新读取将丢弃当前入站或客户端弹窗中未保存的输入，并使用数据库最新列表。请先复制需要保留的内容。只读取，不保存、不应用核心。', 'Reloading discards unsaved input in the inbound or client dialog and uses the latest list from the database. Copy anything you need first. It only reads; nothing is saved or applied.'), { title: t('重新读取列表', 'Reload list'), confirmLabel: t('重新读取', 'Reload') })) return;
     const controls = [...modal.querySelectorAll<HTMLInputElement | HTMLButtonElement | HTMLSelectElement | HTMLTextAreaElement>('input,button,select,textarea')];
     const disabled = controls.map(control => control.disabled); controls.forEach(control => { control.disabled = true; });
     loading = true; loadError = ''; renderList();
@@ -540,10 +542,23 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
     });
     const error = root.querySelector<HTMLElement>('#firewall-read-error');
     if (error) {
+      error.textContent = firewallError; error.hidden = !firewallError;
+    }
+    const maintenance = root.querySelector<HTMLElement>('#firewall-maintenance');
+    if (maintenance) {
       const endpoints = new Set(state.inbounds.map(item => `${item.port}/${item.preset === 'hy2' ? 'udp' : 'tcp'}`));
-      const old = Object.entries(firewall?.endpoints ?? {}).filter(([key, value]) => !endpoints.has(key) && value.state === 'failed').map(([key]) => key);
-      const message = firewallError || (old.length ? t(`旧端口防火墙撤销失败，请检查：${old.join(', ')}`, `Failed to remove firewall rules for old ports; check: ${old.join(', ')}`) : '');
-      error.textContent = message; error.hidden = !message;
+      const old = Object.entries(firewall?.endpoints ?? {}).filter(([key, value]) => !endpoints.has(key) && value.state !== 'allowed');
+      // 周期更新只切换控件状态，保留用户展开的详情和键盘焦点。
+      const signature = JSON.stringify(old);
+      if (maintenance.dataset.signature !== signature) {
+        const expanded = maintenance.querySelector('details')?.open ?? false;
+        maintenance.dataset.signature = signature;
+        maintenance.innerHTML = old.length ? `<details><summary>${t('旧端口防火墙待处理', 'Old-port firewall maintenance')} <span class="muted-text">${old.length}</span></summary><p>${t('这些端口已不在当前入站列表中，上次防火墙操作未完成。不会自动清除记录，也不代表当前节点不通。', 'These ports are no longer in the inbound list, and their last firewall update did not complete. Records are kept; this does not mean current nodes are unreachable.')}</p><ul>${old.map(([key, value]) => `<li><div><strong>${esc(key)}</strong><small>${esc(value.message || t('原因未记录，请核查服务器防火墙。', 'No reason recorded; inspect the server firewall.'))}</small><time>${esc(value.checkedAt)}</time></div>${oldFirewallCleanupAllowed(value) ? `<button type="button" class="secondary-button" data-firewall-cleanup="${esc(key)}">${icon('refresh-cw')}${t('重试撤销', 'Retry removal')}</button>` : `<small>${t('请在服务器核查此记录；不会自动撤销转发或外部规则。', 'Inspect this record on the server; forwarding and external rules are not removed automatically.')}</small>`}</li>`).join('')}</ul></details>` : '';
+        const details = maintenance.querySelector('details');
+        if (details) details.open = expanded;
+      }
+      maintenance.hidden = !old.length;
+      maintenance.querySelectorAll<HTMLButtonElement>('button').forEach(button => { button.disabled = !!firewallBusy || loading || submitting || reloadRequired; });
     }
     refreshIcons();
   }
@@ -566,6 +581,19 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
     } catch (reason) {
       await refreshFirewall();
       announce(reason instanceof Error ? reason.message : t('防火墙操作失败', 'Firewall update failed'));
+    } finally { firewallBusy = ''; renderFirewall(); }
+  }
+  async function cleanupFirewall(endpoint: string): Promise<void> {
+    if (firewallBusy || loading || submitting || !loaded || reloadRequired) return;
+    if (!await confirmAction(t(`重试撤销旧端口 ${endpoint} 的 o-ui 放行规则。只处理 o-ui 自己记录的规则，保留外部规则，不重启核心。服务器会再次检查该端口未被当前入站使用。`, `Retry removing o-ui's allow rule for old port ${endpoint}. Only o-ui-owned rules are handled; external rules are kept and the core is not restarted. The server rechecks that no current inbound uses the port.`), { title: t('撤销旧端口放行', 'Remove old-port rule'), confirmLabel: t('重试撤销', 'Retry removal'), danger: true })) return;
+    if (firewallBusy || loading || submitting || reloadRequired) return;
+    firewallBusy = endpoint; renderFirewall();
+    try {
+      firewall = await api<FirewallReport>('runtime/firewall/cleanup', jsonBody('POST', { endpoint }));
+      announce(firewall.message || t('旧端口防火墙操作完成。', 'Old-port firewall update finished.'));
+    } catch (reason) {
+      await refreshFirewall();
+      announce(reason instanceof Error ? reason.message : t('撤销失败，记录已保留。', 'Removal failed; the record is kept.'));
     } finally { firewallBusy = ''; renderFirewall(); }
   }
   async function refreshTraffic(): Promise<void> {

@@ -388,7 +388,12 @@ EOF
 renew_timer_enable() {
   write_renew_units
   systemctl daemon-reload
-  systemctl enable --now o-ui-cert-renew.timer
+  if ! systemctl enable --now o-ui-cert-renew.timer ||
+     ! systemctl is-enabled --quiet o-ui-cert-renew.timer ||
+     ! systemctl is-active --quiet o-ui-cert-renew.timer; then
+    warn "自动续期定时器未正常启用，请检查 systemctl status o-ui-cert-renew.timer；证书不会保证自动续期" "automatic renewal timer is not enabled and active; inspect systemctl status o-ui-cert-renew.timer; automatic renewal is not guaranteed"
+    return 1
+  fi
 }
 
 renew_timer_disable() {
@@ -503,6 +508,43 @@ cert_fix_perms() {
   done
 }
 
+cert_pair_valid() {
+  local cert=$1 key=$2 pub keypub
+  [ -f "$cert" ] && [ ! -L "$cert" ] && [ -f "$key" ] && [ ! -L "$key" ] || return 1
+  openssl x509 -in "$cert" -noout -checkend 0 >/dev/null 2>&1 || return 1
+  pub=$(openssl x509 -in "$cert" -noout -pubkey 2>/dev/null) || return 1
+  keypub=$(openssl pkey -in "$key" -passin pass: -pubout 2>/dev/null) || return 1
+  [ -n "$pub" ] && [ "$pub" = "$keypub" ]
+}
+
+# ACME只写暂存区，校验成功后再替换在线文件；错误续期产物不会覆盖旧证书。
+cert_promote() {
+  local pending=$F_ACME/deploy backup
+  CERT_PREVIOUS=
+  cert_pair_valid "$pending/fullchain.pem" "$pending/key.pem" || {
+    warn "新证书无效、已过期或私钥不配对，原在线证书保持不变" "new certificate is invalid, expired or does not match the key; live certificate unchanged"; return 1; }
+  mkdir -p "$F_TLS" || return 1
+  [ ! -L "$F_TLS" ] && [ ! -L "$F_TLS/fullchain.pem" ] && [ ! -L "$F_TLS/key.pem" ] || return 1
+  if [ -f "$F_TLS/fullchain.pem" ] && [ -f "$F_TLS/key.pem" ]; then
+    if cmp -s "$pending/fullchain.pem" "$F_TLS/fullchain.pem" && cmp -s "$pending/key.pem" "$F_TLS/key.pem"; then cert_fix_perms; return; fi
+    backup=$(mktemp -d "$F_ACME/previous.XXXXXXXX") || return 1
+    chmod 0700 "$backup" || return 1
+    cp -p "$F_TLS/fullchain.pem" "$F_TLS/key.pem" "$backup/" || return 1
+    CERT_PREVIOUS=$backup
+  fi
+  install -m 0640 "$pending/fullchain.pem" "$F_TLS/fullchain.pem.next" || return 1
+  install -m 0640 "$pending/key.pem" "$F_TLS/key.pem.next" || return 1
+  chown "root:$SERVICE_USER" "$F_TLS/fullchain.pem.next" "$F_TLS/key.pem.next" || return 1
+  mv -f "$F_TLS/key.pem.next" "$F_TLS/key.pem" || return 1
+  mv -f "$F_TLS/fullchain.pem.next" "$F_TLS/fullchain.pem" || return 1
+  cert_fix_perms
+}
+
+cert_restore_previous() {
+  [ -n "$CERT_PREVIOUS" ] || return 0
+  cp -p "$CERT_PREVIOUS/fullchain.pem" "$CERT_PREVIOUS/key.pem" "$F_TLS/" && cert_fix_perms
+}
+
 # 证书名称（SAN中的域名与IP，逗号分隔）、到期时间；面板只按SAN校验名称
 cert_names() {
   { openssl x509 -in "$1" -noout -text 2>/dev/null || true; } | awk '/Subject Alternative Name/ { getline; gsub(/ /, ""); gsub(/IPAddress:/, ""); gsub(/DNS:/, ""); print tolower($0); exit }'
@@ -510,101 +552,12 @@ cert_names() {
 
 cert_end() { { openssl x509 -in "$1" -noout -enddate 2>/dev/null || true; } | sed 's/^notAfter=//'; }
 
-# 证书在有效期内、含SAN，且公钥与私钥配对
-cert_pair_ok() {
-  local a b
-  [ -f "$1" ] && [ -f "$2" ] || return 1
-  openssl x509 -in "$1" -noout -checkend 0 >/dev/null 2>&1 || return 1
-  [ -n "$(cert_names "$1")" ] || return 1
-  a=$(openssl x509 -in "$1" -noout -pubkey 2>/dev/null | openssl sha256 2>/dev/null) || return 1
-  b=$(openssl pkey -in "$2" -pubout 2>/dev/null | openssl sha256 2>/dev/null) || return 1
-  [ -n "$a" ] && [ "$a" = "$b" ]
-}
-
-first_file() {
-  local dir=$1 name
-  shift
-  for name in "$@"; do
-    if [ -f "$dir/$name" ]; then printf '%s' "$dir/$name"; return 0; fi
-  done
-  return 1
-}
-
-# 扫描常见证书位置，只保留有效配对，结果放入SCAN_CERTS/SCAN_KEYS
-SCAN_CERTS=() SCAN_KEYS=()
-cert_scan() {
-  local dir base cert key i dup
-  SCAN_CERTS=() SCAN_KEYS=()
-  for dir in "$F_TLS" "$R"/root/cert/*/ "$R"/root/.acme.sh/*/ "$R"/etc/letsencrypt/live/*/ "$F_ACME"/certs/*/; do
-    [ -d "$dir" ] || continue
-    dir=${dir%/}
-    base=${dir##*/}
-    base=${base%_ecc}
-    cert=$(first_file "$dir" fullchain.pem fullchain.cer fullchain.crt cert.pem "$base.cer" "$base.crt") || continue
-    key=$(first_file "$dir" privkey.pem key.pem "$base.key" private.key privkey.key) || continue
-    cert_pair_ok "$cert" "$key" || continue
-    dup=''
-    i=0
-    while [ $i -lt ${#SCAN_CERTS[@]} ]; do
-      if cmp -s "${SCAN_CERTS[$i]}" "$cert"; then dup=1; fi
-      i=$((i + 1))
-    done
-    [ -n "$dup" ] && continue
-    SCAN_CERTS+=("$cert")
-    SCAN_KEYS+=("$key")
-  done
-}
-
-# 编号选择扫描到的证书；没有可用证书时返回1
-choose_existing_cert() {
-  local i n names host
-  ensure_tool openssl openssl || { warn "扫描证书需要openssl" "scanning certificates needs openssl"; return 1; }
-  cert_scan
-  if [ ${#SCAN_CERTS[@]} -eq 0 ]; then
-    warn "未在 /root/cert、/root/.acme.sh、/etc/letsencrypt/live、/etc/o-ui 找到有效的证书与私钥配对" "no valid certificate/key pair found in /root/cert, /root/.acme.sh, /etc/letsencrypt/live or /etc/o-ui"
-    return 1
-  fi
-  info "找到以下有效证书：" "Valid certificates found:"
-  i=0
-  while [ $i -lt ${#SCAN_CERTS[@]} ]; do
-    printf '  %d) %s  %s  %s\n' $((i + 1)) "$(cert_names "${SCAN_CERTS[$i]}")" "$(t 到期 expires) $(cert_end "${SCAN_CERTS[$i]}")" "${SCAN_CERTS[$i]#$R}"
-    i=$((i + 1))
-  done
-  choose n 1 ${#SCAN_CERTS[@]}
-  CERT_SRC_CERT=${SCAN_CERTS[$((n - 1))]}
-  CERT_SRC_KEY=${SCAN_KEYS[$((n - 1))]}
-  names=$(cert_names "$CERT_SRC_CERT")
-  host=${names%%,*}
-  case $names in
-    *,*)
-      info "证书包含多个名称，选择面板访问用的一个：" "The certificate has several names; choose the one for panel access:"
-      i=1
-      for host in $(printf '%s' "$names" | tr ',' ' '); do printf '  %d) %s\n' $i "$host"; i=$((i + 1)); done
-      choose n 1 $((i - 1))
-      host=$(printf '%s' "$names" | tr ',' '\n' | sed -n "${n}p")
-      ;;
-  esac
-  case $host in \*.*) ask host "通配符证书，请输入具体子域名" "Wildcard certificate; enter the exact subdomain" "panel.${host#\*.}" ;; esac
-  OUI_HOST=$host
-}
-
-# 交互收集证书方式，结果写入OUI_MODE/OUI_HOST/OUI_CHALLENGE/OUI_RENEW及CERT_*变量；只提供HTTPS
-CERT_EMAIL= CERT_CF_TOKEN= CERT_CF_ZONE= CERT_SRC_CERT= CERT_SRC_KEY=
+# 证书统一由ACME申请并自动续期；不扫描或导入外部证书。
+CERT_EMAIL= CERT_CF_TOKEN= CERT_CF_ZONE= CERT_FORCE= CERT_PREVIOUS=
 ask_access() {
   local n host
-  info "面板证书：" "Panel certificate:"
-  info "  1) 自动申请证书（ACME/Let's Encrypt，推荐）" "  1) Request a certificate automatically (ACME/Let's Encrypt, recommended)"
-  info "  2) 使用本机已有证书（自动扫描）" "  2) Use an existing certificate on this server (scanned automatically)"
-  choose n 1 2
-  if [ "$n" = 2 ]; then
-    OUI_MODE=file OUI_CHALLENGE= OUI_RENEW=
-    if choose_existing_cert; then
-      info "已有证书不会自动续期；更换后请在菜单“证书管理”重新选择。" "Existing certificates are not renewed automatically; choose again under Certificates after replacing them."
-      return 0
-    fi
-    info "改为自动申请证书。" "Switching to automatic certificate request."
-  fi
-  OUI_MODE=acme
+  info "面板证书：ACME / Let's Encrypt，自动申请并续期。" "Panel certificate: ACME / Let's Encrypt, automatically issued and renewed."
+  OUI_MODE=acme OUI_RENEW=timer
   while :; do
     ask host "面板域名或公网IP（证书将签发给它）" "Panel domain or public IP (the certificate is issued for it)" "$OUI_HOST"
     host=$(printf '%s' "$host" | tr 'A-Z' 'a-z')
@@ -624,7 +577,7 @@ ask_access() {
     if [ "$n" = 2 ]; then OUI_CHALLENGE=cf; fi
   fi
   if [ "$OUI_CHALLENGE" = http ] && port_in_use 80; then
-    warn "80端口已被占用，HTTP-01无法使用；请改用Cloudflare DNS或已有证书" "port 80 is in use, HTTP-01 cannot work; use Cloudflare DNS or an existing certificate"
+    warn "80端口已被占用，HTTP-01无法使用；请改用域名与Cloudflare DNS验证，不会停止现有服务" "port 80 is in use; use a domain with Cloudflare DNS validation instead; existing services will not be stopped"
     ask_access
     return 0
   fi
@@ -638,25 +591,11 @@ ask_access() {
   ask CERT_EMAIL "ACME账号邮箱（可留空）" "ACME account email (optional)" ""
   case $CERT_EMAIL in ''|*@*.*) ;; *) die "邮箱格式无效" "invalid email" ;; esac
   case $CERT_EMAIL in *[!A-Za-z0-9._%+@-]*) die "邮箱格式无效" "invalid email" ;; esac
-  info "续期方式：" "Renewal:"
-  info "  1) 自动（systemd定时器每6小时检查，续期后重启面板，代理会短暂中断）" "  1) Automatic (systemd timer checks every 6 hours; panel restarts after renewal, proxies drop briefly)"
-  info "  2) 手动（到期前运行 o-ui cert renew）" "  2) Manual (run o-ui cert renew before expiry)"
-  choose n 1 2
-  OUI_RENEW=timer
-  if [ "$n" = 2 ]; then OUI_RENEW=manual; fi
+  info "自动续期：每6小时检查，续期成功后重启面板加载证书，代理可能短暂中断。" "Automatic renewal: checked every 6 hours; successful renewal restarts the panel to load certificates and may briefly interrupt proxies."
 }
 
-# 申请或复制证书到/etc/o-ui/tls；失败返回非零
+# 申请证书并导出到/etc/o-ui/tls；失败返回非零
 obtain_cert() {
-  if [ "$OUI_MODE" = file ]; then
-    mkdir -p "$F_TLS"
-    cp "$CERT_SRC_CERT" "$F_TLS/fullchain.pem.tmp"
-    cp "$CERT_SRC_KEY" "$F_TLS/key.pem.tmp"
-    mv "$F_TLS/fullchain.pem.tmp" "$F_TLS/fullchain.pem"
-    mv "$F_TLS/key.pem.tmp" "$F_TLS/key.pem"
-    cert_fix_perms
-    return
-  fi
   if [ "$OUI_CHALLENGE" = http ]; then
     command -v socat >/dev/null 2>&1 || command -v python3 >/dev/null 2>&1 || ensure_tool socat socat || {
       warn "HTTP-01需要socat或python3" "HTTP-01 needs socat or python3"; return 1; }
@@ -664,6 +603,7 @@ obtain_cert() {
   acme_ensure
   local rc args
   args=(--issue --server letsencrypt -d "$OUI_HOST" --keylength ec-256)
+  [ -z "$CERT_FORCE" ] || args+=(--force)
   [ -z "$CERT_EMAIL" ] || args+=(--accountemail "$CERT_EMAIL")
   if [ "$OUI_CHALLENGE" = cf ]; then args+=(--dns dns_cf); else args+=(--standalone); fi
   is_ipv6 "$OUI_HOST" && args+=(--listen-v6)
@@ -682,10 +622,11 @@ obtain_cert() {
   set -e
   # acme.sh返回2表示证书仍有效、无需重新签发
   [ $rc -eq 0 ] || [ $rc -eq 2 ] || { warn "证书申请失败（acme.sh退出码$rc）" "certificate request failed (acme.sh exit $rc)"; return 1; }
-  mkdir -p "$F_TLS"
-  acme --install-cert -d "$OUI_HOST" --ecc --key-file "$F_TLS/key.pem" --fullchain-file "$F_TLS/fullchain.pem" \
-    --reloadcmd "$P_CMD cert-reload" || { warn "证书导出失败" "certificate install failed"; return 1; }
-  cert_fix_perms
+  mkdir -p "$F_ACME/deploy"
+  chmod 0700 "$F_ACME" "$F_ACME/deploy"
+  O_UI_CERT_SETUP=1 acme --install-cert -d "$OUI_HOST" --ecc --key-file "$F_ACME/deploy/key.pem" --fullchain-file "$F_ACME/deploy/fullchain.pem" \
+    --reloadcmd "$P_CMD cert-reload --pending" || { warn "证书导出失败" "certificate install failed"; return 1; }
+  cert_pair_valid "$F_ACME/deploy/fullchain.pem" "$F_ACME/deploy/key.pem"
 }
 
 # 停用旧ACME条目（换域名/换方式时），避免定时器继续续期
@@ -758,7 +699,82 @@ bbr_disable() {
   conf_save
 }
 
-# ---------- 防火墙：只处理面板端口 ----------
+# ---------- 防火墙：既有规则不接管，全新环境经确认后配置UFW ----------
+
+fw_existing_rules() {
+  local rules
+  if command -v ufw >/dev/null 2>&1; then
+    rules=$(LC_ALL=C ufw show added 2>/dev/null) || return 2
+    if printf '%s\n' "$rules" | grep -Eq '^ufw '; then return 0; fi
+  fi
+  # 任意既有规则都保守保留，包括Docker/NAT；无法读取时不猜测是空机器。
+  command -v nft >/dev/null 2>&1 || return 2
+  rules=$(nft list ruleset 2>/dev/null) || return 2
+  [ -n "${rules//[[:space:]]/}" ] && return 0
+  if command -v iptables-save >/dev/null 2>&1; then
+    rules=$(iptables-save 2>/dev/null) || return 2
+    if printf '%s\n' "$rules" | grep -Eq '^(-A |:[^ ]+ (DROP|REJECT))'; then return 0; fi
+  fi
+  if command -v ip6tables-save >/dev/null 2>&1; then
+    rules=$(ip6tables-save 2>/dev/null) || return 2
+    if printf '%s\n' "$rules" | grep -Eq '^(-A |:[^ ]+ (DROP|REJECT))'; then return 0; fi
+  fi
+  return 1
+}
+
+fw_install_offer() {
+  local ssh_port='' ssh_client ssh_client_port ssh_server rules_status=0 backup
+  info "可安装UFW防火墙及自动放行组件。现有网站等服务端口不会自动放行，启用后仅保留明确允许的入站。" "You can install UFW and automatic port-management components. Existing website and other service ports are not opened automatically; only explicitly allowed inbound traffic will remain reachable."
+  ask_yes "是否安装并启用整套防火墙？将先放行SSH、面板及HTTP-01续期所需端口，再默认拒绝其他入站" "Install and enable the firewall stack? SSH, panel and HTTP-01 renewal ports will be allowed first; other inbound traffic will be denied by default" n || return 0
+  if fw_existing_rules; then rules_status=0; else rules_status=$?; fi
+  if [ "$rules_status" = 0 ]; then
+    warn "检测到既有nftables/iptables规则，保留原防火墙，不安装或启用另一套；请在原规则中放行面板和节点端口" "existing nftables/iptables rules detected; keeping them without installing or enabling another firewall; allow panel and node ports in the existing rules"
+    return 0
+  fi
+  # 不静默假定SSH是22；SSH连接环境缺失时要求用户填写。
+  if [ -n "${SSH_CONNECTION:-}" ]; then
+    read -r ssh_client ssh_client_port ssh_server ssh_port <<<"$SSH_CONNECTION"
+  fi
+  if [ -z "$ssh_port" ]; then
+    ask ssh_port "当前SSH服务端口（必须准确填写，避免锁定远程访问）" "Current SSH server port (must be accurate to avoid locking out remote access)"
+  fi
+  case $ssh_port in ''|*[!0-9]*|0*) warn "SSH端口无效，未启用防火墙" "invalid SSH port; firewall not enabled"; return 0 ;; esac
+  if [ ${#ssh_port} -gt 5 ] || [ "$ssh_port" -lt 1 ] || [ "$ssh_port" -gt 65535 ]; then warn "SSH端口无效，未启用防火墙" "invalid SSH port; firewall not enabled"; return 0; fi
+  info "将保留当前SSH连接使用的 $ssh_port/tcp、面板 $OUI_PORT/tcp；HTTP-01证书还会保留80/tcp。其他SSH端口和业务需自行添加规则；云安全组仍需另行放行。" "Will keep the current SSH connection's $ssh_port/tcp and panel $OUI_PORT/tcp reachable; HTTP-01 also keeps 80/tcp. Other SSH ports and services need separate rules; cloud security groups must be configured separately."
+  # UFW部署前后均检查；安装软件包可能自动创建规则，不能覆盖并发管理操作。
+  pkg_install ufw sudo nftables python3 iptables || { warn "防火墙组件安装失败，未启用防火墙" "firewall component installation failed; firewall not enabled"; return 0; }
+  need_cmd ufw nft python3 sudo visudo iptables ip6tables
+  if ufw status 2>/dev/null | grep -i '^status: active' >/dev/null; then warn "UFW已被其他进程启用，不更改默认策略" "UFW was enabled by another process; default policies are unchanged"; return 0; fi
+  if fw_existing_rules; then rules_status=0; else rules_status=$?; fi
+  if [ "$rules_status" != 1 ]; then warn "现有规则非空或无法完整检查，未启用UFW，保留现场" "existing rules are nonempty or could not be inspected completely; UFW not enabled and existing state kept"; return 0; fi
+  backup=$(mktemp -d "$F_ETC/firewall-backup.XXXXXXXX")
+  chmod 0700 "$backup"
+  [ ! -d "$R/etc/ufw" ] || cp -a "$R/etc/ufw" "$backup/ufw"
+  [ ! -f "$R/etc/default/ufw" ] || cp -p "$R/etc/default/ufw" "$backup/default-ufw"
+  if ! grep -Eq '^IPV6=yes([[:space:]]|$)' "$R/etc/default/ufw"; then
+    warn "UFW未启用IPv6管理，保留原配置且不启用，避免IPv6绕过入站策略；备份：$backup" "UFW IPv6 management is not enabled; preserving configuration without enabling UFW to prevent IPv6 policy bypass; backup: $backup"; return 0
+  fi
+  # 未启用前写允许规则；任一步失败都不执行enable。
+  if ! ufw allow "$ssh_port/tcp" comment 'o-ui SSH safety' >/dev/null ||
+     ! ufw allow "$OUI_PORT/tcp" comment 'o-ui panel' >/dev/null; then
+    warn "安全端口规则写入失败，未启用UFW；备份：$backup" "safety allow rules failed; UFW not enabled; backup: $backup"; return 0
+  fi
+  if [ "$OUI_CHALLENGE" = http ] && ! ufw allow 80/tcp comment 'o-ui ACME HTTP-01' >/dev/null; then
+    warn "HTTP-01端口规则写入失败，未启用UFW；备份：$backup" "HTTP-01 allow rule failed; UFW not enabled; backup: $backup"; return 0
+  fi
+  if ! ufw default deny incoming >/dev/null || ! ufw default allow outgoing >/dev/null; then
+    warn "默认策略设置失败，未启用UFW；备份：$backup" "default policy setup failed; UFW not enabled; backup: $backup"; return 0
+  fi
+  if ! ufw --force enable >/dev/null; then
+    warn "UFW启用失败，请检查 ufw status；备份：$backup" "UFW enable failed; inspect ufw status; backup: $backup"; return 0
+  fi
+  if ! LC_ALL=C ufw status | grep -qi '^status: active' || ! systemctl enable ufw >/dev/null || ! systemctl is-enabled --quiet ufw; then
+    warn "UFW运行或开机自启核验失败，请检查 ufw status 和 systemctl status ufw；备份：$backup" "UFW active or boot-persistence verification failed; inspect ufw status and systemctl status ufw; backup: $backup"; return 0
+  fi
+  OUI_FW=ufw
+  deploy_firewall_access
+  info "UFW已启用并持久化；新建节点会自动放行，原配置备份：$backup" "UFW enabled persistently; new node ports are managed automatically; original config backup: $backup"
+}
 
 fw_offer() {
   if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -i '^status: active' >/dev/null; then
@@ -770,7 +786,8 @@ fw_offer() {
       firewall-cmd --add-port="$OUI_PORT/tcp" >/dev/null && firewall-cmd --permanent --add-port="$OUI_PORT/tcp" >/dev/null && OUI_FW=firewalld
     fi
   else
-    info "未检测到启用的UFW/firewalld；如有云安全组或其他防火墙，请自行放行TCP $OUI_PORT。" "No active UFW/firewalld found; open TCP $OUI_PORT in any cloud security group or other firewall yourself."
+    if [ "${1-}" = install ]; then fw_install_offer; fi
+    if [ -z "$OUI_FW" ]; then info "未启用新的防火墙；如有云安全组或其他防火墙，请自行放行TCP $OUI_PORT。" "No new firewall was enabled; open TCP $OUI_PORT in any cloud security group or existing firewall yourself."; fi
   fi
   if [ "$OUI_CHALLENGE" = http ]; then
     info "HTTP-01申请与续期时需公网可访问80/tcp；本脚本不改80端口规则。" "HTTP-01 needs public access to 80/tcp during issue and renewal; this script does not change port 80 rules."
@@ -1036,6 +1053,17 @@ def main():
     target = ("inet", "host_hardening", "input")
     def identity(obj):
         return obj.get("family"), obj.get("table"), obj.get("chain", obj.get("name"))
+    # 旧面板可能遗留空链或纯计数链；检查真实目标内容，不凭链名绕过拦截。
+    def harmless_jump(source, expr):
+        jump = expr.get("jump")
+        if not isinstance(jump, dict) or set(expr) != {"jump"} or set(jump) != {"target"}:
+            return False
+        key = (source.get("family"), source.get("table"), jump["target"])
+        destination = next((e["chain"] for e in entries if "chain" in e and identity(e["chain"]) == key), None)
+        if destination is None or any(k in destination for k in ("hook", "policy", "type")):
+            return False
+        return all(isinstance(x, dict) and len(x) == 1 and set(x) <= {"match", "counter", "return"}
+                   for rule in rules if identity(rule) == key for x in rule.get("expr", [None]))
     chain = next((c for c in chains if identity(c) == target), None)
     for c in chains:
         managed = (backend == "ufw" and identity(c) in (("ip", "filter", "INPUT"), ("ip6", "filter", "INPUT"))) or (backend == "firewalld" and c.get("table") == "firewalld")
@@ -1043,6 +1071,8 @@ def main():
             continue
         def blocks(expr):
             if identity(c) in (("ip", "filter", "INPUT"), ("ip6", "filter", "INPUT")) and expr == {"jump": {"target": "o-ui-iplimit"}}:
+                return False
+            if harmless_jump(c, expr):
                 return False
             return any(k in expr for k in ("drop", "reject", "jump", "goto", "vmap", "queue"))
         blocked = c.get("policy") == "drop" or any(
@@ -1377,9 +1407,9 @@ cmd_install() {
   [ -n "$reuse" ] || panel_init_admin "$ADMIN_USER" "$ADMIN_PASS" || die "初始化管理员失败" "failed to initialize the administrator"
   conf_save
   # 证书失败不开放HTTP：可重新选择；放弃时面板只听127.0.0.1，之后在菜单“证书管理”配置
-  while ! obtain_cert || ! panel_enable_https; do
+  while ! obtain_cert || ! cert_promote || ! panel_enable_https; do
     [ "$OUI_MODE" != acme ] || acme_forget "$OUI_HOST"
-    if ask_yes "HTTPS证书未配置成功，是否重新选择证书方式并重试？" "The HTTPS certificate was not set up; choose a certificate method and retry?" y; then
+    if ask_yes "HTTPS证书未配置成功，是否重新填写域名或验证方式并重试？" "The HTTPS certificate was not set up; enter a domain or validation method and retry?" y; then
       ask_access
       continue
     fi
@@ -1391,7 +1421,7 @@ cmd_install() {
   panel_set_path || warn "访问路径未能写入面板，暂为原路径" "the access path could not be written to the panel; the previous path stays"
   conf_save
   [ -z "$bbr" ] || bbr_enable || true
-  [ "$OUI_MODE" = local ] || fw_offer
+  [ "$OUI_MODE" = local ] || fw_offer install
   [ "$OUI_RENEW" != timer ] || renew_timer_enable
   conf_save
   install_core
@@ -1491,32 +1521,55 @@ cmd_cert() {
       [ $rc -ne 2 ] || { info "证书尚未到续期时间；强制续期请加 --force" "The certificate is not due yet; add --force to renew now"; return 0; }
       return $rc
       ;;
+    --force) CERT_FORCE=1 ;;
     '') ;;
-    *) die "用法：o-ui cert [renew [--force]]" "usage: o-ui cert [renew [--force]]" ;;
+    *) die "用法：o-ui cert [--force | renew [--force]]" "usage: o-ui cert [--force | renew [--force]]" ;;
   esac
   require_installed
   stdin_check
-  local old_mode=$OUI_MODE old_host=$OUI_HOST
+  if [ -n "$CERT_FORCE" ]; then
+    ask_yes "强制重新申请会消耗CA签发配额，频繁执行可能被限流；成功后自动写入面板、启用HTTPS并重启。继续？" "Forced reissue consumes CA issuance quota and may hit rate limits; success automatically installs the certificate, enables HTTPS and restarts the panel. Continue?" n || return 0
+  fi
+  local old_mode=$OUI_MODE old_host=$OUI_HOST old_challenge=$OUI_CHALLENGE old_renew=$OUI_RENEW
   ask_access
   obtain_cert || die "证书未更新，面板设置保持不变" "certificate not updated; panel settings unchanged"
-  if [ "$old_mode" = acme ] && { [ "$OUI_MODE" != acme ] || [ "$old_host" != "$OUI_HOST" ]; }; then acme_forget "$old_host"; fi
   systemctl stop o-ui
-  panel_enable_https || { systemctl start o-ui || true; die "写入面板HTTPS设置失败，原设置保持" "writing panel HTTPS settings failed; previous settings kept"; }
-  if [ "$OUI_RENEW" = timer ]; then renew_timer_enable; else renew_timer_disable; fi
+  if ! cert_promote || ! panel_enable_https; then
+    cert_restore_previous || warn "证书恢复失败，请检查备份" "certificate restore failed; inspect the backup"
+    systemctl start o-ui || true
+    die "写入面板HTTPS设置失败，已尝试恢复原证书与服务" "writing panel HTTPS settings failed; previous certificate and service restoration attempted"
+  fi
   conf_save
   [ "$old_mode" != local ] || fw_offer
   conf_save
   systemctl start o-ui
-  wait_active || die "o-ui启动失败，请查看 journalctl -u o-ui" "o-ui failed to start; see journalctl -u o-ui"
+  if ! wait_active; then
+    systemctl stop o-ui || true
+    cert_restore_previous || warn "证书恢复失败，请检查备份" "certificate restore failed; inspect the backup"
+    OUI_MODE=$old_mode OUI_HOST=$old_host OUI_CHALLENGE=$old_challenge OUI_RENEW=$old_renew
+    if [ "$old_mode" = local ]; then panel_local_only >/dev/null || true; else panel_enable_https || true; fi
+    conf_save
+    systemctl start o-ui || true
+    die "新证书启用后服务未就绪，已尝试恢复原设置；请查看 journalctl -u o-ui" "the service was not ready after certificate activation; previous settings restoration attempted; see journalctl -u o-ui"
+  fi
+  renew_timer_enable || die "HTTPS已启用，但自动续期未正常运行，请检查定时器" "HTTPS is enabled but automatic renewal is not running correctly; inspect the timer"
+  if [ "$old_mode" = acme ] && [ "$old_host" != "$OUI_HOST" ]; then acme_forget "$old_host"; fi
+  info "证书已写入面板并启用HTTPS，自动续期已启用。" "Certificate installed in the panel, HTTPS enabled, and automatic renewal enabled."
   info "面板地址：$(panel_url)" "Panel URL: $(panel_url)"
 }
 
 # 供acme.sh续期后调用：修正权限并重启面板以加载新证书
 cmd_cert_reload() {
   need_root
+  [ "${O_UI_CERT_SETUP:-}" != 1 ] || return 0
   conf_load
+  case ${1-} in
+    --pending) cert_promote || die "续期证书校验失败，未重启面板" "renewed certificate validation failed; panel not restarted" ;;
+    '') cert_pair_valid "$F_TLS/fullchain.pem" "$F_TLS/key.pem" || die "证书校验失败，未重启面板" "certificate validation failed; panel not restarted" ;;
+    *) die "续期参数无效" "invalid renewal argument" ;;
+  esac
   cert_fix_perms || die "证书文件缺失或为链接" "certificate files missing or links"
-  if systemctl is-active --quiet o-ui; then systemctl restart o-ui; fi
+  if [ "${O_UI_CERT_SETUP:-}" != 1 ] && systemctl is-active --quiet o-ui; then systemctl restart o-ui; fi
 }
 
 cmd_bbr() {
@@ -1598,20 +1651,23 @@ cmd_cert_menu() {
   local n
   while :; do
     info "证书管理：" "Certificates:"
-    info "  1) 申请新证书或改用已有证书" "  1) Request a new certificate or use an existing one"
-    info "  2) 立即续期（ACME）" "  2) Renew now (ACME)"
-    info "  3) 查看当前证书" "  3) Show the current certificate"
-    info "  0) 返回" "  0) Back"
-    choose n 0 3 0
+    menu_item 1 "申请或重新配置ACME证书" "Request or reconfigure an ACME certificate"
+    menu_item 2 "立即续期（ACME）" "Renew now (ACME)"
+    menu_item 3 "查看当前证书与自动续期状态" "Show certificate and automatic renewal status"
+    menu_item 4 "强制重新申请并启用证书" "Force reissue and enable certificate"
+    menu_item 0 "返回上一级" "Back to previous menu"
+    choose n 0 4 0
     case $n in
       0) return 0 ;;
       1) (cmd_cert) || true ;;
       2) (cmd_cert renew --force) || true ;;
+      4) (cmd_cert --force) || true ;;
       3) if [ -f "$F_TLS/fullchain.pem" ] && command -v openssl >/dev/null 2>&1; then
            info "域名/IP：$(cert_names "$F_TLS/fullchain.pem")；到期：$(cert_end "$F_TLS/fullchain.pem")；文件：$P_TLS/fullchain.pem" "Names: $(cert_names "$F_TLS/fullchain.pem"); expires: $(cert_end "$F_TLS/fullchain.pem"); file: $P_TLS/fullchain.pem"
          else
            info "未配置面板证书。" "No panel certificate is configured."
-         fi ;;
+         fi
+         systemctl status o-ui-cert-renew.timer --no-pager || true ;;
     esac
     conf_load
   done
@@ -1619,10 +1675,18 @@ cmd_cert_menu() {
 
 cmd_bbr_menu() {
   local n
-  info "BBR：1) 查看  2) 开启  3) 回退  0) 返回" "BBR: 1) status  2) enable  3) revert  0) back"
-  choose n 1 3 0
-  case $n in 1) cmd_bbr status ;; 2) cmd_bbr on ;; 3) cmd_bbr off ;; esac
+  while :; do
+    info "BBR管理：" "BBR management:"
+    menu_item 1 "查看" "Status"
+    menu_item 2 "开启" "Enable"
+    menu_item 3 "回退" "Revert"
+    menu_item 0 "返回上一级" "Back to previous menu"
+    choose n 0 3 0
+    case $n in 0) return 0 ;; 1) cmd_bbr status ;; 2) cmd_bbr on ;; 3) cmd_bbr off ;; esac
+  done
 }
+
+menu_item() { printf ' %2d) %s\n' "$1" "$(t "$2" "$3")"; }
 
 # 已安装时不带参数运行o-ui进入的编号菜单；每项在子shell中执行，出错只结束该项
 cmd_menu() {
@@ -1631,12 +1695,20 @@ cmd_menu() {
   local n
   while :; do
     printf '\n%s\n' "$(t '════════ o-ui 管理菜单 ════════' '════════ o-ui menu ════════')"
-    info "  1) 查看当前设置      2) 修改端口" "  1) Show current settings   2) Change port"
-    info "  3) 修改访问路径      4) 重置用户名和密码" "  3) Change access path      4) Reset username and password"
-    info "  5) 证书管理" "  5) Certificates"
-    info "  6) 启动  7) 停止  8) 重启  9) 状态  10) 日志" "  6) Start  7) Stop  8) Restart  9) Status  10) Logs"
-    info " 11) 更新  12) 卸载  13) BBR" " 11) Update  12) Uninstall  13) BBR"
-    info "  0) 退出" "  0) Exit"
+    menu_item 1 "查看当前设置" "Show current settings"
+    menu_item 2 "修改端口" "Change port"
+    menu_item 3 "修改访问路径" "Change access path"
+    menu_item 4 "重置用户名和密码" "Reset username and password"
+    menu_item 5 "证书管理" "Certificates"
+    menu_item 6 "启动" "Start"
+    menu_item 7 "停止" "Stop"
+    menu_item 8 "重启" "Restart"
+    menu_item 9 "状态" "Status"
+    menu_item 10 "日志" "Logs"
+    menu_item 11 "更新" "Update"
+    menu_item 12 "卸载" "Uninstall"
+    menu_item 13 "BBR" "BBR"
+    menu_item 0 "退出" "Exit"
     choose n 0 13 0
     case $n in
       0) return 0 ;;
@@ -1670,7 +1742,8 @@ usage() {
   port [端口]             修改面板端口
   path                    修改访问路径
   reset-admin             重置用户名和密码
-  cert                    重新申请证书或改用已有证书
+  cert                    申请ACME证书，自动写入面板并启用HTTPS
+  cert --force            强制重新申请并启用（需确认，注意CA限流）
   cert renew [--force]    手动续期ACME证书
   bbr [status|on|off]     查看/开启/回退BBR
   version" "o-ui management:
@@ -1683,7 +1756,8 @@ usage() {
   port [PORT]             change the panel port
   path                    change the access path
   reset-admin             reset username and password
-  cert                    request a new certificate or use an existing one
+  cert                    request ACME certificate, install and enable HTTPS
+  cert --force            force reissue and enable (confirmation required; CA limits)
   cert renew [--force]    renew the ACME certificate manually
   bbr [status|on|off]     show/enable/revert BBR
   version"
@@ -1706,7 +1780,7 @@ main() {
     status) cmd_status ;;
     log|logs) require_installed; journalctl -u o-ui --no-pager -n "${1:-200}" ;;
     cert) cmd_cert "$@" ;;
-    cert-reload) cmd_cert_reload ;;
+    cert-reload) cmd_cert_reload "$@" ;;
     bbr) cmd_bbr "$@" ;;
     version) conf_load; printf '%s\n' "${OUI_VERSION:-unknown}" ;;
     help|-h|--help) usage ;;

@@ -19,8 +19,10 @@ class Node {
   querySelector(selector: string) { if (!this.elements.has(selector)) this.elements.set(selector, new Node()); return this.elements.get(selector)!; }
   querySelectorAll() { return []; }
   setAttribute() {}
+  remove() {}
+  onConfirm?: () => boolean;
   focus() {}
-  showModal() { this.open = true; }
+  showModal() { this.open = true; if (this.className === 'confirm-dialog') queueMicrotask(() => this.querySelector(this.onConfirm?.() ? '[data-confirm-accept]' : '[data-confirm-cancel]').handlers.get('click')!({})); }
   close() { this.open = false; }
 }
 type Fetcher = (path: string, method: string, body: any) => Promise<Response>;
@@ -31,6 +33,7 @@ const general = (minutes = 720, revision = 0) => ({
 // 默认读取：第n次读取会话时长为 720+n，修订为 n-1，便于看出是否换成了最新设置
 function page(write: Fetcher, options: { read?: () => Promise<void>; twoFactor?: Fetcher } = {}) {
   const root = new Node(), dialog = new Node(), confirmation = { answer: true, count: 0 }, calls: { path: string; method: string; body: any }[] = [];
+  let created = false;
   let reads = 0;
   const fetcher = async (url: string, init?: RequestInit) => {
     const path = String(url).replace(/^\/api\//, ''), method = init?.method ?? 'GET', body = init?.body ? JSON.parse(String(init.body)) : null;
@@ -48,8 +51,8 @@ function page(write: Fetcher, options: { read?: () => Promise<void>; twoFactor?:
   const values = {
     fetch: fetcher,
     location: { protocol: 'http:', origin: 'http://127.0.0.1:5180', pathname: '/', host: '127.0.0.1:5180', reload() {} },
-    window: { confirm() { confirmation.count++; return confirmation.answer; }, addEventListener() {}, dispatchEvent() { return true; } },
-    document: { createElement: () => dialog, body: { append() {} } },
+    window: { addEventListener() {}, removeEventListener() {}, dispatchEvent() { return true; } },
+    document: { createElement: () => { const node = created ? new Node() : dialog; created = true; node.onConfirm = () => { confirmation.count++; return confirmation.answer; }; return node; }, body: { append() {} } },
   };
   const previous = Object.fromEntries(Object.keys(values).map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
   for (const [key, value] of Object.entries(values)) Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });

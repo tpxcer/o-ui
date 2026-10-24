@@ -49,19 +49,31 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent-bg); wi
 .inbound-filter { flex-basis: 220px; }
 .result-count { margin-left: auto; font-size: 12px; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .data-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 13px; }
-.data-table th { color: var(--muted); font-size: 12px; font-weight: 500; text-align: left; padding: 10px 16px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--raised) 45%, transparent); }
-.data-table td { padding: 14px 16px; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; vertical-align: middle; }
+.data-table th { color: var(--muted); font-size: 12px; font-weight: 500; text-align: left; padding: 8px 16px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--raised) 45%, transparent); }
+.data-table td { padding: 8px 16px; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; vertical-align: middle; line-height: 1.4; }
 .data-table tbody tr:last-child td { border-bottom: 0; }
 .data-table th:first-child { width: 30%; }
 .data-table th:last-child { width: 168px; }
 .data-table th.select-cell, .data-table td.select-cell { width: 44px; padding-right: 0; }
 .data-table th.select-cell + th { width: 26%; }
 .clients-table th.select-cell + th { width: auto; }
-.clients-table th:nth-child(3) { width: 72px; }
+.clients-table th:nth-child(3) { width: auto; }
 .clients-table th:nth-child(4) { width: auto; }
 .clients-table th:nth-child(6) { width: auto; }
 .clients-table th:last-child { width: 132px; }
-.clients-table.with-notify th:nth-child(8) { width: 88px; }
+.clients-table.with-notify th:nth-child(7) { width: 88px; }
+.client-identity { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.client-identity > .switch { flex: 0 0 auto; }
+.client-identity-text { min-width: 0; overflow-wrap: anywhere; }
+.firewall-maintenance { margin-bottom: 16px; padding: 12px 16px; border: 1px solid color-mix(in srgb, var(--orange) 45%, var(--border)); border-radius: 8px; background: color-mix(in srgb, var(--orange) 6%, transparent); }
+.firewall-maintenance summary { cursor: pointer; font-size: 13px; font-weight: 600; }
+.firewall-maintenance p { color: var(--muted); font-size: 13px; line-height: 1.7; }
+.firewall-maintenance ul { list-style: none; padding: 0; margin: 0; }
+.firewall-maintenance li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 0; border-top: 1px solid var(--border); }
+.firewall-maintenance li > div { min-width: 0; }
+.firewall-maintenance small, .firewall-maintenance time { display: block; color: var(--muted); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.firewall-maintenance button { flex-shrink: 0; }
+@media (max-width: 480px) { .firewall-maintenance li { align-items: flex-start; flex-direction: column; } }
 .data-table.clients-table td .date-value, .data-table.clients-table td .text-button { white-space: normal; }
 .inbounds-table th:nth-child(6) { width: 110px; }
 .select-cell input { margin: 0; vertical-align: middle; }
@@ -92,7 +104,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent-bg); wi
 .data-table tbody tr { transition: background-color .12s; }
 .data-table tbody tr:hover { background: color-mix(in srgb, var(--raised) 70%, transparent); }
 .record-name { font-weight: 600; overflow-wrap: anywhere; }
-.table-secondary { display: block; color: var(--muted); margin-top: 4px; font-size: 12px; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.table-secondary { display: block; color: var(--muted); margin-top: 2px; font-size: 12px; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .status-badge { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500; padding: 2px 9px 2px 8px; border-radius: 999px; background: color-mix(in srgb, currentColor 12%, transparent); }
 .status-badge b { width: 6px; height: 6px; background: currentColor; border-radius: 50%; flex-shrink: 0; }
 .status-badge.is-good { color: var(--green); }
@@ -105,6 +117,11 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent-bg); wi
 .mini-meter span { display: block; height: 100%; border-radius: inherit; background: var(--blue); }
 .date-value { font-size: 13px; font-variant-numeric: tabular-nums; }
 .data-table .date-value, .data-table td .text-button { white-space: nowrap; }
+.data-table td > .text-button { min-height: 28px; padding-block: 2px; }
+[data-inbound-firewall] { display: flex; align-items: center; gap: 4px; margin-top: 2px; }
+[data-inbound-firewall] .table-secondary { margin: 0; }
+[data-inbound-firewall] .form-error { padding: 0; border: 0; background: none; }
+[data-inbound-firewall] .icon-button { width: 24px; height: 24px; flex-shrink: 0; }
 .list-footer { padding: 12px 16px; color: var(--muted); font-size: 12px; border-top: 1px solid var(--border); }
 .empty-state { padding: 56px 20px; text-align: center; color: var(--muted); }
 .empty-state > svg { width: 40px; height: 40px; padding: 10px; margin-bottom: 14px; border-radius: 12px; background: var(--raised); color: var(--muted); }

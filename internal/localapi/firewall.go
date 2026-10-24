@@ -19,6 +19,8 @@ import (
 // 安装器提供的root防火墙助手：只接受放行/撤销1024以上单个端口，并只删除自己加过的规则。
 const firewallHelper = "/usr/local/libexec/o-ui-firewall"
 
+const legacyPortHoppingLabel = "端口跳跃"
+
 var runFirewall = func(ctx context.Context, action, port, protocol string) (string, error) {
 	if _, err := os.Stat(firewallHelper); err != nil {
 		return "", err
@@ -133,6 +135,7 @@ type firewallEndpoint struct {
 	State     string `json:"state"`
 	Message   string `json:"message"`
 	CheckedAt string `json:"checkedAt"`
+	Operation string `json:"operation,omitempty"`
 }
 
 type firewallReport struct {
@@ -165,12 +168,15 @@ func syncFirewallReport(ctx context.Context, before, after json.RawMessage) fire
 			action = "delete"
 		}
 		text, err := runFirewall(ctx, action, port, protocol)
-		status := firewallEndpoint{State: "allowed", Message: text, CheckedAt: time.Now().UTC().Format(time.RFC3339)}
+		status := firewallEndpoint{State: "allowed", Message: text, CheckedAt: time.Now().UTC().Format(time.RFC3339), Operation: action}
 		if action == "delete" {
 			status.State = "removed"
 		}
 		if err != nil {
 			status.State = "failed"
+			if status.Message == "" {
+				status.Message = err.Error()
+			}
 			var exit *exec.ExitError
 			if errors.As(err, &exit) && exit.ExitCode() == 4 {
 				status.State = "unverified"
@@ -214,7 +220,7 @@ func syncFirewallReport(ctx context.Context, before, after json.RawMessage) fire
 			hop, port, _ := strings.Cut(key, " ")
 			text, err := runPortHopping(ctx, action, hop, port)
 			if err != nil {
-				report.Endpoints[port+"/udp"] = firewallEndpoint{State: "failed", Message: i18n.T("端口跳跃转发操作失败：", "Port hopping update failed: ") + hop + "→" + port, CheckedAt: time.Now().UTC().Format(time.RFC3339)}
+				report.Endpoints[port+"/udp"] = firewallEndpoint{State: "failed", Message: i18n.T("端口跳跃转发操作失败：", "Port hopping update failed: ") + hop + "→" + port, CheckedAt: time.Now().UTC().Format(time.RFC3339), Operation: "redirect-" + action}
 			}
 			switch {
 			case err == nil && text != "":
@@ -264,6 +270,69 @@ func saveFirewallReport(ctx context.Context, state *store.Store, before, after j
 }
 
 func registerFirewall(mux *http.ServeMux, rt *Runtime, state *store.Store) {
+	mux.HandleFunc("POST /api/runtime/firewall/cleanup", func(w http.ResponseWriter, r *http.Request) {
+		if rt == nil {
+			respond(w, 503, map[string]string{"error": i18n.T("核心运行控制未启用", "Core runtime control is not enabled")})
+			return
+		}
+		var request struct {
+			Endpoint string `json:"endpoint"`
+		}
+		if !readJSON(w, r, &request, 256) {
+			return
+		}
+		port, protocol, ok := strings.Cut(request.Endpoint, "/")
+		number, err := strconv.Atoi(port)
+		if !ok || err != nil || number < 1024 || number > 65535 || port != strconv.Itoa(number) || (protocol != "tcp" && protocol != "udp") {
+			respond(w, 400, map[string]string{"error": i18n.T("旧端口格式无效", "Invalid old-port endpoint")})
+			return
+		}
+		// 与草稿保存共用运行时锁，检查与撤销之间不允许新入站占用该端口。
+		rt.mu.Lock()
+		defer rt.mu.Unlock()
+		doc, err := state.ReadDocument(r.Context(), "workspace")
+		var draft workspaceDraft
+		if err != nil || json.Unmarshal(doc.Data, &draft) != nil {
+			respond(w, 500, map[string]string{"error": i18n.T("读取入站草稿失败", "Failed to read inbound draft")})
+			return
+		}
+		// 即使协议不同或入站停用也保守保留，避免撤销用户仍在配置的端口。
+		for _, inbound := range draft.Inbounds {
+			if inbound.Port == number {
+				respond(w, 409, map[string]string{"error": i18n.T("该端口仍被当前入站使用，不能撤销", "This port is still used by a current inbound; removal refused")})
+				return
+			}
+		}
+		if current := rt.engine.Status(); current.Running && current.WorkspaceRevision != doc.Revision {
+			respond(w, 409, map[string]string{"error": i18n.T("核心仍在运行旧修订，请先核对并应用当前入站，再撤销旧端口", "The core is running an older revision; verify and apply current inbounds before removing old-port rules")})
+			return
+		}
+		stored, err := state.ReadDocument(r.Context(), "firewall-status")
+		var report firewallReport
+		if err != nil || json.Unmarshal(stored.Data, &report) != nil {
+			respond(w, 500, map[string]string{"error": i18n.T("读取防火墙状态失败", "Failed to read firewall status")})
+			return
+		}
+		status, exists := report.Endpoints[request.Endpoint]
+		if !exists || (status.State != "failed" && status.State != "unverified") {
+			respond(w, 404, map[string]string{"error": i18n.T("没有此端口的待处理记录", "No pending record for this port")})
+			return
+		}
+		if (status.Operation != "" && status.Operation != "delete") || strings.Contains(status.Message, legacyPortHoppingLabel) || strings.Contains(status.Message, "Port hopping") {
+			respond(w, 409, map[string]string{"error": i18n.T("该记录不属于旧端口放行规则撤销，请在服务器核查", "This record is not an old allow-rule removal; inspect it on the server")})
+			return
+		}
+		before, _ := json.Marshal(workspaceDraft{Inbounds: []inboundDraft{{Port: number, Preset: "reality"}}})
+		if protocol == "udp" {
+			before, _ = json.Marshal(workspaceDraft{Inbounds: []inboundDraft{{Port: number, Preset: "hy2"}}})
+		}
+		report, err = saveFirewallReport(context.WithoutCancel(r.Context()), state, before, nil, doc.Revision)
+		if err != nil {
+			respond(w, 500, map[string]string{"error": i18n.T("防火墙结果保存失败，请重新读取核对", "Failed to save firewall result; reload and check")})
+			return
+		}
+		respond(w, 200, report)
+	})
 	mux.HandleFunc("GET /api/runtime/firewall", func(w http.ResponseWriter, r *http.Request) {
 		doc, err := state.ReadDocument(r.Context(), "firewall-status")
 		if err != nil {

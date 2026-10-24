@@ -103,6 +103,27 @@ func TestBrowserFixture(t *testing.T) {
 			return "隔离测试：防火墙已放行（未调用宿主防火墙）", nil
 		}
 	}
+	if os.Getenv("PANEL_BROWSER_CLEANUP_QA") == "1" {
+		previous := runFirewall
+		defer func() { runFirewall = previous }()
+		attempts := 0
+		runFirewall = func(_ context.Context, action, port, protocol string) (string, error) {
+			if action != "delete" || port != "51514" || protocol != "tcp" {
+				return "test-only: unsupported command", fmt.Errorf("test-only rejected command")
+			}
+			attempts++
+			if attempts == 1 {
+				return "test-only: cleanup failed; record kept", fmt.Errorf("test-only failure")
+			}
+			return "test-only: owned rule removed; host untouched", nil
+		}
+		data, _ := json.Marshal(firewallReport{Revision: 1, Endpoints: map[string]firewallEndpoint{
+			"51514/tcp": {State: "failed", Message: "test-only: previous removal failed", Operation: "delete", CheckedAt: "2026-10-24T00:00:00Z"},
+		}})
+		if _, err = s.SaveDocument(context.Background(), "firewall-status", 0, data); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if os.Getenv("PANEL_BROWSER_TRAFFIC_QA") == "1" {
 		origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, strings.Repeat("x", 8192)) }))
 		defer origin.Close()

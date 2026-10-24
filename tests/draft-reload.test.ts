@@ -29,11 +29,13 @@ class Control {
   addEventListener(name: string, handler: (event: any) => void) { this.handlers.set(name, handler); }
   setAttribute() {}
   removeAttribute() {}
-  append() {}
+  append(...items: Control[]) { this.elements.push(...items); }
   focus() {}
   getClientRects() { return [1]; }
-  showModal() { this.open = true; }
+  onConfirm?: () => boolean;
+  showModal() { this.open = true; if (this.className === 'confirm-dialog') queueMicrotask(() => this.querySelector(this.onConfirm?.() ? '[data-confirm-accept]' : '[data-confirm-cancel]').fire()); }
   close() { this.open = false; this.handlers.get('close')?.({}); }
+  remove() {}
   contains() { return false; }
   closest() { return this; }
   hasAttribute(name: string) { return name in this.dataset; }
@@ -53,14 +55,14 @@ class Control {
   }
   fire(name = 'click', event: any = {}) { this.handlers.get(name)?.({ preventDefault() {}, ...event }); }
 }
-async function withPage(fetcher: typeof fetch, run: (root: Control, dialogs: Control[], confirmation: { answer: boolean; count: number }, timers: { delay: number; callback: () => void }[]) => Promise<void>) {
+async function withPage(fetcher: typeof fetch, run: (root: Control, dialogs: Control[], confirmation: { answer: boolean; count: number }, timers: { delay: number; callback: () => void }[]) => Promise<void>, firewallFetcher?: typeof fetch) {
   const root = new Control(), dialogs: Control[] = [], confirmation = { answer: true, count: 0 };
   const timers: { delay: number; callback: () => void }[] = [];
   root.hidden = true;
   const values = {
-    fetch: ((url, options) => String(url).endsWith('/api/runtime/firewall') ? Promise.resolve(Response.json({ data: null })) : fetcher(url, options)) as typeof fetch, location: { protocol: 'http:' }, HTMLInputElement: Control, HTMLButtonElement: Control, setTimeout() { return 0; }, clearTimeout() {},
-    window: { setInterval(callback: () => void, delay: number) { timers.push({ delay, callback }); }, addEventListener() {}, confirm() { confirmation.count++; return confirmation.answer; } },
-    document: { createElement: (tag: string) => { const item = new Control(); if (tag === 'dialog') dialogs.push(item); return item; }, body: new Control(), activeElement: null, hidden: false, addEventListener() {}, querySelector() { return null; } },
+    fetch: ((url, options) => String(url).endsWith('/api/runtime/firewall') ? firewallFetcher ? firewallFetcher(url, options) : Promise.resolve(Response.json({ data: null })) : fetcher(url, options)) as typeof fetch, location: { protocol: 'http:' }, HTMLInputElement: Control, HTMLButtonElement: Control, setTimeout() { return 0; }, clearTimeout() {},
+    window: { setInterval(callback: () => void, delay: number) { timers.push({ delay, callback }); }, addEventListener() {}, removeEventListener() {} },
+    document: { createElement: (tag: string) => { const item = new Control(); item.onConfirm = () => { confirmation.count++; return confirmation.answer; }; if (tag === 'dialog') dialogs.push(item); return item; }, body: new Control(), activeElement: null, hidden: false, addEventListener() {}, querySelector() { return null; } },
   };
   const previous = Object.fromEntries(Object.keys(values).map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
   for (const [key, value] of Object.entries(values)) Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
@@ -72,6 +74,84 @@ function clickWorkspace(root: Control, attribute: string, operation?: string, id
   const button = new Control(); button.dataset[attribute] = ''; if (operation) button.dataset.op = operation; if (id) button.dataset.id = id;
   root.fire('click', { target: button });
 }
+
+test('旧端口告警保留详情：不自动撤销，取消不请求，失败保留，单项成功后才撤下', async () => {
+  const state = workspaceFixture();
+  let cleanups = 0;
+  const report = { workspaceRevision: 1, endpoints: {
+    '51514/tcp': { state: 'failed', message: '<b>旧失败原因</b>', checkedAt: '2026-10-24T01:00:00Z', operation: 'delete' },
+    '60890/udp': { state: 'failed', message: 'Port hopping update failed: legacy', checkedAt: '', operation: 'redirect-delete' },
+  } as Record<string, any> };
+  await withPage(async (url, options) => {
+    if (String(url).endsWith('/api/workspace')) return Response.json({ revision: 1, data: state });
+    if (String(url).endsWith('/api/runtime/firewall/cleanup')) {
+      cleanups++;
+      assert.deepEqual(JSON.parse(String(options?.body)), { endpoint: '51514/tcp' });
+      if (cleanups === 1) return Response.json({ error: '仍然失败' }, { status: 500 });
+      delete report.endpoints['51514/tcp'];
+      return Response.json(report);
+    }
+    return Response.json({ totals: {}, clients: [], data: { enabled: false } });
+  }, async (root, _dialogs, confirmation) => {
+    initManagement(root as unknown as HTMLElement, () => {}, () => {}, () => {}, true).render('clients'); await settle();
+    const maintenance = root.querySelector('#firewall-maintenance');
+    assert.equal(maintenance.hidden, false);
+    assert.equal(root.querySelector('#firewall-read-error').hidden, true);
+    assert.match(maintenance.innerHTML, /<details><summary>旧端口防火墙待处理/);
+    assert.match(maintenance.innerHTML, /&lt;b&gt;旧失败原因&lt;\/b&gt;/);
+    assert.match(maintenance.innerHTML, /data-firewall-cleanup="51514\/tcp"/);
+    assert.doesNotMatch(maintenance.innerHTML, /data-firewall-cleanup="60890\/udp"/);
+    assert.equal(cleanups, 0);
+    const retry = () => { const button = new Control(); button.dataset.firewallCleanup = '51514/tcp'; root.fire('click', { target: button }); };
+    confirmation.answer = false; retry(); await settle(); assert.equal(cleanups, 0);
+    confirmation.answer = true; retry(); await settle(); assert.equal(cleanups, 1);
+    assert.match(maintenance.innerHTML, /51514\/tcp/);
+    retry(); await settle(); assert.equal(cleanups, 2);
+    assert.doesNotMatch(maintenance.innerHTML, /51514\/tcp/);
+    assert.match(maintenance.innerHTML, /60890\/udp/);
+  }, async () => Response.json({ data: report }));
+});
+
+test('四预设一键创建直接保存并显示自动防火墙结果，无需另点重试', async t => {
+  for (const preset of ['reality', 'xhttp-reality', 'xhttp-tls', 'hy2'] as const) {
+    for (const applied of [true, false]) await t.test(`${preset} applied=${applied}`, async () => {
+      const state = workspaceFixture(), requests: string[] = [];
+      let writes = 0;
+      await withPage(async (url, options) => {
+        const path = String(url); requests.push(path);
+        if (path.endsWith('/api/workspace')) {
+          if (options?.method === 'PUT') {
+            writes++;
+            const sent = JSON.parse(String(options.body));
+            assert.equal(sent.revision, 1);
+            const inbound = sent.data.inbounds.at(-1);
+            assert.equal(inbound.preset, preset);
+            assert.equal(inbound.port, 58443);
+            assert.equal(inbound.listen, '0.0.0.0');
+            assert.equal(inbound.portHopping, preset === 'hy2' ? '48000-48199' : undefined);
+            if (preset === 'hy2' || preset === 'xhttp-tls') assert.equal(inbound.connection.usePanelCertificate, true);
+            return Response.json({ revision: 2, data: sent.data, applied, applyError: applied ? '' : '测试预检失败', firewall: '测试自动放行结果' });
+          }
+          return Response.json({ revision: 1, data: state });
+        }
+        if (path.includes('/api/system/free-port?')) return Response.json({ port: 58443, ...(preset === 'hy2' ? { portHopping: '48000-48199' } : {}) });
+        if (path.endsWith('/api/panel/tls')) return Response.json({ active: true, serverNames: ['panel.example.com'] });
+        if (path.endsWith('/api/system/public')) return Response.json({ ipv4: { ip: '203.0.113.10' } });
+        return Response.json({ totals: {}, clients: [], data: { enabled: false } });
+      }, async root => {
+        initManagement(root as unknown as HTMLElement, () => {}, () => {}, () => {}, true).render('inbounds');
+        await settle();
+        const button = new Control(); button.dataset.quickPreset = preset;
+        root.fire('click', { target: button }); await settle();
+        assert.equal(writes, 1);
+        assert.ok(requests.some(path => path.endsWith(`/api/system/free-port?transport=${preset === 'hy2' ? 'udp&hop=1' : 'tcp'}`)));
+        assert.ok(!requests.some(path => path.includes('/firewall/retry')));
+        const notice = (document.body as unknown as Control).elements.find(item => item.className === 'save-notice')!;
+        assert.match(notice.textContent, /防火墙：测试自动放行结果/);
+      });
+    });
+  }
+});
 
 test('客户端启用与最近上线分列，速率持续显示且未知采样不假报零', async () => {
   const state = workspaceFixture();
@@ -96,7 +176,8 @@ test('客户端启用与最近上线分列，速率持续显示且未知采样�
     initManagement(root as unknown as HTMLElement, () => {}, () => {}, () => {}, true).render('clients');
     await settle();
     let html = root.querySelector('#list-content').innerHTML;
-    assert.match(html, /<th scope="col">启用<\/th>/);
+    assert.doesNotMatch(html, /<th scope="col">启用<\/th>/);
+    assert.match(html, /class="client-identity"><label class="switch"[\s\S]*?data-toggle-client=[\s\S]*?class="client-identity-text"><strong class="record-name">/);
     assert.match(html, /class="speed-up"[^>]*>↑ —/);
     assert.match(html, /class="speed-down"[^>]*>↓ —/);
     assert.doesNotMatch(html.match(/<td data-label="启用">[\s\S]*?<\/td>/)?.[0] ?? '', /is-online/);
@@ -131,7 +212,7 @@ test('入站客户端显式重读可取消，失败保留旧列表，再成功�
     clickWorkspace(root, 'data-reload'); await settle();
     assert.match(root.querySelector('#list-content').innerHTML, /latest-client/);
     clickWorkspace(root, 'data-op', 'toggle-client', next.clients[0].id);
-    dialogs.at(-1)!.querySelector('form').fire('submit'); await settle();
+    dialogs.find(item => item.id === 'edit-dialog')!.querySelector('form').fire('submit'); await settle();
     assert.equal(writes[0].revision, 9);
   });
 });
