@@ -3,6 +3,8 @@ package localapi
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +16,60 @@ import (
 	"independent-panel/internal/store"
 	"independent-panel/internal/traffic"
 )
+
+func TestTrafficAPIExpiredPeriodKeepsLifetimeAndStoredLedger(t *testing.T) {
+	s, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	yesterday := time.Now().AddDate(0, 0, -1)
+	l, err := traffic.Merge(traffic.Empty(), "fixture", map[string]traffic.Count{"a": {Uplink: 90}}, yesterday)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l, err = traffic.Merge(l, "fixture", map[string]traffic.Count{"a": {Uplink: 100}}, yesterday.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal(l)
+	if _, err = s.SaveDocument(context.Background(), "traffic", 0, data); err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	registerTraffic(mux, &Runtime{state: s})
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/runtime/traffic", nil))
+	var result struct {
+		Totals  map[string]traffic.Count
+		Periods map[string]traffic.Period
+	}
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &result) != nil {
+		t.Fatal("read", w.Code)
+	}
+	if result.Totals["a"].Total() != 100 || result.Periods["day"].Totals["a"].Total() != 0 {
+		t.Fatal("period view changed lifetime")
+	}
+	doc, _ := s.ReadDocument(context.Background(), "traffic")
+	if doc.Revision != 1 || string(doc.Data) != string(data) {
+		t.Fatal("GET mutated persisted ledger")
+	}
+	p := l.Periods["day"]
+	p.Totals["a"] = traffic.Count{Uplink: 101}
+	l.Periods["day"] = p
+	bad, _ := json.Marshal(l)
+	if _, err = backupLedger(bad); err == nil {
+		t.Fatal("backup accepted invalid period")
+	}
+	if _, err = s.SaveDocument(context.Background(), "traffic", 1, bad); err != nil {
+		t.Fatal(err)
+	}
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/runtime/traffic", nil))
+	if w.Code != 500 {
+		t.Fatal("corrupt period became zero usage", w.Code)
+	}
+}
 
 func TestQuotaAndDeadlineBoundaries(t *testing.T) {
 	now := time.Now()
@@ -38,6 +94,11 @@ func TestTrafficSnapshotFiltersWithoutDraftOrCounterReset(t *testing.T) {
 	policy := runtimePolicy{Clients: map[string]clientLimit{"a": {Quota: 10}, "b": {ExpiresAt: &expired}, "c": {}}}
 	ledger := traffic.Empty()
 	ledger.Totals["a"] = traffic.Count{Uplink: 5, Downlink: 5}
+	// 周期统计归零后仍需剔除累计达到限额的a。
+	ledger, err = traffic.Merge(ledger, "fixture", map[string]traffic.Count{}, now)
+	if err != nil || ledger.Periods["day"].Totals["a"].Total() != 0 {
+		t.Fatal("period setup", err)
+	}
 	data, _ := json.Marshal(ledger)
 	if _, err = s.SaveDocument(context.Background(), "traffic", 0, data); err != nil {
 		t.Fatal(err)

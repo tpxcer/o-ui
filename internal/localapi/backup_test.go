@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"independent-panel/internal/core"
 	"independent-panel/internal/store"
@@ -77,6 +78,11 @@ func TestBusinessBackupAPI(t *testing.T) {
 	}
 	ledger := traffic.Empty()
 	ledger.Totals["client-one"] = traffic.Count{Uplink: 101, Downlink: 202}
+	ledger, err = traffic.Merge(ledger, "backup-fixture", map[string]traffic.Count{}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger.Active = false
 	data, _ = json.Marshal(ledger)
 	if _, err = s.SaveDocument(ctx, "traffic", 0, data); err != nil {
 		t.Fatal(err)
@@ -231,7 +237,7 @@ func TestBusinessBackupAPI(t *testing.T) {
 		t.Fatal("identity/revision/workspace not restored")
 	}
 	nextLedger, err := backupLedger(docs["traffic"].Data)
-	if err != nil || nextLedger.Active || !nextLedger.Incomplete || nextLedger.Epoch != "" || len(nextLedger.Last) != 0 || nextLedger.Totals["client-one"].Total() != 1999 {
+	if err != nil || nextLedger.Active || !nextLedger.Incomplete || nextLedger.Epoch != "" || len(nextLedger.Last) != 0 || nextLedger.Totals["client-one"].Total() != 1999 || len(nextLedger.Periods) != 0 {
 		t.Fatal("usage regressed", err)
 	}
 	c := next.Inbounds[0].Connection

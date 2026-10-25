@@ -56,7 +56,7 @@ func (rt *Runtime) ledger(ctx context.Context) (traffic.Ledger, int64, error) {
 	if json.Unmarshal(doc.Data, &ledger) != nil {
 		return ledger, 0, i18n.New("流量账本损坏，拒绝重置用量", "Traffic ledger is corrupted; refusing to reset usage")
 	}
-	if ledger.Totals == nil || ledger.Last == nil || (ledger.Active && (ledger.Epoch == "" || ledger.SampledAt == nil)) {
+	if ledger.Totals == nil || ledger.Last == nil || !traffic.ValidPeriods(ledger) || (ledger.Active && (ledger.Epoch == "" || ledger.SampledAt == nil)) {
 		return ledger, 0, i18n.New("流量账本结构无效", "Invalid traffic ledger structure")
 	}
 	return ledger, doc.Revision, nil
@@ -392,6 +392,6 @@ func registerTraffic(mux *http.ServeMux, rt *Runtime) {
 			return
 		}
 		c, running := rt.engine.Current()
-		respond(w, 200, map[string]any{"totals": ledger.Totals, "lastOnline": ledger.LastOnline, "sampledAt": ledger.SampledAt, "collecting": running && c.StatsAddress != "", "intervalSeconds": int(trafficInterval.Seconds()), "issue": rt.issue, "incomplete": ledger.Incomplete})
+		respond(w, 200, map[string]any{"periods": traffic.CurrentPeriods(ledger, time.Now()), "totals": ledger.Totals, "lastOnline": ledger.LastOnline, "sampledAt": ledger.SampledAt, "collecting": running && c.StatsAddress != "", "intervalSeconds": int(trafficInterval.Seconds()), "issue": rt.issue, "incomplete": ledger.Incomplete})
 	})
 }

@@ -6,8 +6,8 @@ import { initCalendar } from './calendar.ts';
 import Sortable from 'sortablejs';
 import { mergeVisibleOrder, orderedRecords, type ListKind, type ListOrder } from './list-order.ts';
 import { initConnections } from './connections.ts';
-import { expiryLeft, formatBytes, onlineWindowMs, relativeTime, trafficStatus, usedBytes } from './traffic.ts';
-import type { TrafficSnapshot } from './traffic.ts';
+import { expiryLeft, formatBytes, onlineWindowMs, relativeTime, trafficPeriodHint, trafficSpeedVisible, trafficStatus, usedBytes } from './traffic.ts';
+import type { TrafficPeriod, TrafficSnapshot } from './traffic.ts';
 import { newRealityConnection, nextRealityTarget, realityServerName, realityTargets, readSniffing, sniffingLabels } from './inbound-options.ts';
 import type { PanelTLSStatus } from './panel-settings.ts';
 import { readProxyEndpoint } from './proxy-endpoint.ts';
@@ -35,6 +35,8 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
   let orderSaving = false, sortable: Sortable | null = null;
   let search = '', filter = 'all', inboundFilter = '';
   let traffic: TrafficSnapshot | null = null, trafficError = '', trafficLoading = false;
+  let trafficPeriod: TrafficPeriod = 'total';
+  try { const saved = localStorage.getItem('o-ui.traffic-period'); if (saved === 'day' || saved === 'week' || saved === 'month') trafficPeriod = saved; } catch { /* 浏览器禁用存储时沿用累计。 */ }
   type IPLimitView = { enforced: boolean; issue: string; clients: Record<string, { online: { ip: string; lastSeen: string }[]; banned: { ip: string; until: string }[]; exempt: { ip: string; until: string }[] }> };
   let ipView: IPLimitView | null = null;
   let subscriptionService: boolean | null = null;
@@ -395,11 +397,12 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
     return clientStatus(viewClient(item), state.inbounds.find(inbound => inbound.id === item.inboundId)) === t('可用', 'Available') && persistent && !!at && !!traffic?.collecting && !trafficError && !!traffic.sampledAt && Date.now() - Date.parse(traffic.sampledAt) <= 10_000 && Date.now() - Date.parse(at) <= onlineWindowMs;
   };
   const trafficCell = (item: Client) => {
-    const bytes = persistent ? usedBytes(traffic, item.id) : BigInt(Math.round(item.usedGB * 1e9));
+    const bytes = persistent ? usedBytes(traffic, item.id, trafficPeriod) : BigInt(Math.round(item.usedGB * 1e9));
     const percent = item.quotaGB > 0 ? Math.min(100, viewClient(item).usedGB / item.quotaGB * 100) : 0;
     const rate = persistent && traffic?.collecting && !trafficError && traffic.sampledAt && Date.now() - Date.parse(traffic.sampledAt) <= 10_000 ? speeds[item.id] : undefined;
-    const speed = `<small class="table-secondary speed-pair"><span class="speed-up" title="${t('上传', 'Upload')}">↑ ${rate ? formatBytes(rate.up) + '/s' : '—'}</span><span class="speed-down" title="${t('下载', 'Download')}">↓ ${rate ? formatBytes(rate.down) + '/s' : '—'}</span></small>`;
-    return `<span>${formatBytes(bytes)} / ${item.quotaGB ? formatBytes(item.quotaGB * 1e9) : t('不限', 'Unlimited')}</span>${item.quotaGB && bytes !== null ? `<div class="mini-meter" aria-hidden="true"><span style="width:${percent}%"></span></div>` : ''}${speed}`;
+    const speed = trafficSpeedVisible(isOnline(item), rate) ? `<small class="table-secondary speed-pair"><span class="speed-up" title="${t('上传', 'Upload')}">↑ ${formatBytes(rate!.up)}/s</span><span class="speed-down" title="${t('下载', 'Download')}">↓ ${formatBytes(rate!.down)}/s</span></small>` : '';
+    const quota = `${formatBytes(persistent ? usedBytes(traffic, item.id) : bytes)} / ${item.quotaGB ? formatBytes(item.quotaGB * 1e9) : t('不限', 'Unlimited')}`;
+    return `<span>${trafficPeriod === 'total' ? quota : formatBytes(bytes)}</span>${trafficPeriod !== 'total' ? `<small class="table-secondary">${t('累计', 'Lifetime')} ${quota}</small>` : ''}${item.quotaGB && bytes !== null ? `<div class="mini-meter" aria-hidden="true"><span style="width:${percent}%"></span></div>` : ''}${speed}`;
   };
   const lastOnlineCell = (item: Client) => {
     const at = traffic?.lastOnline?.[item.id];
@@ -409,7 +412,7 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
   const inboundTraffic = (id: string) => {
     let total = 0n;
     for (const client of state.clients.filter(item => item.inboundId === id)) {
-      const bytes = persistent ? usedBytes(traffic, client.id) : BigInt(Math.round(client.usedGB * 1e9));
+      const bytes = persistent ? usedBytes(traffic, client.id, trafficPeriod) : BigInt(Math.round(client.usedGB * 1e9));
       if (bytes === null) return t('未采集', 'Not collected');
       total += bytes;
     }
@@ -523,10 +526,19 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
       ${reloadRequired ? t('<p class="form-error" role="alert">保存失败或结果未确认，当前列表可能已过期；请重新读取草稿后再修改，不会自动覆盖最新数据。</p>', '<p class="form-error" role="alert">The save failed or was not confirmed, so this list may be stale. Reload the draft before editing; the latest data is never overwritten automatically.</p>') : ''}
       <div class="workspace-bar"><div class="workspace-summary"><span>${t('入站', 'Inbounds')} <strong>${state.inbounds.length}</strong></span><span>${t('客户端', 'Clients')} <strong>${state.clients.length}</strong></span><span>${persistent ? t('可用', 'Available') : t('演示可用', 'Demo available')} <strong>${available}</strong></span></div>${persistent ? `<div class="workspace-actions"><button class="icon-button bordered" data-reload title="${t('从服务器重新读取列表（别处修改过时使用）', 'Reload the list from the server (after changes elsewhere)')}" aria-label="${t('刷新', 'Refresh')}" ${loading || submitting ? 'disabled' : ''}>${icon('refresh-cw')}</button></div>` : ''}</div>
       ${persistent ? `<div class="workspace-status"><p class="form-hint" id="workspace-application-status" role="status"></p><p class="form-hint" id="traffic-status">${esc(trafficStatus(traffic, trafficError))}</p><p class="form-hint">${t('流量约每2秒统计一次；客户端到期或用尽额度时会自动停用。', 'Traffic is counted about every 2 seconds; clients stop working automatically when they expire or run out of quota.')}</p></div>` : ''}
+      ${persistent ? `<p class="form-hint" id="traffic-period-hint">${esc(trafficPeriodHint(traffic, trafficPeriod))}</p>` : ''}
       <section class="card list-card" aria-label="${page === 'inbounds' ? t('入站管理', 'Inbound management') : t('客户端管理', 'Client management')}"><div class="list-toolbar"><label class="search-box">${icon('search')}<span class="sr-only">${page === 'inbounds' ? t('搜索入站', 'Search inbounds') : t('搜索客户端', 'Search clients')}</span><input type="search" id="workspace-search" value="${esc(search)}" placeholder="${page === 'inbounds' ? t('搜索名称、类型或端口', 'Search name, type or port') : t('搜索客户端或入站名称', 'Search client or inbound name')}" autocomplete="off"></label>
         <label class="filter-control"><span class="sr-only">${t('筛选状态', 'Filter by status')}</span><select id="status-filter">${(page === 'inbounds' ? [['all', t('全部状态', 'All states')], ['enabled', t('已启用', 'Enabled')], ['disabled', t('已停用', 'Disabled')]] : [['all', t('全部状态', 'All states')], ['available', persistent ? t('可用', 'Available') : t('演示可用', 'Demo available')], ['unavailable', persistent ? t('不可用', 'Unavailable') : t('演示不可用', 'Demo unavailable')]]).map(([value, label]) => `<option value="${value}"${value === filter ? ' selected' : ''}>${label}</option>`).join('')}</select></label>
+        ${persistent ? `<label class="filter-control"><span class="sr-only">${t('统计周期', 'Traffic period')}</span><select id="traffic-period">${([['total', t('流量：累计', 'Traffic: lifetime')], ['day', t('流量：日', 'Traffic: day')], ['week', t('流量：周', 'Traffic: week')], ['month', t('流量：月', 'Traffic: month')]]).map(([value, label]) => `<option value="${value}"${value === trafficPeriod ? ' selected' : ''}>${label}</option>`).join('')}</select></label>` : ''}
         ${page === 'clients' ? `<label class="filter-control inbound-filter"><span class="sr-only">${t('筛选关联入站', 'Filter by linked inbound')}</span><select id="inbound-filter"><option value="">${t('全部入站', 'All inbounds')}</option>${state.inbounds.map(item => `<option value="${esc(item.id)}"${item.id === inboundFilter ? ' selected' : ''}>${esc(item.name)}</option>`).join('')}</select></label>` : ''}<button type="button" class="danger-button is-solid" data-delete-selected hidden>${icon('trash-2')}<span></span></button><span id="result-count" class="result-count" aria-live="polite"></span></div><div id="list-content"></div>
       <footer class="list-footer">${persistent ? t('在客户端的连接信息里可查看节点链接、二维码和订阅链接。', 'Open a client\'s connection info for node links, QR codes and subscription links.') : t('所有更改仅保留在本页内存中，刷新即恢复。未生成可用连接或订阅链接。', 'All changes stay in this page\'s memory and are restored on refresh. No usable connections or subscription links are generated.')}</footer></section>`;
+    if (persistent) {
+      root.querySelector('#traffic-period')!.addEventListener('change', event => {
+        trafficPeriod = (event.target as HTMLSelectElement).value as TrafficPeriod;
+        try { localStorage.setItem('o-ui.traffic-period', trafficPeriod); } catch { /* 仅影响刷新后偏好。 */ }
+        root.querySelector('#traffic-period-hint')!.textContent = trafficPeriodHint(traffic, trafficPeriod); listRows();
+      });
+    }
     root.querySelector<HTMLInputElement>('#workspace-search')!.addEventListener('input', event => { search = (event.target as HTMLInputElement).value; listRows(); });
     root.querySelector<HTMLSelectElement>('#status-filter')!.addEventListener('change', event => { filter = (event.target as HTMLSelectElement).value; listRows(); });
     root.querySelector<HTMLSelectElement>('#inbound-filter')?.addEventListener('change', event => { inboundFilter = (event.target as HTMLSelectElement).value; listRows(); });
@@ -674,6 +686,7 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
     finally {
       trafficLoading = false;
       const label = root.querySelector('#traffic-status'); if (label) label.textContent = trafficStatus(traffic, trafficError);
+      const periodHint = root.querySelector('#traffic-period-hint'); if (periodHint) periodHint.textContent = trafficPeriodHint(traffic, trafficPeriod);
       // 周期更新不替换操作按钮，避免用户的键盘焦点丢失。
       if (!root.hidden && !root.contains(document.activeElement) && !document.querySelector('dialog[open]')) listRows();
       else root.querySelectorAll<HTMLElement>('[data-client-row]').forEach(row => {

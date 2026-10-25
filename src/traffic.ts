@@ -1,16 +1,33 @@
 import { locale, t } from './i18n.ts';
+export type TrafficPeriod = 'total' | 'day' | 'week' | 'month';
+export interface PeriodTraffic {
+  start: string; end: string; since: string; partial: boolean;
+  totals: Record<string, { uplink: string; downlink: string }>;
+}
 export interface TrafficSnapshot {
   totals: Record<string, { uplink: string; downlink: string }>;
+  periods?: Partial<Record<Exclude<TrafficPeriod, 'total'>, PeriodTraffic>> | null;
   lastOnline?: Record<string, string> | null;
   sampledAt: string | null; collecting: boolean; intervalSeconds: number; issue: string; incomplete: boolean;
 }
 
-export function usedBytes(snapshot: TrafficSnapshot | null, id: string): bigint | null {
+export function usedBytes(snapshot: TrafficSnapshot | null, id: string, period: TrafficPeriod = 'total'): bigint | null {
   if (!snapshot?.sampledAt) return null;
-  const count = snapshot.totals[id];
+  const totals = period === 'total' ? snapshot.totals : snapshot.periods?.[period]?.totals;
+  if (!totals) return null;
+  const count = totals[id];
   if (!count) return 0n;
   if (!/^\d+$/.test(count.uplink) || !/^\d+$/.test(count.downlink)) return null;
   return BigInt(count.uplink) + BigInt(count.downlink);
+}
+
+export function trafficPeriodHint(snapshot: TrafficSnapshot | null, period: TrafficPeriod): string {
+  if (period === 'total') return t('累计用量用于流量限额判断。', 'Lifetime usage is used for quota enforcement.');
+  const p = snapshot?.periods?.[period];
+  if (!p) return t('周期统计尚未开始；首次采样后起算。', 'Period statistics start after the first sample.');
+  // 保留后端时间及其偏移量，不能把浏览器时区误称为服务器时区。
+  const serverTime = (value: string) => value.replace('T', ' ').replace(/\.\d+/, '');
+  return `${t('服务器周期', 'Server period')} ${serverTime(p.start)} → ${serverTime(p.end)}${p.partial ? ` · ${t('部分统计，起算', 'Partial statistics, started')} ${serverTime(p.since)}` : ''} · ${t('按采样入账，边界可能有约2秒偏差；仅重置统计，不影响累计限额。', 'Recorded at sample time, boundaries may differ by about 2 seconds; only statistics reset, lifetime quotas are unchanged.')}`;
 }
 
 export function formatTrafficGB(bytes: bigint | null): string {
@@ -42,6 +59,10 @@ export function formatBytes(bytes: bigint | number | null): string {
 
 // OUI的在线判定：最近2分钟内有流量。
 export const onlineWindowMs = 2 * 60 * 1000;
+
+export function trafficSpeedVisible(online: boolean, rate?: { up: number; down: number }): boolean {
+  return online && !!rate && Number.isFinite(rate.up) && Number.isFinite(rate.down) && rate.up >= 0 && rate.down >= 0;
+}
 
 // 相对时间：刚刚、N分钟前、N小时前、N天前。
 export function relativeTime(at: number, now = Date.now()): string {

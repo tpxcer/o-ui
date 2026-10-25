@@ -32,6 +32,7 @@ type Ledger struct {
 	SampledAt  *time.Time           `json:"sampledAt,omitempty"`
 	Active     bool                 `json:"active"`
 	Incomplete bool                 `json:"incomplete"`
+	Periods    map[string]Period    `json:"periods,omitempty"`
 }
 
 func Empty() Ledger { return Ledger{Totals: map[string]Count{}, Last: map[string]Count{}} }
@@ -91,7 +92,7 @@ func Parse(data []byte) (map[string]Count, error) {
 
 // Merge不会修改输入。新进程从0累加，同进程回退视为采集缺口，拒绝猜测补数。
 func Merge(old Ledger, epoch string, counts map[string]Count, now time.Time) (Ledger, error) {
-	if epoch == "" || now.IsZero() || old.Totals == nil || old.Last == nil {
+	if epoch == "" || now.IsZero() || old.Totals == nil || old.Last == nil || !ValidPeriods(old) {
 		return Ledger{}, i18n.New("流量账本或运行实例无效", "Invalid traffic ledger or run instance")
 	}
 	next := Empty()
@@ -134,5 +135,6 @@ func Merge(old Ledger, epoch string, counts map[string]Count, now time.Time) (Le
 		}
 		next.Last[id] = c
 	}
+	next.Periods = mergePeriods(old, next, now)
 	return next, nil
 }

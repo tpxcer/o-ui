@@ -84,7 +84,7 @@ func backupLedger(data json.RawMessage) (traffic.Ledger, error) {
 		return traffic.Empty(), nil
 	}
 	var ledger traffic.Ledger
-	if decodeStrict(data, &ledger) != nil || ledger.Totals == nil || ledger.Last == nil || (ledger.Active && (ledger.Epoch == "" || ledger.SampledAt == nil)) {
+	if decodeStrict(data, &ledger) != nil || ledger.Totals == nil || ledger.Last == nil || !traffic.ValidPeriods(ledger) || (ledger.Active && (ledger.Epoch == "" || ledger.SampledAt == nil)) {
 		return ledger, i18n.New("流量账本无效，拒绝重置用量", "Traffic ledger is invalid; refusing to reset usage")
 	}
 	for id := range ledger.Totals {
@@ -376,6 +376,8 @@ func (rt *Runtime) restore(ctx context.Context, b businessBackup, current busine
 		b.Traffic.Totals[id] = next
 	}
 	b.Traffic.Epoch, b.Traffic.Last, b.Traffic.Active, b.Traffic.Incomplete = "", map[string]traffic.Count{}, false, true
+	// 恢复后的周期从首个新样本起算，不能把合并的历史累计计入本周期。
+	b.Traffic.Periods = nil
 	data := map[string]json.RawMessage{}
 	data["workspace"], _ = json.Marshal(b.Workspace)
 	data["xray-settings"] = b.Settings
@@ -414,7 +416,7 @@ func (rt *Runtime) restore(ctx context.Context, b businessBackup, current busine
 	if err = rt.state.ReplaceDocuments(ctx, docs, data); err != nil {
 		return "", nil, err
 	}
-	rt.issue = i18n.T("已恢复业务备份，核心保持停止；备份后的未知用量未补算，请预检后再应用", "Backup restored and the core stays stopped; usage after the backup is unknown, run preflight before applying")
+	rt.issue = i18n.T("已恢复业务备份，核心保持停止；备份后的未知用量未补算，周期统计将重新起算，请预检后再应用", "Backup restored and the core stays stopped; usage after the backup is unknown and period statistics will restart, run preflight before applying")
 	return name, rollback, nil
 }
 

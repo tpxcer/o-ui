@@ -154,7 +154,7 @@ test('四预设一键创建直接保存并显示自动防火墙结果，无需�
   }
 });
 
-test('客户端启用与最近上线分列，速率持续显示且未知采样不假报零', async () => {
+test('客户端启用与最近上线分列，在线有效采样显示速度，离线与未知不显示速度行', async () => {
   const state = workspaceFixture();
   state.clients.forEach(client => { client.enabled = true; client.expiresAt = null; client.quotaGB = 0; });
   state.inbounds.forEach(inbound => { inbound.enabled = true; });
@@ -179,8 +179,7 @@ test('客户端启用与最近上线分列，速率持续显示且未知采样�
     let html = root.querySelector('#list-content').innerHTML;
     assert.doesNotMatch(html, /<th scope="col">启用<\/th>/);
     assert.match(html, /class="client-identity"><label class="switch"[\s\S]*?data-toggle-client=[\s\S]*?class="client-identity-text"><strong class="record-name">/);
-    assert.match(html, /class="speed-up"[^>]*>↑ —/);
-    assert.match(html, /class="speed-down"[^>]*>↓ —/);
+    assert.doesNotMatch(html, /speed-pair|speed-up|speed-down/);
     assert.doesNotMatch(html.match(/<td data-label="启用">[\s\S]*?<\/td>/)?.[0] ?? '', /is-online/);
     assert.match(html, /data-client-last><span class="status-badge is-online"/);
     const poll = timers.find(timer => timer.delay === 5000)!;
@@ -192,9 +191,10 @@ test('客户端启用与最近上线分列，速率持续显示且未知采样�
     html = root.querySelector('#list-content').innerHTML;
     assert.match(html, /33 分钟前上线过/);
     assert.doesNotMatch(html, /is-online|>离线</);
+    assert.doesNotMatch(html, /speed-pair|speed-up|speed-down/);
     mode = 'stopped'; poll.callback(); await settle();
     html = root.querySelector('#list-content').innerHTML;
-    assert.match(html, /class="speed-up"[^>]*>↑ —/);
+    assert.doesNotMatch(html, /speed-pair|speed-up|speed-down/);
   });
 });
 test('入站客户端显式重读可取消，失败保留旧列表，再成功后使用新修订', async () => {
