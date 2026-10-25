@@ -1,8 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { formatTrafficGB, trafficPeriodHint, trafficSpeedVisible, trafficStatus, usedBytes } from '../src/traffic.ts';
+import { formatTrafficGB, inboundTrafficPeriod, trafficPeriodHint, trafficSpeedVisible, trafficStatus, usedBytes } from '../src/traffic.ts';
 import type { TrafficSnapshot } from '../src/traffic.ts';
 const snapshot: TrafficSnapshot = { totals: { one: { uplink: '9007199254740993', downlink: '1' } }, sampledAt: new Date(1000).toISOString(), collecting: true, intervalSeconds: 2, issue: '', incomplete: false };
+test('每个节点独立选择统计周期，旧节点缺省不重置，不改累计限额来源', () => {
+  const daily = { trafficReset: 'daily' as const }, monthly = { trafficReset: 'monthly' as const };
+  assert.equal(inboundTrafficPeriod(daily), 'day');
+  assert.equal(inboundTrafficPeriod(monthly), 'month');
+  assert.equal(inboundTrafficPeriod({ trafficReset: 'weekly' }), 'week');
+  assert.equal(inboundTrafficPeriod({ trafficReset: 'never' }), 'total');
+  assert.equal(inboundTrafficPeriod({}), 'total');
+  assert.equal(inboundTrafficPeriod(), 'total');
+  assert.equal(usedBytes(snapshot, 'one'), 9007199254740994n);
+});
 test('周期统计与累计独立，缺失周期不冒充零用量', () => {
   const periodic: TrafficSnapshot = { ...snapshot, periods: { day: { start: '2026-10-25T00:00:00+08:00', end: '2026-10-26T00:00:00+08:00', since: '2026-10-25T12:00:00+08:00', partial: true, totals: { one: { uplink: '2', downlink: '3' } } } } };
   assert.equal(usedBytes(periodic, 'one', 'day'), 5n);

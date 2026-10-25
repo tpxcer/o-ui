@@ -1,13 +1,13 @@
 import { addClient, chineseDate, clientStatus, createQuick, defaultConnection, defaultSniffing, deleteRecords, editClient,
   editInbound, escapeHtml as esc, inboundName, presets, quickInboundName, randomName, seedWorkspace } from './workspace.ts';
-import type { Client, ClientInput, Connection, Inbound, Preset, Workspace } from './workspace.ts';
+import type { Client, ClientInput, Connection, Inbound, Preset, TrafficReset, Workspace } from './workspace.ts';
 import { api, APIError, confirmSaved, jsonBody, uncertainSave } from './api.ts';
 import { initCalendar } from './calendar.ts';
 import Sortable from 'sortablejs';
 import { mergeVisibleOrder, orderedRecords, type ListKind, type ListOrder } from './list-order.ts';
 import { initConnections } from './connections.ts';
-import { expiryLeft, formatBytes, onlineWindowMs, relativeTime, trafficPeriodHint, trafficSpeedVisible, trafficStatus, usedBytes } from './traffic.ts';
-import type { TrafficPeriod, TrafficSnapshot } from './traffic.ts';
+import { expiryLeft, formatBytes, inboundTrafficPeriod, onlineWindowMs, relativeTime, trafficPeriodHint, trafficPeriodLabel, trafficSpeedVisible, trafficStatus, usedBytes } from './traffic.ts';
+import type { TrafficSnapshot } from './traffic.ts';
 import { newRealityConnection, nextRealityTarget, realityServerName, realityTargets, readSniffing, sniffingLabels } from './inbound-options.ts';
 import type { PanelTLSStatus } from './panel-settings.ts';
 import { readProxyEndpoint } from './proxy-endpoint.ts';
@@ -25,6 +25,12 @@ const quickLabels: Record<Preset, string> = { hy2: 'Hysteria2', reality: 'VLESS 
 const input = (label: string, name: string, value: string | number, attrs = '', hint = '') => `<label class="form-field">${label}<input name="${name}" value="${esc(String(value))}" ${attrs}>${hint ? `<small class="form-hint">${hint}</small>` : ''}</label>`;
 const check = (label: string, name: string, checked: boolean) => `<label class="check-field"><input type="checkbox" name="${name}"${checked ? ' checked' : ''}><span>${label}</span></label>`;
 const badge = (text: string, ok: boolean) => `<span class="status-badge ${ok ? 'is-good' : 'is-muted'}"><b></b>${esc(text)}</span>`;
+const trafficResetFields = (value: TrafficReset = 'never') => `<label class="form-field"><span id="traffic-reset-label">${t('流量统计重置周期', 'Traffic statistics reset period')}</span><select name="trafficReset" aria-labelledby="traffic-reset-label">${([['never', t('不重置', 'Never')], ['daily', t('每日', 'Daily')], ['weekly', t('每周', 'Weekly')], ['monthly', t('每月', 'Monthly')]]).map(([key, label]) => `<option value="${key}"${value === key ? ' selected' : ''}>${label}</option>`).join('')}</select><small class="form-hint">${t('仅作用于本节点及其客户端的展示统计。按服务器时间每日零点、每周一零点、每月1日零点重置，不影响累计限额。', 'Applies to display statistics for this node and its clients only. Resets at server midnight, Monday midnight or the first day of each month; lifetime quotas are unchanged.')}</small></label>`;
+const readTrafficReset = (data: FormData): TrafficReset => {
+  const value = String(data.get('trafficReset') ?? 'never');
+  if (value !== 'never' && value !== 'daily' && value !== 'weekly' && value !== 'monthly') throw new Error(t('节点统计周期无效', 'Invalid node statistics period'));
+  return value;
+};
 
 export function initManagement(root: HTMLElement, refreshIcons: () => void, navigate: (page: string) => void, showDetail: (title: string, text: string) => void, persistent = false, onSaved: () => void = () => {}): { render: (page: 'inbounds' | 'clients') => void; setRuntime: (status: RuntimeStatus | null, at: number) => void } {
   let state: Workspace = persistent ? { inbounds: [], clients: [] } : seedWorkspace();
@@ -35,8 +41,6 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
   let orderSaving = false, sortable: Sortable | null = null;
   let search = '', filter = 'all', inboundFilter = '';
   let traffic: TrafficSnapshot | null = null, trafficError = '', trafficLoading = false;
-  let trafficPeriod: TrafficPeriod = 'total';
-  try { const saved = localStorage.getItem('o-ui.traffic-period'); if (saved === 'day' || saved === 'week' || saved === 'month') trafficPeriod = saved; } catch { /* 浏览器禁用存储时沿用累计。 */ }
   type IPLimitView = { enforced: boolean; issue: string; clients: Record<string, { online: { ip: string; lastSeen: string }[]; banned: { ip: string; until: string }[]; exempt: { ip: string; until: string }[] }> };
   let ipView: IPLimitView | null = null;
   let subscriptionService: boolean | null = null;
@@ -259,8 +263,9 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
       <fieldset class="preset-field"><legend>${t('创建类型', 'Type')}</legend><div class="preset-options">${(Object.keys(presets) as Preset[]).map(key => `<label><input type="radio" name="preset" value="${key}"${key === preset ? ' checked' : ''}><span>${presets[key].label}</span></label>`).join('')}</div></fieldset>
       <div class="name-preview"><small>${t('入站名称预览', 'Inbound name preview')}</small><strong id="inbound-name-preview">${esc(persistent ? `${region}-${presets[preset].label}-${demoClient.name}` : inboundName(preset, demoClient.name))}</strong><small>${persistent ? region === t('未知地区', 'Unknown region') ? t('尚未查询到服务器国家，不用演示国家冒充实际归属地。', 'The server country is not known yet; no demo country is used in its place.') : t('国家来自首页公网信息查询，可在保存后编辑名称。', 'The country comes from the public IP lookup on the dashboard; you can edit the name after saving.') : t('国家固定为演示“美国”，未查询服务器归属地。', 'The country is the demo “United States”; the server location was not looked up.')}</small></div>
       <div class="port-row">${input(t('监听端口', 'Listen port'), 'port', persistent ? Math.max(1024, suggestedPort(preset)) : suggestedPort(preset), `type="number" required min="${persistent ? 1024 : 1}" max="65535" step="1"`, t('仅检查草稿列表冲突，应用时还需检查系统端口。', 'Only conflicts within drafts are checked; system ports are checked when applying.'))}<button type="button" class="secondary-button" id="random-name">${icon('shuffle')}${t('重新生成名称', 'Regenerate name')}</button></div>
-      ${persistent ? endpointFields() : ''}<div id="connection-fields">${persistent ? connectionFields(preset) : ''}</div>${clientFields(demoClient)}${sniffingFields()}`, persistent ? t('保存', 'Save') : t('创建演示入站', 'Create demo inbound'), form => {
+      ${persistent ? endpointFields() : ''}<div id="connection-fields">${persistent ? connectionFields(preset) : ''}</div>${trafficResetFields()}${clientFields(demoClient)}${sniffingFields()}`, persistent ? t('保存', 'Save') : t('创建演示入站', 'Create demo inbound'), form => {
       state = createQuick(state, { ...readClient(form, date.value()), preset, port: Number(new FormData(form).get('port')), sniffing: readSniffing(new FormData(form)) }, crypto.randomUUID());
+      state.inbounds.at(-1)!.trafficReset = readTrafficReset(new FormData(form));
       if (persistent) { const inbound = state.inbounds.at(-1)!; inbound.name = `${region}-${presets[preset].label}-${state.clients.at(-1)!.name}`; inbound.connection = readConnection(form); Object.assign(inbound, readProxyEndpoint(new FormData(form)), { portHopping: readHopping(new FormData(form)) }); }
       search = ''; filter = 'all'; inboundFilter = '';
       announce(t('已添加演示入站和客户端 · 未应用 Xray', 'Demo inbound and client added · Xray not applied'));
@@ -301,12 +306,14 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
   function inboundEditor(inbound: Inbound): void {
     const form = openModal(t('编辑入站', 'Edit inbound'), `<p class="form-intro">${presets[inbound.preset].label} · ${presets[inbound.preset].protocol} · ${presets[inbound.preset].transport} · ${presets[inbound.preset].security}${t('，', ', ')}${persistent ? t('保存后立即生效', 'applies on save') : t('仅修改演示数据', 'demo data only')}${t('。', '. ')}</p>
       ${input(t('入站名称', 'Inbound name'), 'name', inbound.name, 'required maxlength="128"')}${input(t('监听端口', 'Listen port'), 'port', inbound.port, `type="number" min="${persistent ? 1024 : 1}" max="65535" step="1" required`)}
+      ${trafficResetFields(inbound.trafficReset)}
       ${persistent ? endpointFields(inbound) + connectionFields(inbound.preset, inbound.connection, inbound.portHopping) : ''}
       ${check(t('启用入站', 'Enable inbound'), 'enabled', inbound.enabled)}
       ${sniffingFields(inbound.sniffing)}`, persistent ? t('保存', 'Save') : t('保存演示更改', 'Save demo changes'), form => {
       const data = new FormData(form);
       const sniffing = readSniffing(data);
       state = editInbound(state, inbound.id, { name: String(data.get('name')), port: Number(data.get('port')), enabled: data.has('enabled'), sniffing });
+      state.inbounds.find(item => item.id === inbound.id)!.trafficReset = readTrafficReset(data);
       if (persistent) Object.assign(state.inbounds.find(item => item.id === inbound.id)!, { connection: readConnection(form), ...readProxyEndpoint(data), portHopping: readHopping(data) });
       announce(t('已保存演示入站 · 未应用 Xray', 'Demo inbound saved · Xray not applied'));
     });
@@ -397,12 +404,13 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
     return clientStatus(viewClient(item), state.inbounds.find(inbound => inbound.id === item.inboundId)) === t('可用', 'Available') && persistent && !!at && !!traffic?.collecting && !trafficError && !!traffic.sampledAt && Date.now() - Date.parse(traffic.sampledAt) <= 10_000 && Date.now() - Date.parse(at) <= onlineWindowMs;
   };
   const trafficCell = (item: Client) => {
+    const trafficPeriod = inboundTrafficPeriod(state.inbounds.find(inbound => inbound.id === item.inboundId));
     const bytes = persistent ? usedBytes(traffic, item.id, trafficPeriod) : BigInt(Math.round(item.usedGB * 1e9));
     const percent = item.quotaGB > 0 ? Math.min(100, viewClient(item).usedGB / item.quotaGB * 100) : 0;
     const rate = persistent && traffic?.collecting && !trafficError && traffic.sampledAt && Date.now() - Date.parse(traffic.sampledAt) <= 10_000 ? speeds[item.id] : undefined;
     const speed = trafficSpeedVisible(isOnline(item), rate) ? `<small class="table-secondary speed-pair"><span class="speed-up" title="${t('上传', 'Upload')}">↑ ${formatBytes(rate!.up)}/s</span><span class="speed-down" title="${t('下载', 'Download')}">↓ ${formatBytes(rate!.down)}/s</span></small>` : '';
     const quota = `${formatBytes(persistent ? usedBytes(traffic, item.id) : bytes)} / ${item.quotaGB ? formatBytes(item.quotaGB * 1e9) : t('不限', 'Unlimited')}`;
-    return `<span>${trafficPeriod === 'total' ? quota : formatBytes(bytes)}</span>${trafficPeriod !== 'total' ? `<small class="table-secondary">${t('累计', 'Lifetime')} ${quota}</small>` : ''}${item.quotaGB && bytes !== null ? `<div class="mini-meter" aria-hidden="true"><span style="width:${percent}%"></span></div>` : ''}${speed}`;
+    return `<span title="${esc(trafficPeriodHint(traffic, trafficPeriod))}">${trafficPeriod === 'total' ? quota : `${formatBytes(bytes)} · ${trafficPeriodLabel(trafficPeriod)}`}</span>${trafficPeriod !== 'total' ? `<small class="table-secondary">${t('累计', 'Lifetime')} ${quota}</small>` : ''}${item.quotaGB && bytes !== null ? `<div class="mini-meter" aria-hidden="true"><span style="width:${percent}%"></span></div>` : ''}${speed}`;
   };
   const lastOnlineCell = (item: Client) => {
     const at = traffic?.lastOnline?.[item.id];
@@ -410,13 +418,14 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
     return at ? `<span class="date-value" title="${esc(new Date(at).toLocaleString(locale))}">${t(`${relativeTime(Date.parse(at))}上线过`, `Last online ${relativeTime(Date.parse(at))}`)}</span>` : `<span class="date-value muted-text">${persistent ? t('从未上线', 'Never online') : '—'}</span>`;
   };
   const inboundTraffic = (id: string) => {
+    const trafficPeriod = inboundTrafficPeriod(state.inbounds.find(inbound => inbound.id === id));
     let total = 0n;
     for (const client of state.clients.filter(item => item.inboundId === id)) {
       const bytes = persistent ? usedBytes(traffic, client.id, trafficPeriod) : BigInt(Math.round(client.usedGB * 1e9));
       if (bytes === null) return t('未采集', 'Not collected');
       total += bytes;
     }
-    return formatBytes(total);
+    return `<span title="${esc(trafficPeriodHint(traffic, trafficPeriod))}">${formatBytes(total)}</span><small class="table-secondary">${trafficPeriodLabel(trafficPeriod)}</small>`;
   };
   const selectCell = (item: Client | Inbound) => `<td class="select-cell"><div class="record-controls"><button type="button" class="icon-button row-drag-handle" data-reorder="${esc(item.id)}" title="${t('拖动排序；聚焦后按上下方向键调整', 'Drag to reorder; use arrow keys when focused')}" aria-label="${t('调整顺序', 'Reorder')} ${esc(item.name)}" ${!orderReady[page] || orderSaving || loading || submitting || reloadRequired ? 'disabled' : ''}>${icon('grip-vertical')}</button><input type="checkbox" data-select="${esc(item.id)}" ${selected.has(item.id) ? 'checked' : ''} aria-label="${t('选择', 'Select')} ${esc(item.name)}"></div></td>`;
   function updateSelection(): void {
@@ -456,7 +465,7 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
       <td data-label="${t('类型 / 端口', 'Type / port')}"><span class="tag preset-${item.preset}">${presets[item.preset].label}</span><small class="table-secondary">${presets[item.preset].transport} / ${item.port}${item.portHopping ? ` · ${t('跳跃', 'hop')} ${item.portHopping}` : ''}</small></td>
       <td data-label="${t('状态', 'Status')}">${badge(item.enabled ? t('已启用', 'Enabled') : t('已停用', 'Disabled'), item.enabled)}${persistent ? `<div data-inbound-firewall="${esc(item.id)}">${firewallCell(item)}</div>` : ''}</td>
       <td data-label="${t('客户端', 'Clients')}"><button class="text-button" data-op="clients" data-id="${esc(item.id)}">${state.clients.filter(client => client.inboundId === item.id).length} ${t('个客户端', 'clients')}</button></td>
-      <td data-label="${t('总流量', 'Total traffic')}" data-inbound-traffic="${esc(item.id)}"><span class="date-value">${inboundTraffic(item.id)}</span></td><td data-label="${t('操作', 'Actions')}">${rowActions(item, 'inbound')}</td></tr>`).join('') : clientRows.map(item => {
+      <td data-label="${t('总流量', 'Total traffic')}" data-inbound-traffic="${esc(item.id)}">${inboundTraffic(item.id)}</td><td data-label="${t('操作', 'Actions')}">${rowActions(item, 'inbound')}</td></tr>`).join('') : clientRows.map(item => {
         const inbound = state.inbounds.find(record => record.id === item.inboundId)!;
         return `<tr data-client-row="${esc(item.id)}">${selectCell(item)}<td data-label="${t('客户端 / 入站', 'Client / inbound')}"><div class="client-identity"><label class="switch" title="${item.enabled ? t('停用', 'Disable') : t('启用', 'Enable')}"><input type="checkbox" data-toggle-client="${esc(item.id)}" ${item.enabled ? 'checked' : ''} ${loading || submitting || reloadRequired ? 'disabled' : ''} aria-label="${t('启用客户端', 'Enable client')} ${esc(item.name)}"><span aria-hidden="true"></span></label><div class="client-identity-text"><strong class="record-name">${esc(item.name)}</strong><small class="table-secondary">${esc(inbound.name)}</small></div></div></td>
           <td data-label="${t('流量', 'Traffic')}" data-client-traffic>${trafficCell(item)}</td>
@@ -526,19 +535,10 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
       ${reloadRequired ? t('<p class="form-error" role="alert">保存失败或结果未确认，当前列表可能已过期；请重新读取草稿后再修改，不会自动覆盖最新数据。</p>', '<p class="form-error" role="alert">The save failed or was not confirmed, so this list may be stale. Reload the draft before editing; the latest data is never overwritten automatically.</p>') : ''}
       <div class="workspace-bar"><div class="workspace-summary"><span>${t('入站', 'Inbounds')} <strong>${state.inbounds.length}</strong></span><span>${t('客户端', 'Clients')} <strong>${state.clients.length}</strong></span><span>${persistent ? t('可用', 'Available') : t('演示可用', 'Demo available')} <strong>${available}</strong></span></div>${persistent ? `<div class="workspace-actions"><button class="icon-button bordered" data-reload title="${t('从服务器重新读取列表（别处修改过时使用）', 'Reload the list from the server (after changes elsewhere)')}" aria-label="${t('刷新', 'Refresh')}" ${loading || submitting ? 'disabled' : ''}>${icon('refresh-cw')}</button></div>` : ''}</div>
       ${persistent ? `<div class="workspace-status"><p class="form-hint" id="workspace-application-status" role="status"></p><p class="form-hint" id="traffic-status">${esc(trafficStatus(traffic, trafficError))}</p><p class="form-hint">${t('流量约每2秒统计一次；客户端到期或用尽额度时会自动停用。', 'Traffic is counted about every 2 seconds; clients stop working automatically when they expire or run out of quota.')}</p></div>` : ''}
-      ${persistent ? `<p class="form-hint" id="traffic-period-hint">${esc(trafficPeriodHint(traffic, trafficPeriod))}</p>` : ''}
       <section class="card list-card" aria-label="${page === 'inbounds' ? t('入站管理', 'Inbound management') : t('客户端管理', 'Client management')}"><div class="list-toolbar"><label class="search-box">${icon('search')}<span class="sr-only">${page === 'inbounds' ? t('搜索入站', 'Search inbounds') : t('搜索客户端', 'Search clients')}</span><input type="search" id="workspace-search" value="${esc(search)}" placeholder="${page === 'inbounds' ? t('搜索名称、类型或端口', 'Search name, type or port') : t('搜索客户端或入站名称', 'Search client or inbound name')}" autocomplete="off"></label>
         <label class="filter-control"><span class="sr-only">${t('筛选状态', 'Filter by status')}</span><select id="status-filter">${(page === 'inbounds' ? [['all', t('全部状态', 'All states')], ['enabled', t('已启用', 'Enabled')], ['disabled', t('已停用', 'Disabled')]] : [['all', t('全部状态', 'All states')], ['available', persistent ? t('可用', 'Available') : t('演示可用', 'Demo available')], ['unavailable', persistent ? t('不可用', 'Unavailable') : t('演示不可用', 'Demo unavailable')]]).map(([value, label]) => `<option value="${value}"${value === filter ? ' selected' : ''}>${label}</option>`).join('')}</select></label>
-        ${persistent ? `<label class="filter-control"><span class="sr-only">${t('统计周期', 'Traffic period')}</span><select id="traffic-period">${([['total', t('流量：累计', 'Traffic: lifetime')], ['day', t('流量：日', 'Traffic: day')], ['week', t('流量：周', 'Traffic: week')], ['month', t('流量：月', 'Traffic: month')]]).map(([value, label]) => `<option value="${value}"${value === trafficPeriod ? ' selected' : ''}>${label}</option>`).join('')}</select></label>` : ''}
         ${page === 'clients' ? `<label class="filter-control inbound-filter"><span class="sr-only">${t('筛选关联入站', 'Filter by linked inbound')}</span><select id="inbound-filter"><option value="">${t('全部入站', 'All inbounds')}</option>${state.inbounds.map(item => `<option value="${esc(item.id)}"${item.id === inboundFilter ? ' selected' : ''}>${esc(item.name)}</option>`).join('')}</select></label>` : ''}<button type="button" class="danger-button is-solid" data-delete-selected hidden>${icon('trash-2')}<span></span></button><span id="result-count" class="result-count" aria-live="polite"></span></div><div id="list-content"></div>
       <footer class="list-footer">${persistent ? t('在客户端的连接信息里可查看节点链接、二维码和订阅链接。', 'Open a client\'s connection info for node links, QR codes and subscription links.') : t('所有更改仅保留在本页内存中，刷新即恢复。未生成可用连接或订阅链接。', 'All changes stay in this page\'s memory and are restored on refresh. No usable connections or subscription links are generated.')}</footer></section>`;
-    if (persistent) {
-      root.querySelector('#traffic-period')!.addEventListener('change', event => {
-        trafficPeriod = (event.target as HTMLSelectElement).value as TrafficPeriod;
-        try { localStorage.setItem('o-ui.traffic-period', trafficPeriod); } catch { /* 仅影响刷新后偏好。 */ }
-        root.querySelector('#traffic-period-hint')!.textContent = trafficPeriodHint(traffic, trafficPeriod); listRows();
-      });
-    }
     root.querySelector<HTMLInputElement>('#workspace-search')!.addEventListener('input', event => { search = (event.target as HTMLInputElement).value; listRows(); });
     root.querySelector<HTMLSelectElement>('#status-filter')!.addEventListener('change', event => { filter = (event.target as HTMLSelectElement).value; listRows(); });
     root.querySelector<HTMLSelectElement>('#inbound-filter')?.addEventListener('change', event => { inboundFilter = (event.target as HTMLSelectElement).value; listRows(); });
@@ -686,7 +686,6 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
     finally {
       trafficLoading = false;
       const label = root.querySelector('#traffic-status'); if (label) label.textContent = trafficStatus(traffic, trafficError);
-      const periodHint = root.querySelector('#traffic-period-hint'); if (periodHint) periodHint.textContent = trafficPeriodHint(traffic, trafficPeriod);
       // 周期更新不替换操作按钮，避免用户的键盘焦点丢失。
       if (!root.hidden && !root.contains(document.activeElement) && !document.querySelector('dialog[open]')) listRows();
       else root.querySelectorAll<HTMLElement>('[data-client-row]').forEach(row => {
@@ -698,7 +697,7 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
         const notifyTarget = row.querySelector<HTMLElement>('[data-client-notify]');
         if (notifyTarget && !notifyTarget.contains(document.activeElement)) notifyTarget.innerHTML = notifyCell(item);
       });
-      root.querySelectorAll<HTMLElement>('[data-inbound-traffic]').forEach(cell => { cell.innerHTML = `<span class="date-value">${inboundTraffic(cell.dataset.inboundTraffic!)}</span>`; });
+      root.querySelectorAll<HTMLElement>('[data-inbound-traffic]').forEach(cell => { cell.innerHTML = inboundTraffic(cell.dataset.inboundTraffic!); });
     }
   }
   if (persistent) {

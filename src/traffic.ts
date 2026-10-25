@@ -1,5 +1,17 @@
 import { locale, t } from './i18n.ts';
+import type { Inbound } from './workspace.ts';
 export type TrafficPeriod = 'total' | 'day' | 'week' | 'month';
+export function inboundTrafficPeriod(inbound?: Pick<Inbound, 'trafficReset'>): TrafficPeriod {
+  switch (inbound?.trafficReset) {
+    case 'daily': return 'day';
+    case 'weekly': return 'week';
+    case 'monthly': return 'month';
+    default: return 'total';
+  }
+}
+export function trafficPeriodLabel(period: TrafficPeriod): string {
+  return ({ total: t('累计', 'Lifetime'), day: t('每日统计', 'Daily statistics'), week: t('每周统计', 'Weekly statistics'), month: t('每月统计', 'Monthly statistics') })[period];
+}
 export interface PeriodTraffic {
   start: string; end: string; since: string; partial: boolean;
   totals: Record<string, { uplink: string; downlink: string }>;

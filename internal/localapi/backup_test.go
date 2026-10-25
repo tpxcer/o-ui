@@ -67,6 +67,7 @@ func TestBusinessBackupAPI(t *testing.T) {
 	var draft workspaceDraft
 	_ = json.Unmarshal(validWorkspace(), &draft)
 	draft.Inbounds[0].Preset = "xhttp-tls"
+	draft.Inbounds[0].TrafficReset = "monthly"
 	draft.Inbounds[0].Listen, draft.Inbounds[0].ShareHost = "::", "proxy.example.test"
 	draft.Inbounds[0].Connection = &connectionDraft{CertificateFile: cert, KeyFile: key, ServerName: "runtime-qa.test", Path: "/test", Mode: "auto"}
 	data, _ := json.Marshal(draft)
@@ -233,7 +234,7 @@ func TestBusinessBackupAPI(t *testing.T) {
 	}
 	var next workspaceDraft
 	_ = json.Unmarshal(docs["workspace"].Data, &next)
-	if len(next.Clients) != 1 || docs["workspace"].Revision != 3 || string(docs["proxy-identities"].Data) != string(before["proxy-identities"].Data) || next.Inbounds[0].Listen != "::" || next.Inbounds[0].ShareHost != "proxy.example.test" {
+	if len(next.Clients) != 1 || docs["workspace"].Revision != 3 || string(docs["proxy-identities"].Data) != string(before["proxy-identities"].Data) || next.Inbounds[0].Listen != "::" || next.Inbounds[0].ShareHost != "proxy.example.test" || next.Inbounds[0].TrafficReset != "monthly" {
 		t.Fatal("identity/revision/workspace not restored")
 	}
 	nextLedger, err := backupLedger(docs["traffic"].Data)

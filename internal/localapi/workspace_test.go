@@ -10,6 +10,29 @@ func validWorkspace() json.RawMessage {
 	return json.RawMessage(`{"inbounds":[{"id":"in-one","name":"测试入站","preset":"reality","port":18443,"enabled":true,"sniffing":{"enabled":true,"http":true,"tls":true,"quic":true,"routeOnly":true,"fakeDns":false,"metadataOnly":false}}],"clients":[{"id":"client-one","inboundId":"in-one","name":"client","enabled":true,"quotaGB":0,"usedGB":0,"expiresAt":null,"ipLimit":0,"subscription":false}]}`)
 }
 
+func TestInboundTrafficResetSavedIndependentlyAndValidated(t *testing.T) {
+	for _, value := range []string{"never", "daily", "weekly", "monthly", "hourly", "invalid"} {
+		data := strings.Replace(string(validWorkspace()), `"preset":"reality"`, `"trafficReset":"`+value+`","preset":"reality"`, 1)
+		err := validateWorkspaceDraft(json.RawMessage(data), nil)
+		if (value == "hourly" || value == "invalid") != (err != nil) {
+			t.Fatalf("period %s: %v", value, err)
+		}
+		if err == nil {
+			var draft workspaceDraft
+			if err = json.Unmarshal([]byte(data), &draft); err != nil || draft.Inbounds[0].TrafficReset != value || draft.Clients[0].QuotaGB != 0 {
+				t.Fatal("setting lost or quota changed", err)
+			}
+			encoded, _ := json.Marshal(draft)
+			if !strings.Contains(string(encoded), `"trafficReset":"`+value+`"`) {
+				t.Fatal("setting did not round trip")
+			}
+		}
+	}
+	if err := validateWorkspaceDraft(validWorkspace(), nil); err != nil {
+		t.Fatal("old workspace rejected", err)
+	}
+}
+
 func TestValidateWorkspaceDraft(t *testing.T) {
 	valid := validWorkspace()
 	if err := validateWorkspaceDraft(valid, nil); err != nil {

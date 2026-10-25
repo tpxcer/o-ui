@@ -14,16 +14,17 @@ import (
 )
 
 type inboundDraft struct {
-	ID          string           `json:"id"`
-	Name        string           `json:"name"`
-	Preset      string           `json:"preset"`
-	Port        int              `json:"port"`
-	Listen      string           `json:"listen,omitempty"`
-	ShareHost   string           `json:"shareHost,omitempty"`
-	PortHopping string           `json:"portHopping,omitempty"` // 仅HY2：该UDP端口范围由防火墙助手转发到监听端口（端口跳跃）
-	Enabled     bool             `json:"enabled"`
-	Connection  *connectionDraft `json:"connection,omitempty"`
-	Sniffing    struct {
+	ID           string           `json:"id"`
+	Name         string           `json:"name"`
+	Preset       string           `json:"preset"`
+	Port         int              `json:"port"`
+	Listen       string           `json:"listen,omitempty"`
+	ShareHost    string           `json:"shareHost,omitempty"`
+	PortHopping  string           `json:"portHopping,omitempty"`  // 仅HY2：该UDP端口范围由防火墙助手转发到监听端口（端口跳跃）
+	TrafficReset string           `json:"trafficReset,omitempty"` // 仅展示统计周期，不重置累计限额
+	Enabled      bool             `json:"enabled"`
+	Connection   *connectionDraft `json:"connection,omitempty"`
+	Sniffing     struct {
 		Enabled         bool     `json:"enabled"`
 		HTTP            bool     `json:"http"`
 		TLS             bool     `json:"tls"`
@@ -105,6 +106,9 @@ func validateWorkspaceDraft(data, previous json.RawMessage) error {
 	}
 	ids, ports, names := map[string]bool{}, map[string]bool{}, map[string]bool{}
 	for _, in := range draft.Inbounds {
+		if in.TrafficReset != "" && in.TrafficReset != "never" && in.TrafficReset != "daily" && in.TrafficReset != "weekly" && in.TrafficReset != "monthly" {
+			return i18n.New("节点统计周期无效", "Invalid node statistics period")
+		}
 		if !draftID.MatchString(in.ID) || ids[in.ID] || strings.TrimSpace(in.Name) == "" || len([]rune(in.Name)) > 128 || in.Port < 1024 || in.Port > 65535 {
 			return i18n.New("入站标识、名称或测试端口无效（仅1024至65535）", "Invalid inbound ID, name or port (1024–65535 only)")
 		}
