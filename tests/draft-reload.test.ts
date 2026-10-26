@@ -155,6 +155,67 @@ test('四预设一键创建直接保存并显示自动防火墙结果，无需�
   }
 });
 
+test('删除客户端确认框说明是否连带入站，取消不写，确认只保存一次完整删除结果', async t => {
+  for (const shared of [false, true]) await t.test(shared ? '共享入站保留' : '最后客户端连带入站', async () => {
+    const state = workspaceFixture(), first = state.clients[0];
+    if (shared) state.clients.push({ ...first, id: 'shared-client', name: '共享客户端' });
+    let writes = 0;
+    await withPage(async (url, options) => {
+      if (String(url).endsWith('/api/workspace') && options?.method === 'PUT') {
+        writes++;
+        const sent = JSON.parse(String(options.body));
+        assert.equal(sent.revision, 1);
+        assert.equal(sent.data.clients.some((item: any) => item.id === first.id), false);
+        assert.equal(sent.data.inbounds.some((item: any) => item.id === first.inboundId), shared);
+        assert.equal(sent.data.clients.length, state.clients.length - 1);
+        return Response.json({ revision: 2, data: sent.data, applied: true });
+      }
+      return Response.json({ revision: 1, data: state });
+    }, async (root, dialogs) => {
+      initManagement(root as unknown as HTMLElement, () => {}, () => {}, () => {}, true).render('clients'); await settle();
+      clickWorkspace(root, 'data-op', 'delete-client', first.id);
+      const dialog = dialogs.find(item => item.id === 'edit-dialog')!;
+      assert.match(dialog.innerHTML, shared ? /仍有其他客户端，入站保留/ : /同步删除不再有客户端的/);
+      if (!shared) assert.ok(dialog.innerHTML.includes(state.inbounds.find(item => item.id === first.inboundId)!.name));
+      assert.equal(writes, 0);
+      dialog.close(); await settle(); assert.equal(writes, 0);
+      clickWorkspace(root, 'data-op', 'delete-client', first.id);
+      dialog.querySelector('form').fire('submit'); await settle();
+      assert.equal(writes, 1);
+      assert.equal(dialog.open, false);
+    });
+  });
+});
+
+test('批量客户端删除在同一修订中同步删除空入站，冲突后保留列表并阻止重复写', async () => {
+  const state = workspaceFixture(); let writes = 0;
+  await withPage(async (url, options) => {
+    if (String(url).endsWith('/api/workspace') && options?.method === 'PUT') {
+      writes++;
+      const sent = JSON.parse(String(options.body));
+      assert.equal(sent.data.clients.length, 2);
+      assert.equal(sent.data.inbounds.length, 2);
+      return Response.json({ error: '测试修订冲突' }, { status: 409 });
+    }
+    return Response.json({ revision: 1, data: state });
+  }, async (root, dialogs) => {
+    initManagement(root as unknown as HTMLElement, () => {}, () => {}, () => {}, true).render('clients'); await settle();
+    for (const client of state.clients.slice(0, 2)) {
+      const box = new Control(); box.dataset.select = client.id; box.checked = true; root.fire('change', { target: box });
+    }
+    clickWorkspace(root, 'data-delete-selected');
+    const dialog = dialogs.find(item => item.id === 'edit-dialog')!;
+    assert.match(dialog.innerHTML, /2 个客户端/);
+    assert.match(dialog.innerHTML, /2 个入站/);
+    dialog.querySelector('form').fire('submit'); await settle();
+    assert.equal(writes, 1);
+    assert.match(dialog.querySelector('.form-error').textContent, /输入已保留/);
+    assert.equal(dialog.querySelector('form').querySelector('[type="submit"]').disabled, true);
+    dialog.querySelector('form').fire('submit'); await settle(); assert.equal(writes, 1);
+    for (const client of state.clients) assert.ok(root.querySelector('#list-content').innerHTML.includes(client.name));
+  });
+});
+
 test('客户端启用与最近上线分列，在线有效采样显示速度，离线与未知不显示速度行', async () => {
   const state = workspaceFixture();
   state.clients.forEach(client => { client.enabled = true; client.expiresAt = null; client.quotaGB = 0; });

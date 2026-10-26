@@ -354,6 +354,19 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
   function confirm(title: string, text: string, label: string, apply: () => void): void {
     openModal(persistent ? title.replaceAll(t('演示', 'demo '), '') : title, `<p class="confirm-copy">${esc(persistent ? text.replaceAll(t('演示', 'demo '), '') : text)}</p><p class="form-hint">${persistent ? t('确认后立即保存并生效。', 'Saved and applied right after you confirm.') : t('仅影响当前内存中的演示数据，刷新恢复。不会操作 VPS。', 'Affects only in-memory demo data; refreshing restores it.')}</p>`, label, () => { apply(); announce(t('演示数据已更改 · 未应用 Xray', 'Demo data changed · Xray not applied')); });
   }
+  function confirmDeleteClients(ids: string[], title: string): void {
+    const names = state.clients.filter(item => ids.includes(item.id)).map(item => item.name);
+    if (!names.length) return;
+    const next = deleteRecords(state, [], ids), retained = new Set(next.inbounds.map(item => item.id));
+    const removed = state.inbounds.filter(item => !retained.has(item.id)).map(item => item.name);
+    const consequence = removed.length
+      ? `${t(' 将同步删除不再有客户端的 ', ' Also deletes ')}${removed.length}${t(' 个入站：', ' inbounds with no remaining clients: ')}${removed.join(t('、', ', '))}${t('。', '.')}`
+      : t(' 所属入站仍有其他客户端，入站保留。', ' The linked inbounds still have other clients and are kept.');
+    confirm(title, `${t('将删除 ', 'Deletes ')}${names.length}${t(' 个客户端：', ' clients: ')}${names.join(t('、', ', '))}${t('。其连接与订阅随之失效。', '. Their connections and subscriptions stop working.')}${consequence}`, t('确认删除', 'Confirm delete'), () => {
+      state = deleteRecords(state, [], ids);
+      for (const id of ids) selected.delete(id);
+    });
+  }
   function operate(action: string, id: string): void {
     const inbound = state.inbounds.find(item => item.id === id), client = state.clients.find(item => item.id === id);
     if (action === 'connection' && client) showConnection?.(client.id, client.name, revision);
@@ -371,9 +384,7 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
       const linked = state.clients.filter(item => item.inboundId === id).length;
       confirm(t('删除一个演示入站', 'Delete a demo inbound'), `${t('删除“', 'Deletes “')}${inbound.name}${t('”', '”')}${linked ? `${t('及其 ', ' and its ')}${linked}${t(' 个客户端，客户端的连接与订阅随之失效。', ' clients; their connections and subscriptions stop working.')}` : t('。', '.')}`, t('确认删除', 'Confirm delete'), () => { state = deleteRecords(state, [id]); });
     }
-    if (action === 'delete-client' && client) confirm(t('删除一个演示客户端', 'Delete a demo client'), `${t('仅删除客户端“', 'Deletes only client “')}${client.name}${t('”，保留其关联入站及其他客户端。', '”; its linked inbound and other clients are kept.')}`, t('确认删除', 'Confirm delete'), () => {
-      state = { ...state, clients: state.clients.filter(item => item.id !== id) };
-    });
+    if (action === 'delete-client' && client) confirmDeleteClients([id], t('删除一个演示客户端', 'Delete a demo client'));
   }
   // 面板设置里关闭了订阅服务时，所有订阅链接都不返回内容；此时不再按客户端各自的选项显示“订阅开启”。
   const subscriptionLabel = (item: Client) => persistent && subscriptionService === false ? t('订阅已停用（全局）', 'Subscriptions off (global)') : item.subscription ? t('订阅开启', 'Subscription on') : t('订阅关闭', 'Subscription off');
@@ -440,8 +451,7 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
       const names = state.inbounds.filter(item => selected.has(item.id)).map(item => item.name), linked = state.clients.filter(item => selected.has(item.inboundId)).length;
       confirm(t('删除所选入站', 'Delete selected inbounds'), `${t('将删除 ', 'Deletes ')}${names.length}${t(' 个入站', ' inbounds')}${linked ? `${t('及其 ', ' and their ')}${linked}${t(' 个客户端', ' clients')}` : ''}${t('：', ': ')}${names.join(t('、', ', '))}${t('。', '.')}`, t('确认删除', 'Confirm delete'), () => { state = deleteRecords(state, ids); selected.clear(); });
     } else {
-      const names = state.clients.filter(item => selected.has(item.id)).map(item => item.name);
-      confirm(t('删除所选客户端', 'Delete selected clients'), `${t('将删除 ', 'Deletes ')}${names.length}${t(' 个客户端：', ' clients: ')}${names.join(t('、', ', '))}${t('。其连接与订阅随之失效，入站保留。', '. Their connections and subscriptions stop working; inbounds are kept.')}`, t('确认删除', 'Confirm delete'), () => { state = deleteRecords(state, [], ids); selected.clear(); });
+      confirmDeleteClients(ids, t('删除所选客户端', 'Delete selected clients'));
     }
   }
   function listRows(): void {

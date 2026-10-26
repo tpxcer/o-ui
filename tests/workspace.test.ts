@@ -69,6 +69,45 @@ test('删除入站一并删除其客户端，可批量删除；新增需有入�
   assert.equal(removed.inbounds.length, 3);
 });
 
+test('删除最后一个客户端同步删除所属入站，不影响其他记录或原数据', () => {
+  const state = seedWorkspace(now), before = structuredClone(state);
+  const removed = deleteRecords(state, [], ['demo-1-client']);
+  assert.equal(removed.inbounds.some(item => item.id === 'demo-1'), false);
+  assert.equal(removed.clients.some(item => item.id === 'demo-1-client'), false);
+  assert.deepEqual(removed.inbounds, state.inbounds.filter(item => item.id !== 'demo-1'));
+  assert.deepEqual(removed.clients, state.clients.filter(item => item.id !== 'demo-1-client'));
+  assert.deepEqual(state, before);
+  assert.deepEqual(deleteRecords({ inbounds: [state.inbounds[0]], clients: [state.clients[0]] }, [], ['demo-1-client']), { inbounds: [], clients: [] });
+});
+
+test('入站下还有其他客户端时保留，包括已停用或到期的客户端', () => {
+  const state = addClient(seedWorkspace(now), 'demo-1', { ...client, name: '共享客户端' }, 'shared');
+  state.clients.find(item => item.id === 'shared')!.enabled = false;
+  state.clients.find(item => item.id === 'shared')!.expiresAt = now - 1;
+  const removed = deleteRecords(state, [], ['demo-1-client']);
+  assert.deepEqual(removed.inbounds, state.inbounds);
+  assert.equal(removed.clients.find(item => item.id === 'shared')!.inboundId, 'demo-1');
+  const last = deleteRecords(removed, [], ['shared']);
+  assert.equal(last.inbounds.some(item => item.id === 'demo-1'), false);
+});
+
+test('批量删除按剩余客户端判断，仅清理本次涉及的空入站', () => {
+  const state = addClient(seedWorkspace(now), 'demo-1', { ...client, name: '共享客户端' }, 'shared');
+  state.inbounds.push({ ...state.inbounds[0], id: 'existing-empty', name: '原本空入站' });
+  const partial = deleteRecords(state, [], ['demo-1-client', 'demo-2-client']);
+  assert.equal(partial.inbounds.some(item => item.id === 'demo-1'), true);
+  assert.equal(partial.inbounds.some(item => item.id === 'demo-2'), false);
+  assert.equal(partial.inbounds.some(item => item.id === 'existing-empty'), true);
+  const all = deleteRecords(state, [], ['demo-1-client', 'shared', 'demo-2-client', 'shared', 'missing']);
+  assert.equal(all.inbounds.some(item => ['demo-1', 'demo-2'].includes(item.id)), false);
+  assert.equal(all.inbounds.some(item => item.id === 'existing-empty'), true);
+  assert.deepEqual(deleteRecords(state, [], ['missing']), state);
+  assert.deepEqual(deleteRecords(state, [], []), state);
+  const mixed = deleteRecords(state, ['demo-1'], ['demo-2-client']);
+  assert.equal(mixed.clients.some(item => ['demo-1', 'demo-2'].includes(item.inboundId)), false);
+  assert.equal(mixed.inbounds.some(item => ['demo-1', 'demo-2'].includes(item.id)), false);
+});
+
 test('演示状态区分手动禁用、入站停用、到期和用尽，0流量上限表示不限', () => {
   const state = seedWorkspace(now), inbound = state.inbounds[0], item = state.clients[0];
   assert.equal(clientStatus(item, inbound, now), '可用');

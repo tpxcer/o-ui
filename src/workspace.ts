@@ -92,10 +92,14 @@ export function addClient(state: Workspace, inboundId: string, input: ClientInpu
   return { ...state, clients: [...state.clients, { ...input, name: input.name.trim(), id, inboundId, enabled: true, usedGB: 0, ...reverse }] };
 }
 
-// 删除入站时其客户端一并删除，可同时删除多个入站和客户端（用户2026-10-22决定，页面先列出将删除的项目并确认）。
+// 删除入站时其客户端一并删除；删掉最后一个客户端时同步删除所属入站，不清理无关空入站。
 export function deleteRecords(state: Workspace, inboundIds: string[], clientIds: string[] = []): Workspace {
   const inbounds = new Set(inboundIds), clients = new Set(clientIds);
-  return { inbounds: state.inbounds.filter(item => !inbounds.has(item.id)), clients: state.clients.filter(item => !clients.has(item.id) && !inbounds.has(item.inboundId)) };
+  const affected = new Set(state.clients.filter(item => clients.has(item.id)).map(item => item.inboundId));
+  const remaining = state.clients.filter(item => !clients.has(item.id) && !inbounds.has(item.inboundId));
+  for (const client of remaining) affected.delete(client.inboundId);
+  for (const id of affected) inbounds.add(id);
+  return { inbounds: state.inbounds.filter(item => !inbounds.has(item.id)), clients: remaining };
 }
 
 export function deleteInbound(state: Workspace, id: string): Workspace {
