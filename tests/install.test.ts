@@ -54,7 +54,7 @@ exec "$@"`,
 echo "systemctl $*" >>"$s/calls.log"
 unit="$O_UI_ROOT_PREFIX/etc/systemd/system/o-ui.service"
 case "$1" in
-  show) case "$4" in Id) echo "\${FAKE_SERVICE_ID:-$2}" ;; ControlGroup) echo "\${FAKE_WEBSITE_CGROUP:-/system.slice/$2}" ;; LoadState) echo "\${FAKE_WEBSITE_LOAD:-loaded}" ;; TriggeredBy) printf '%s' "\${FAKE_WEBSITE_SOCKET:-}" ;; esac; exit 0 ;;
+  show) case "$4" in MainPID) echo "\${FAKE_MAIN_PID:-4242}" ;; Id) echo "\${FAKE_SERVICE_ID:-$2}" ;; ControlGroup) echo "\${FAKE_WEBSITE_CGROUP:-/system.slice/$2}" ;; LoadState) echo "\${FAKE_WEBSITE_LOAD:-loaded}" ;; TriggeredBy) printf '%s' "\${FAKE_WEBSITE_SOCKET:-}" ;; esac; exit 0 ;;
   is-active) for u; do :; done; if [ "$u" = "$(cat "$s/website-unit" 2>/dev/null)" ]; then [ -f "$s/website-active" ]; exit; fi; case $u in o-ui-update) [ -f "$s/update-active" ] ;; o-ui-cert-renew.timer) [ -z "$FAKE_TIMER_FAIL" ] && [ -f "$s/timer" ] ;; *) [ -f "$s/active" ] ;; esac; exit ;;
   is-enabled) for u; do :; done; case $u in o-ui-cert-renew.timer) [ -f "$s/timer" ] ;; ufw) [ -f "$s/ufw-enabled" ] ;; *) [ -f "$s/enabled" ] ;; esac; exit ;;
   enable) for u; do :; done; case $u in o-ui) : >"$s/enabled" ;; o-ui-cert-renew.timer) : >"$s/timer" ;; ufw) : >"$s/ufw-enabled" ;; esac; exit 0 ;;
@@ -69,6 +69,14 @@ case "$1" in
 esac
 exit 0`,
   ss: `if [ "$1" = -H ]; then
+  if [ "$2" = -lntp ] && [ $# -eq 2 ]; then
+    [ -z "\${FAKE_PANEL_SS_FAIL:-}" ] || exit 1
+    if [ -f "$FAKE_STATE/active" ] && [ -z "\${FAKE_NO_PANEL_LISTENER:-}" ]; then
+      p=\${FAKE_PANEL_PORT:-$(cat "$FAKE_STATE/listening")}
+      echo "LISTEN 0 4096 0.0.0.0:$p 0.0.0.0:* users:((\\"o-ui\\",pid=\${FAKE_PANEL_LISTENER_PID:-4242},fd=14))"
+    fi
+    exit 0
+  fi
   [ -z "\${FAKE_SS_FAIL:-}" ] || exit 1
   if [ -f "$FAKE_STATE/website-active" ] || [ -n "\${FAKE_PORT_STAYS:-}" ]; then cat "$FAKE_STATE/website-listeners"; fi
   if grep -qx 80 "$FAKE_STATE/listening-extra" 2>/dev/null; then echo 'LISTEN 0 4096 0.0.0.0:80 0.0.0.0:*'; fi
@@ -824,6 +832,40 @@ test('升级保留数据并保留上一版本；新版本启动失败自动回�
   assert.match(bad.out, /已回退到 v0\.2\.0/);
   assert.equal(await box.read('opt/o-ui/VERSION'), 'v0.2.0\n');
   assert.ok(existsSync(join(box.state, 'active')));
+});
+
+test('网页改过面板端口后升级：按主进程监听验活，不因安装配置旧端口误回退', async () => {
+  const box = await sandbox();
+  assert.equal(box.run(['install', '--package', box.pkg], [...start(), ...acme(), 'n']).status, 0);
+  const oldPort = (await conf(box)).OUI_PORT;
+  const command = join(box.root, 'usr/local/bin/o-ui');
+  const previous = (await readFile(command, 'utf8')).replaceAll('panel_process_listening ||', 'port_in_use "$OUI_PORT" ||');
+  await writeFile(command, previous);
+  const dir = join(box.base, 'changed-port'); await mkdir(dir);
+  const result = box.run(['update', '--package', await makePackage(dir, { version: 'v0.2.0' })], [], { FAKE_PANEL_PORT: '1266' });
+  assert.equal(result.status, 0, result.out);
+  assert.equal(await box.read('opt/o-ui/VERSION'), 'v0.2.0\n');
+  assert.equal((await conf(box)).OUI_PORT, oldPort, '验活不得改写用户监听设置');
+  assert.match(await readFile(command, 'utf8'), /panel_process_listening \|\|/, '旧管理脚本须交接给包内修正版完成升级');
+  assert.doesNotMatch(result.out, /已回退/);
+});
+
+test('启动检查拒绝无监听、其他进程监听和无效MainPID，不能只凭active或旧端口判成功', async () => {
+  const cases: Record<string, string>[] = [
+    { FAKE_NO_PANEL_LISTENER: '1' },
+    { FAKE_PANEL_LISTENER_PID: '14242' },
+    { FAKE_MAIN_PID: '0' },
+    { FAKE_PANEL_SS_FAIL: '1' },
+  ];
+  for (const env of cases) {
+    const box = await sandbox();
+    assert.equal(box.run(['install', '--package', box.pkg], [...start(), ...acme(), 'n']).status, 0);
+    const dir = join(box.base, 'not-ready'); await mkdir(dir);
+    const result = box.run(['update', '--package', await makePackage(dir, { version: 'v0.2.0' })], [], env);
+    assert.notEqual(result.status, 0, result.out);
+    assert.match(result.out, /已回退到 v0\.1\.0/);
+    assert.equal(await box.read('opt/o-ui/VERSION'), 'v0.1.0\n');
+  }
 });
 
 test('卸载默认保留数据与证书；重新安装沿用数据；--purge须输入DELETE并删除全部', async () => {

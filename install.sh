@@ -406,13 +406,21 @@ renew_timer_disable() {
   fi
 }
 
-# Type=simple启动即active，再确认端口已监听且进程仍在；无ss时只看服务状态
+# 网页可修改监听地址；启动检查以systemd主进程的实际TCP监听为准。
+panel_process_listening() {
+  local pid
+  pid=$(systemctl show o-ui -p MainPID --value 2>/dev/null) || return 1
+  case $pid in ''|0|*[!0-9]*) return 1 ;; esac
+  ss -H -lntp 2>/dev/null | awk -v pid="$pid" 'index($0, "pid=" pid ",") { found = 1 } END { exit !found }'
+}
+
+# Type=simple启动即active，再确认主进程监听并稳定存活；无ss时只看服务状态。
 wait_active() {
   local i=0
   while [ $i -lt 20 ]; do
-    if systemctl is-active --quiet o-ui && { port_in_use "$OUI_PORT" || { ! command -v ss >/dev/null 2>&1 && [ $i -ge 3 ]; }; }; then
+    if systemctl is-active --quiet o-ui && { panel_process_listening || { ! command -v ss >/dev/null 2>&1 && [ $i -ge 3 ]; }; }; then
       sleep 1
-      systemctl is-active --quiet o-ui && return 0
+      if systemctl is-active --quiet o-ui && { panel_process_listening || ! command -v ss >/dev/null 2>&1; }; then return 0; fi
     fi
     sleep 1
     i=$((i + 1))
