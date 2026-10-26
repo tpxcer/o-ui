@@ -198,7 +198,7 @@ func TestTelegramBotSkipsBacklog(t *testing.T) {
 	}
 }
 
-// 机器人一键创建与网页一致：名称“地区-类型-日期”，同名加(1)；分享主机无证书时用公网IP；REALITY目标默认www.amd.com。
+// 机器人一键创建与网页一致：名称“类型-日期”，不带地区，同名加(1)；分享主机无证书时用公网IP；REALITY目标默认www.amd.com。
 func TestTelegramBotQuickCreate(t *testing.T) {
 	_, rt, _, _ := subscriptionFixture(t)
 	rt.public.fetch = func(_ context.Context, network string) (*publicAddress, error) {
@@ -213,11 +213,11 @@ func TestTelegramBotQuickCreate(t *testing.T) {
 	}
 	date := time.Now().Format("2006.01.02")
 	first, firstClient, _, err := rt.botQuickCreate(ctx, "reality", "zh")
-	if err != nil || first != "台湾-Reality-"+date {
+	if err != nil || first != "Reality-"+date {
 		t.Fatal(first, err)
 	}
 	second, _, _, err := rt.botQuickCreate(ctx, "reality", "zh")
-	if err != nil || second != "台湾-Reality-"+date+"(1)" {
+	if err != nil || second != "Reality-"+date+"(1)" {
 		t.Fatal("same type and day should get a (1) suffix", second, err)
 	}
 	doc, _ := rt.state.ReadDocument(ctx, "workspace")

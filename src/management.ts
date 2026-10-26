@@ -15,7 +15,7 @@ import type { RuntimeStatus } from './runtime.ts';
 import { workspaceStatusText } from './workspace-status.ts';
 import { firewallStatusText, oldFirewallCleanupAllowed, type FirewallReport } from './firewall-status.ts';
 import { confirmAction } from './confirm.ts';
-import { regionLabel, regionName, type PublicInfo } from './server-plan-model.ts';
+import { regionLabel, type PublicInfo } from './server-plan-model.ts';
 import './management.css';
 import { lang, locale, t } from './i18n.ts';
 
@@ -231,7 +231,7 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
       const shareHost = domain || info?.ipv4?.ip || info?.ipv6?.ip || '';
       if (!shareHost) throw new Error(t('面板没有证书域名，也未查询到服务器公网 IP，请用“添加入站”手动填写分享主机。', 'There is no certificate domain and the public IP is unknown; use Add inbound and enter the share host manually.'));
       const client = { name: randomName(), quotaGB: 0, ipLimit: 0, expiresAt: null, subscription: true };
-      const name = quickInboundName(regionName(info), presets[preset].label, new Date(), state.inbounds.map(item => item.name));
+      const name = quickInboundName(presets[preset].label, new Date(), state.inbounds.map(item => item.name));
       state = createQuick(state, { ...client, preset, port: free.port, sniffing: defaultSniffing() }, crypto.randomUUID());
       const inbound = state.inbounds.at(-1)!;
       Object.assign(inbound, { name, connection: tls ? { ...defaultConnection(), usePanelCertificate: true } : newRealityConnection(), listen: '0.0.0.0', shareHost, portHopping: free.portHopping });

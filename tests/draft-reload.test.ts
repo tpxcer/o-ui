@@ -129,6 +129,7 @@ test('四预设一键创建直接保存并显示自动防火墙结果，无需�
             assert.equal(inbound.preset, preset);
             assert.equal(inbound.port, 58443);
             assert.equal(inbound.listen, '0.0.0.0');
+            assert.match(inbound.name, /^(Reality|XHTTP-Reality|XHTTP-TLS|HY2)-\d{4}\.\d{2}\.\d{2}$/);
             assert.equal(inbound.portHopping, preset === 'hy2' ? '48000-48199' : undefined);
             if (preset === 'hy2' || preset === 'xhttp-tls') assert.equal(inbound.connection.usePanelCertificate, true);
             return Response.json({ revision: 2, data: sent.data, applied, applyError: applied ? '' : '测试预检失败', firewall: '测试自动放行结果' });
@@ -137,7 +138,7 @@ test('四预设一键创建直接保存并显示自动防火墙结果，无需�
         }
         if (path.includes('/api/system/free-port?')) return Response.json({ port: 58443, ...(preset === 'hy2' ? { portHopping: '48000-48199' } : {}) });
         if (path.endsWith('/api/panel/tls')) return Response.json({ active: true, serverNames: ['panel.example.com'] });
-        if (path.endsWith('/api/system/public')) return Response.json({ ipv4: { ip: '203.0.113.10' } });
+        if (path.endsWith('/api/system/public')) return Response.json({ ipv4: { ip: '203.0.113.10', country: 'US' } });
         return Response.json({ totals: {}, clients: [], data: { enabled: false } });
       }, async root => {
         initManagement(root as unknown as HTMLElement, () => {}, () => {}, () => {}, true).render('inbounds');

@@ -131,13 +131,15 @@ func TestInstallerOfflineSetupProcess(t *testing.T) {
 		conn.Close()
 		t.Fatal("fallback HTTP listener opened despite saved HTTPS access")
 	}
-	plain, err := http.Get("http://" + address + "/api/auth/status")
-	if err == nil {
-		data, _ := io.ReadAll(plain.Body)
-		plain.Body.Close()
-		if plain.StatusCode == 200 || strings.Contains(string(data), "initialized") {
-			t.Fatal("plain HTTP reached the panel API")
-		}
+	plainClient := &http.Client{Timeout: 2 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	plain, err := plainClient.Get("http://" + address + "/api/auth/status")
+	if err != nil {
+		t.Fatal("plain HTTP redirect failed", err)
+	}
+	data, _ = io.ReadAll(plain.Body)
+	plain.Body.Close()
+	if plain.StatusCode != 308 || plain.Header.Get("Location") != origin+"/api/auth/status" || strings.Contains(string(data), "initialized") || len(plain.Cookies()) != 0 {
+		t.Fatal("plain HTTP must only redirect without exposing API or setting a session")
 	}
 	if response, data := call("GET", "/api/auth/status", nil); response.StatusCode != 200 || !strings.Contains(string(data), `"initialized":true`) {
 		t.Fatal("first HTTPS status mismatch", response.StatusCode, string(data))

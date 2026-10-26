@@ -102,10 +102,10 @@ export function deleteInbound(state: Workspace, id: string): Workspace {
   return deleteRecords(state, [id]);
 }
 
-// 一键创建的入站名称：地区-类型-日期（如“台湾-HY2-2026.10.22”），同名已存在时依次加(1)、(2)…
-export function quickInboundName(region: string, label: string, date: Date, names: string[]): string {
+// 一键创建的入站名称：类型-日期，同名已存在时依次加(1)、(2)…
+export function quickInboundName(label: string, date: Date, names: string[]): string {
   const pad = (n: number) => String(n).padStart(2, '0');
-  const base = `${region}-${label}-${date.getFullYear()}.${pad(date.getMonth() + 1)}.${pad(date.getDate())}`;
+  const base = `${label}-${date.getFullYear()}.${pad(date.getMonth() + 1)}.${pad(date.getDate())}`;
   if (!names.includes(base)) return base;
   let n = 1;
   while (names.includes(`${base}(${n})`)) n++;

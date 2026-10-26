@@ -277,7 +277,7 @@ func run() int {
 	}
 	serve := server.ListenAndServe
 	if panelTLS != nil {
-		serve = func() error { return server.ListenAndServeTLS("", "") }
+		serve = func() error { return localapi.ListenAndServePanelTLS(server, access) }
 	}
 	if err := serve(); err != nil && err != http.ErrServerClosed {
 		log.Print(err)

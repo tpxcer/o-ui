@@ -100,13 +100,14 @@ test('反向代理标签只用于VLESS入站且唯一，留空时不写入', () 
   assert.equal('reverseTag' in JSON.parse(JSON.stringify(state.clients[0])), false);
 });
 
-test('一键创建入站名称为地区-类型-日期，同名依次加(1)(2)', () => {
+test('一键创建入站名称为类型-日期，不带地区，同名依次加(1)(2)', () => {
   const day = new Date(2026, 9, 22, 9, 30);
-  assert.equal(quickInboundName('台湾', 'HY2', day, []), '台湾-HY2-2026.10.22');
-  assert.equal(quickInboundName('台湾', 'HY2', day, ['台湾-HY2-2026.10.22']), '台湾-HY2-2026.10.22(1)');
-  assert.equal(quickInboundName('台湾', 'HY2', day, ['台湾-HY2-2026.10.22', '台湾-HY2-2026.10.22(1)']), '台湾-HY2-2026.10.22(2)');
-  assert.equal(quickInboundName('台湾', 'Reality', day, ['台湾-HY2-2026.10.22']), '台湾-Reality-2026.10.22');
-  assert.equal(quickInboundName('美国', 'HY2', new Date(2026, 0, 5), []), '美国-HY2-2026.01.05');
+  assert.equal(quickInboundName('HY2', day, []), 'HY2-2026.10.22');
+  assert.equal(quickInboundName('HY2', day, ['台湾-HY2-2026.10.22']), 'HY2-2026.10.22');
+  assert.equal(quickInboundName('HY2', day, ['HY2-2026.10.22']), 'HY2-2026.10.22(1)');
+  assert.equal(quickInboundName('HY2', day, ['HY2-2026.10.22', 'HY2-2026.10.22(1)']), 'HY2-2026.10.22(2)');
+  assert.equal(quickInboundName('Reality', day, ['HY2-2026.10.22']), 'Reality-2026.10.22');
+  assert.equal(quickInboundName('HY2', new Date(2026, 0, 5), []), 'HY2-2026.01.05');
 });
 
 test('流量自动单位：字节取整，去掉多余的0', async () => {

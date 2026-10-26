@@ -277,7 +277,9 @@ func TestBrowserFixture(t *testing.T) {
 	if panelTLS != nil {
 		scheme = "https"
 		server.TLSConfig = panelTLS.Config()
-		go func() { _ = server.ServeTLS(listener, "", "") }()
+		server.TLSConfig.NextProtos = []string{"h2", "http/1.1"}
+		server.Handler = panelHTTPSRedirect(server.Handler, &PanelAccess{Data: PanelAccessDraft{Listen: address}})
+		go func() { _ = server.Serve(newPanelProtocolListener(listener, server.TLSConfig.Clone())) }()
 	} else {
 		go func() { _ = server.Serve(listener) }()
 	}

@@ -239,12 +239,14 @@ func TestPanelHTTPSProcessLifecycle(t *testing.T) {
 			t.Fatal("secure session would be sent over HTTP")
 		}
 	}
-	plainClient := &http.Client{Transport: transport, Timeout: 2 * time.Second}
-	if response, err := plainClient.Get("http://" + address + "/api/auth/status"); err == nil {
-		response.Body.Close()
-		if response.StatusCode != http.StatusBadRequest {
-			t.Fatal("HTTPS listener accepted a plaintext API request")
-		}
+	plainClient := &http.Client{Transport: transport, Timeout: 2 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	response, err := plainClient.Get("http://" + address + "/api/auth/status")
+	if err != nil {
+		t.Fatal("plaintext redirect failed", err)
+	}
+	response.Body.Close()
+	if response.StatusCode != 308 || response.Header.Get("Location") != "https://"+address+"/api/auth/status" || len(response.Cookies()) != 0 {
+		t.Fatal("HTTPS listener did not safely redirect plaintext")
 	}
 	_, cookies = call("POST", "/api/auth/logout", map[string]any{}, 200)
 	if len(cookies) != 1 || !cookies[0].Secure || cookies[0].MaxAge != -1 {
@@ -297,7 +299,7 @@ func TestPanelHTTPSProcessLifecycle(t *testing.T) {
 	call("POST", "/api/auth/setup", credentials, 403)
 	wrongHost, _ := http.NewRequest("GET", base+"/api/auth/status", nil)
 	wrongHost.Host = address
-	response, err := client.Do(wrongHost)
+	response, err = client.Do(wrongHost)
 	if err != nil {
 		t.Fatal("fixed host boundary request failed", err)
 	}
@@ -315,9 +317,19 @@ func TestPanelHTTPSProcessLifecycle(t *testing.T) {
 	}
 	if response, err := plainClient.Get("http://" + publicAddress + "/api/auth/status"); err == nil {
 		response.Body.Close()
-		if response.StatusCode != 400 {
-			t.Fatal("explicit HTTPS mode accepted plaintext")
+		if response.StatusCode != 403 {
+			t.Fatal("plaintext host boundary changed")
 		}
+	}
+	plainRequest, _ := http.NewRequest("GET", "http://"+publicAddress+"/panel/?q=1", nil)
+	plainRequest.Host = "panel-process-qa.invalid:" + publicPort
+	response, err = plainClient.Do(plainRequest)
+	if err != nil {
+		t.Fatal("public plaintext redirect failed", err)
+	}
+	response.Body.Close()
+	if response.StatusCode != 308 || response.Header.Get("Location") != publicOrigin+"/panel/?q=1" {
+		t.Fatal("public plaintext redirect target invalid", response.StatusCode, response.Header)
 	}
 	stop()
 	// 损坏只作用于临时源文件；实际main须拒绝启动且不能回退HTTP。

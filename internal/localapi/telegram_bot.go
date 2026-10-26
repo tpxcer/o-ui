@@ -635,75 +635,6 @@ func (rt *Runtime) botSaveWorkspace(ctx context.Context, mutate func(*workspaceD
 	return result, nil
 }
 
-// countryName：一键创建入站名称用的国家名（常见VPS所在地），查不到时用国家代码。
-func countryName(code, lang string) string {
-	switch code {
-	case "US":
-		return i18n.Pick(lang, "美国", "United States")
-	case "JP":
-		return i18n.Pick(lang, "日本", "Japan")
-	case "HK":
-		return i18n.Pick(lang, "香港", "Hong Kong")
-	case "TW":
-		return i18n.Pick(lang, "台湾", "Taiwan")
-	case "SG":
-		return i18n.Pick(lang, "新加坡", "Singapore")
-	case "KR":
-		return i18n.Pick(lang, "韩国", "South Korea")
-	case "DE":
-		return i18n.Pick(lang, "德国", "Germany")
-	case "GB":
-		return i18n.Pick(lang, "英国", "United Kingdom")
-	case "FR":
-		return i18n.Pick(lang, "法国", "France")
-	case "NL":
-		return i18n.Pick(lang, "荷兰", "Netherlands")
-	case "CA":
-		return i18n.Pick(lang, "加拿大", "Canada")
-	case "AU":
-		return i18n.Pick(lang, "澳大利亚", "Australia")
-	case "RU":
-		return i18n.Pick(lang, "俄罗斯", "Russia")
-	case "IN":
-		return i18n.Pick(lang, "印度", "India")
-	case "MY":
-		return i18n.Pick(lang, "马来西亚", "Malaysia")
-	case "TH":
-		return i18n.Pick(lang, "泰国", "Thailand")
-	case "VN":
-		return i18n.Pick(lang, "越南", "Vietnam")
-	case "PH":
-		return i18n.Pick(lang, "菲律宾", "Philippines")
-	case "ID":
-		return i18n.Pick(lang, "印度尼西亚", "Indonesia")
-	case "TR":
-		return i18n.Pick(lang, "土耳其", "Turkey")
-	case "AE":
-		return i18n.Pick(lang, "阿联酋", "United Arab Emirates")
-	case "BR":
-		return i18n.Pick(lang, "巴西", "Brazil")
-	case "IT":
-		return i18n.Pick(lang, "意大利", "Italy")
-	case "ES":
-		return i18n.Pick(lang, "西班牙", "Spain")
-	case "SE":
-		return i18n.Pick(lang, "瑞典", "Sweden")
-	case "CH":
-		return i18n.Pick(lang, "瑞士", "Switzerland")
-	case "PL":
-		return i18n.Pick(lang, "波兰", "Poland")
-	case "FI":
-		return i18n.Pick(lang, "芬兰", "Finland")
-	case "MO":
-		return i18n.Pick(lang, "澳门", "Macao")
-	case "CN":
-		return i18n.Pick(lang, "中国", "China")
-	case "":
-		return i18n.Pick(lang, "未知地区", "Unknown region")
-	}
-	return code
-}
-
 func randomText(n int) string {
 	const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
 	out := make([]byte, n)
@@ -723,7 +654,7 @@ func randomUUID() string {
 }
 
 // botQuickCreate与网页“一键创建”相同：随机空闲端口（HY2另配端口跳跃范围），分享主机优先面板证书域名，
-// 名称为“地区-类型-日期”，同名加(1)、(2)…；TLS类复用面板证书。
+// 名称为“类型-日期”，同名加(1)、(2)…；TLS类复用面板证书。
 func (rt *Runtime) botQuickCreate(ctx context.Context, preset, lang string) (string, string, savedDocument, error) {
 	label := presetLabel(preset)
 	if label == "" {
@@ -743,21 +674,17 @@ func (rt *Runtime) botQuickCreate(ctx context.Context, preset, lang string) (str
 		return "", "", savedDocument{}, i18n.New("Hysteria2 和 XHTTP TLS 需要面板证书，请先在“面板设置”配置证书", "Hysteria2 and XHTTP TLS need the panel certificate; configure it in Panel settings first")
 	}
 	info := rt.public.get()
-	shareHost, country := domain, ""
+	shareHost := domain
 	for _, address := range []*publicAddress{info.IPv4, info.IPv6} {
 		if address != nil {
 			if shareHost == "" {
 				shareHost = address.IP
-			}
-			if country == "" {
-				country = address.Country
 			}
 		}
 	}
 	if shareHost == "" {
 		return "", "", savedDocument{}, i18n.New("面板没有证书域名，也未查询到服务器公网 IP", "There is no certificate domain and the public IP is unknown")
 	}
-	region := countryName(country, lang)
 	var name, clientID string
 	result, err := rt.botSaveWorkspace(ctx, func(draft *workspaceDraft) error {
 		used, names := map[int]bool{}, map[string]bool{}
@@ -780,7 +707,7 @@ func (rt *Runtime) botQuickCreate(ctx context.Context, preset, lang string) (str
 				return i18n.New("暂时找不到空闲的端口跳跃范围，请稍后重试", "No free port hopping range found right now; retry later")
 			}
 		}
-		base := fmt.Sprintf("%s-%s-%s", region, label, time.Now().Format("2006.01.02"))
+		base := fmt.Sprintf("%s-%s", label, time.Now().Format("2006.01.02"))
 		name = base
 		for n := 1; names[name]; n++ {
 			name = fmt.Sprintf("%s(%d)", base, n)
