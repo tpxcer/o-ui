@@ -2,7 +2,6 @@
 package localapi
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,8 +9,6 @@ import (
 	"mime"
 	"net"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -337,20 +334,8 @@ func handler(manager *core.Manager, state *store.Store, dist string, hosts []str
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		respond(w, http.StatusNotFound, map[string]string{"error": i18n.T("接口不存在", "API not found")})
 	})
-	// 安装器选择的面板默认语言（O_UI_DEFAULT_LANG=zh|en）写入首页；访客在页面保存的选择仍优先。
-	if lang := os.Getenv("O_UI_DEFAULT_LANG"); lang == "zh" || lang == "en" {
-		mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
-			page, err := os.ReadFile(filepath.Join(dist, "index.html"))
-			if err != nil {
-				http.NotFound(w, r)
-				return
-			}
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			_, _ = w.Write(bytes.Replace(page, []byte("<head>"), []byte(`<head><meta name="o-ui-default-lang" content="`+lang+`">`), 1))
-		})
-	}
-	mux.Handle("/", http.FileServer(http.Dir(dist)))
 	base := access.Data.basePath()
+	mux.Handle("/", panelPages(dist, base))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w = &langWriter{ResponseWriter: w, lang: i18n.RequestLang(r)}
 		// 面板只在访问路径下提供；订阅保留根路径/sub/，其余路径一律404，不提示面板位置。

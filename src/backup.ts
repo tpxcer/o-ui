@@ -23,6 +23,7 @@ export function initBackup(refreshIcons: () => void): { open: () => void } {
   window.addEventListener('panel-session-expired', () => { if (dialog.open && !busy) dialog.close(); });
   document.addEventListener('visibilitychange', () => { if (document.hidden && dialog.open && !busy && !needsReload) dialog.close(); });
   window.addEventListener('hashchange', () => { if (dialog.open && !busy) dialog.close(); });
+  window.addEventListener('panel-navigate', () => { if (dialog.open && !busy) dialog.close(); });
 
   return { open: () => {
     if (dialog.open) return;

@@ -13,6 +13,7 @@ export function initLogs(refreshIcons: () => void): { open: (source: 'panel' | '
   dialog.addEventListener('close', () => { if (!dialog.open) { clear(); if (returnFocus?.isConnected) returnFocus.focus(); returnFocus = null; } });
   window.addEventListener('panel-session-expired', close);
   window.addEventListener('hashchange', close);
+  window.addEventListener('panel-navigate', close);
   document.addEventListener('visibilitychange', () => { if (document.hidden) close(); });
   return { close, open: initialSource => {
     if (dialog.open) return;

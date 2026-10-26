@@ -55,7 +55,24 @@ test('面板部署在访问路径下时，接口地址随页面目录变化', ()
     assert.equal(apiURL('auth/status'), '/secret-9/api/auth/status');
     Object.defineProperty(globalThis, 'location', { configurable: true, value: { protocol: 'https:', pathname: '/' } });
     assert.equal(apiURL('auth/status'), '/api/auth/status');
+    Object.defineProperty(globalThis, 'location', { configurable: true, value: { protocol: 'https:', pathname: '/secret-9/clients/' } });
+    assert.equal(apiURL('auth/status'), '/secret-9/api/auth/status');
+    Object.defineProperty(globalThis, 'location', { configurable: true, value: { protocol: 'https:', pathname: '/panel/' } });
+    assert.equal(apiURL('auth/status'), '/api/auth/status');
   } finally { if (previous) Object.defineProperty(globalThis, 'location', previous); else Reflect.deleteProperty(globalThis, 'location'); }
+});
+
+test('服务端注入的访问路径优先，访问路径本身与页面同名时也不混淆', () => {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  const location = Object.getOwnPropertyDescriptor(globalThis, 'location');
+  try {
+    Object.defineProperty(globalThis, 'document', { configurable: true, value: { querySelector: () => ({ getAttribute: () => '/clients/' }) } });
+    Object.defineProperty(globalThis, 'location', { configurable: true, value: { pathname: '/clients/panel/' } });
+    assert.equal(apiURL('workspace'), '/clients/api/workspace');
+  } finally {
+    if (previous) Object.defineProperty(globalThis, 'document', previous); else Reflect.deleteProperty(globalThis, 'document');
+    if (location) Object.defineProperty(globalThis, 'location', location); else Reflect.deleteProperty(globalThis, 'location');
+  }
 });
 
 test('保存结果不确定时：连接恢复后读回内容与修订都等于本次提交才算已保存', async () => {

@@ -239,7 +239,7 @@ func TestInstallerDefaultLanguage(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	for _, tc := range []struct{ env, want string }{{"en", `<head><meta name="o-ui-default-lang" content="en"><title>`}, {"zh", `content="zh"`}, {"", "<head><title>"}, {"fr", "<head><title>"}, {`en"><script>`, "<head><title>"}} {
+	for _, tc := range []struct{ env, want string }{{"en", `<head><meta name="o-ui-default-lang" content="en"><base data-panel-base href="/"><title>`}, {"zh", `content="zh"`}, {"", `<head><base data-panel-base href="/"><title>`}, {"fr", `<head><base data-panel-base href="/"><title>`}, {`en"><script>`, `<head><base data-panel-base href="/"><title>`}} {
 		t.Run(tc.env, func(t *testing.T) {
 			t.Setenv("O_UI_DEFAULT_LANG", tc.env)
 			handler := Handler(m, s, dist, []string{"127.0.0.1:5180"})

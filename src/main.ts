@@ -19,6 +19,7 @@ import { confirmAction } from './confirm.ts';
 import { downloadIcon, startUpgrade, type PanelVersion } from './upgrade.ts';
 import './style.css';
 import { lang, languageButton, locale, setLang, t } from './i18n.ts';
+import { panelBase, panelPage, pageURL, type PanelPage } from './panel-routing.ts';
 
 document.documentElement.lang = locale;
 document.querySelector('.skip-link')!.textContent = t('跳到主要内容', 'Skip to main content');
@@ -68,6 +69,7 @@ function field(label: string, value: string, sensitive = false): string {
 }
 
 const app = document.querySelector<HTMLDivElement>('#app')!;
+const accessBase = panelBase();
 async function start(): Promise<void> {
 const authenticated = await requireLogin();
 app.innerHTML = `
@@ -338,7 +340,8 @@ const core = initCore(refreshIcons, status => {
 });
 xraySettings = initXraySettings(document.querySelector('#core-view')!, refreshIcons, authenticated, () => { void quickRuntime('restart'); }, () => { void runtime.refresh(); });
 const panelSettings = initPanelSettings(document.querySelector('#panel-view')!, authenticated);
-function navigate(page: string): void {
+let displayedPage = '';
+function navigate(page: string, historyMode: 'push' | 'replace' | 'none' = 'push'): void {
   logs.close();
   if (page !== 'settings') panelSettings.clearPassword();
   if (!['home', 'inbounds', 'clients', 'xray', 'settings'].includes(page)) {
@@ -346,6 +349,8 @@ function navigate(page: string): void {
     showDetail(page === 'settings' ? t('面板设置', 'Panel settings') : t('Xray 设置', 'Xray settings'), t('此页尚未接入，当前可体验首页、入站列表和客户端。没有读取或修改任何服务器配置。', 'This page is not connected yet; try the dashboard, inbounds and clients. No server configuration was read or changed.'));
     return;
   }
+  window.dispatchEvent(new Event('panel-navigate'));
+  displayedPage = page;
   closeMenu();
   document.title = `o-ui · ${{ home: t('系统状态', 'Dashboard'), inbounds: t('入站列表', 'Inbounds'), clients: t('客户端', 'Clients'), xray: t('Xray 设置', 'Xray settings'), settings: t('面板设置', 'Panel settings') }[page]}`;
   document.querySelector<HTMLElement>('#home-view')!.hidden = page !== 'home';
@@ -362,13 +367,26 @@ function navigate(page: string): void {
     if (active) button.setAttribute('aria-current', 'page');
     else button.removeAttribute('aria-current');
   });
-  if (location.hash !== `#${page}`) history.pushState(null, '', `#${page}`);
+  const target = pageURL(page as PanelPage, accessBase, location.protocol === 'file:');
+  const current = location.protocol === 'file:' ? location.hash : location.pathname + location.search + location.hash;
+  if (historyMode !== 'none' && current !== target) {
+    if (historyMode === 'replace') history.replaceState(null, '', target);
+    else history.pushState(null, '', target);
+  }
+  // base指向资源目录，跳转到主要内容仍应留在当前页面。
+  document.querySelector<HTMLAnchorElement>('.skip-link')!.href = location.protocol === 'file:' ? '#main' : `${location.pathname}#main`;
   document.querySelector<HTMLElement>('#main')!.focus({ preventScroll: true });
   window.scrollTo(0, 0);
 }
 document.querySelectorAll<HTMLButtonElement>('[data-nav]').forEach(button => button.addEventListener('click', () => navigate(button.dataset.nav!)));
-window.addEventListener('popstate', () => navigate(['inbounds', 'clients', 'xray', 'settings'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'home'));
-navigate(['inbounds', 'clients', 'xray', 'settings'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'home');
+window.addEventListener('popstate', () => {
+  const page = panelPage(location.pathname, location.hash, accessBase);
+  if (page !== displayedPage) navigate(page, 'none');
+});
+window.addEventListener('hashchange', () => {
+  if (['home', 'inbounds', 'clients', 'xray', 'settings'].includes(location.hash.slice(1))) navigate(panelPage(location.pathname, location.hash, accessBase), 'replace');
+});
+navigate(panelPage(location.pathname, location.hash, accessBase), 'replace');
 document.querySelector('#close-dialog')!.addEventListener('click', () => dialog.close());
 document.querySelector('#confirm-dialog')!.addEventListener('click', () => dialog.close());
 dialog.addEventListener('close', () => {

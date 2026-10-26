@@ -18,6 +18,7 @@ export function initConnections(refreshIcons: () => void): (id: string, name: st
   window.addEventListener('panel-session-expired', () => { if (dialog.open) dialog.close(); clear(); });
   document.addEventListener('visibilitychange', () => { if (document.hidden && dialog.open) dialog.close(); });
   window.addEventListener('hashchange', () => { if (dialog.open) dialog.close(); });
+  window.addEventListener('panel-navigate', () => { if (dialog.open) dialog.close(); });
   return (id, name, revision) => {
     clear(); returnFocus = document.activeElement as HTMLElement;
     dialog.innerHTML = `<header class="dialog-heading"><h2 id="connection-title">${t('客户端连接信息', 'Client connection info')}</h2><button class="icon-button" data-close aria-label="${t('关闭连接信息', 'Close connection info')}"><i data-lucide="x" aria-hidden="true"></i></button></header>

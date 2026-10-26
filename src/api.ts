@@ -1,7 +1,8 @@
 import { lang, t } from './i18n.ts';
-// 面板可部署在访问路径下（如 /abc/），接口与页面同目录。
+import { panelBase } from './panel-routing.ts';
+// API固定在访问路径下，页面切换不改变接口目录。
 export function apiURL(path: string): string {
-  return `${(globalThis.location?.pathname ?? '/').replace(/[^/]*$/, '') || '/'}api/${path}`;
+  return `${panelBase()}api/${path}`;
 }
 export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   if (!['http:', 'https:'].includes(location.protocol)) throw new Error(t('离线预览不能读取真实数据，请启动本机面板服务。', 'The offline preview cannot read real data; start the local panel.'));
