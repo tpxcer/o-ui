@@ -6,7 +6,7 @@ import { certificateNotice } from './connection-notice.ts';
 import './connections.css';
 import { t } from './i18n.ts';
 
-interface ConnectionResult { name: string; preset: string; version: string; workspaceRevision: number; settingsRevision: number; link: string; outbound: Record<string, unknown>; certificateTrusted?: boolean }
+interface ConnectionResult { name: string; preset: string; version: string; workspaceRevision: number; settingsRevision: number; link: string; certificateTrusted?: boolean }
 
 export function initConnections(refreshIcons: () => void): (id: string, name: string, revision: number) => void {
   const dialog = document.createElement('dialog');
@@ -38,19 +38,16 @@ export function initConnections(refreshIcons: () => void): (id: string, name: st
           ${result.preset === 'hy2' || result.preset === 'xhttp-tls' ? certificateNotice(result.certificateTrusted) : t('<p class="form-hint">REALITY 需要兼容客户端；服务端默认要求 Xray 26.3.27 或更高版本。此处只有公钥，没有服务端私钥。</p>', '<p class="form-hint">REALITY needs a compatible client; by default the server requires Xray 26.3.27 or later. Only the public key is shown here, never the server\'s private key.</p>')}
           <label class="form-field" for="connection-link">${t('分享链接', 'Share link')}<textarea id="connection-link" readonly spellcheck="false" rows="4"></textarea></label><button class="secondary-button" data-copy-link>${t('复制链接', 'Copy link')}</button>
           <figure class="connection-qr"><img alt="${t('含客户端认证信息的本地分享二维码', 'Local share QR code containing client credentials')}"><figcaption>${t('二维码仅在本机生成；扫码设备也必须能访问链接地址。', 'The QR code is generated locally; the scanning device must be able to reach the link address.')}</figcaption></figure>
-          <label class="form-field" for="connection-json">${t('官方 Xray 客户端出站 JSON', 'Official Xray client outbound JSON')}<textarea id="connection-json" readonly spellcheck="false" rows="10"></textarea></label><button class="secondary-button" data-copy-json>${t('复制出站 JSON', 'Copy outbound JSON')}</button><p class="form-hint">${t('这是出站片段，不是完整客户端配置。通用链接和二维码的第三方客户端兼容性仍需各客户端实测。', 'This is an outbound snippet, not a complete client config. Third-party compatibility of links and QR codes must be tested per client.')}</p>`;
+          <p class="form-hint">${t('通用链接和二维码的第三方客户端兼容性仍需各客户端实测。', 'Third-party compatibility of links and QR codes must be tested per client.')}</p>`;
         content.querySelector<HTMLTextAreaElement>('#connection-link')!.value = result.link;
-        const json = JSON.stringify(result.outbound, null, 2);
-        content.querySelector<HTMLTextAreaElement>('#connection-json')!.value = json;
         try { content.querySelector<HTMLImageElement>('img')!.src = connectionQR(result.link); }
-        catch { content.querySelector('figure')!.textContent = t('链接超出二维码容量，请使用复制链接或出站 JSON。', 'The link is too long for a QR code; copy the link or the outbound JSON instead.'); }
+        catch { content.querySelector('figure')!.textContent = t('链接超出二维码容量，请使用复制链接。', 'The link is too long for a QR code; copy the link instead.'); }
         const copy = async (value: string) => {
           let message = t('无法访问剪贴板，请手动选中复制。', 'Cannot access the clipboard; select and copy manually.');
           try { await navigator.clipboard.writeText(value); message = t('已复制。剪贴板不会随关闭弹窗自动清除，请妥善保管。', 'Copied. The clipboard is not cleared when the dialog closes; keep it safe.'); } catch { /* 保留手动复制提示。 */ }
           if (generation === ticket) dialog.querySelector('[data-notice]')!.textContent = message;
         };
         content.querySelector('[data-copy-link]')!.addEventListener('click', () => { void copy(result.link); });
-        content.querySelector('[data-copy-json]')!.addEventListener('click', () => { void copy(json); });
         content.hidden = false; reveal.hidden = true;
         content.querySelector<HTMLTextAreaElement>('textarea')!.focus();
       } catch (reason) {
