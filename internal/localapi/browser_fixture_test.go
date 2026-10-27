@@ -91,6 +91,27 @@ func TestBrowserFixture(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if os.Getenv("PANEL_BROWSER_IP_BAN_QA") == "1" {
+		var draft workspaceDraft
+		_ = json.Unmarshal(validWorkspace(), &draft)
+		draft.Clients[0].Name, draft.Clients[0].IPLimit = "IP 管理测试", 0
+		shared := draft.Clients[0]
+		shared.ID, shared.Name = "shared-client", "共享入站客户端"
+		draft.Clients = append(draft.Clients, shared)
+		data, _ := json.Marshal(draft)
+		if _, err = s.SaveDocument(context.Background(), "workspace", 0, data); err != nil {
+			t.Fatal(err)
+		}
+		previous := runIPBan
+		defer func() { runIPBan = previous }()
+		runIPBan = func(_ context.Context, args ...string) (string, error) {
+			if len(args) != 4 || args[1] != "203.0.113.7" && args[1] != "2001:db8::7" || args[2] != "18443" || args[3] != "tcp" {
+				return "test-only rejected command", fmt.Errorf("unexpected test command")
+			}
+			return "test-only: host firewall untouched", nil
+		}
+		rt.iplimit.online["client-one"] = []onlineIP{{IP: "203.0.113.7", LastSeen: time.Now()}, {IP: "2001:db8::7", LastSeen: time.Now()}}
+	}
 	if os.Getenv("PANEL_BROWSER_SUBSCRIPTION_QA") == "1" {
 		var draft workspaceDraft
 		_ = json.Unmarshal(validWorkspace(), &draft)

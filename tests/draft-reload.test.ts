@@ -497,3 +497,33 @@ test('入站客户端慢保存锁定所有编辑控件，失败恢复原禁用�
     });
   });
 });
+
+
+test('IP管理点击后再确认，携带显示时修订，失败禁重试并允许刷新', async () => {
+  const state = workspaceFixture(), id = state.clients[0].id;
+  const view = { enforced: true, issue: '', revision: 4, workspaceRevision: 1, serverTime: new Date().toISOString(), clients: { [id]: { online: [{ ip: '203.0.113.7', lastSeen: new Date().toISOString() }], banned: [], exempt: [] } } };
+  let writes = 0;
+  await withPage(async (url, options) => {
+    const path = String(url);
+    if (path.endsWith('/api/workspace')) return Response.json({ revision: 1, data: state });
+    if (path.endsWith('/api/runtime/iplimit')) return Response.json(view);
+    if (path.endsWith('/api/runtime/iplimit/ban')) {
+      writes++;
+      assert.deepEqual(JSON.parse(String(options?.body)), { clientId: id, ip: '203.0.113.7', minutes: 60, confirm: true, revision: 4, workspaceRevision: 1 });
+      return Response.json({ error: 'IP状态已变化' }, { status: 409 });
+    }
+    return Response.json({ totals: {}, clients: [], data: { enabled: false } });
+  }, async (root, dialogs) => {
+    initManagement(root as unknown as HTMLElement, () => {}, () => {}, () => {}, true).render('clients'); await settle();
+    clickWorkspace(root, 'op', 'iplimit', id); await settle();
+    const modal = dialogs.find(item => item.id === 'edit-dialog')!, button = new Control(); button.dataset.ip = '203.0.113.7';
+    modal.groups.set('[data-ip]', [button]); modal.querySelector('[data-ip-refresh]').fire(); await settle();
+    assert.match(modal.innerHTML, /未设置 IP 上限，可点击/); assert.match(modal.innerHTML, /ip-online/);
+    button.fire(); await settle(); assert.equal(writes, 0);
+    assert.match(modal.innerHTML, /同一入站的其他客户端/); assert.match(modal.innerHTML, /永久，手动解封/);
+    const duration = modal.querySelector('[data-ip-duration]'); duration.value = '60'; duration.fire('change', { target: duration });
+    modal.querySelector('[data-ip-ban]').fire(); await settle(); assert.equal(writes, 1);
+    assert.match(modal.innerHTML, /IP状态已变化/); assert.match(modal.innerHTML, /请刷新状态后再操作/);
+    modal.querySelector('[data-ip-ban]').fire(); await settle(); assert.equal(writes, 1);
+  });
+});

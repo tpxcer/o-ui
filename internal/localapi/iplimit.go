@@ -41,11 +41,13 @@ type onlineIP struct {
 }
 
 type ipBan struct {
-	ClientID string    `json:"clientId"`
-	IP       string    `json:"ip"`
-	Port     int       `json:"port,omitempty"`
-	Protocol string    `json:"protocol,omitempty"`
-	Until    time.Time `json:"until"`
+	ClientID  string    `json:"clientId"`
+	IP        string    `json:"ip"`
+	Port      int       `json:"port,omitempty"`
+	Protocol  string    `json:"protocol,omitempty"`
+	Until     time.Time `json:"until"`
+	Manual    bool      `json:"manual,omitempty"`
+	Permanent bool      `json:"permanent,omitempty"`
 }
 
 type ipLimitRecord struct {
@@ -144,7 +146,7 @@ func parseOnlineIPs(data []byte) map[string][]onlineIP {
 				raw = entry.LastSeen2
 			}
 			seconds, _ := strconv.ParseInt(strings.Trim(string(raw), `"`), 10, 64)
-			result[user.Email] = append(result[user.Email], onlineIP{IP: ip, LastSeen: time.Unix(seconds, 0)})
+			result[user.Email] = append(result[user.Email], onlineIP{IP: net.ParseIP(ip).String(), LastSeen: time.Unix(seconds, 0)})
 		}
 	}
 	return result
@@ -197,7 +199,7 @@ type ipLimitTarget struct {
 	limit, port    int
 }
 
-// ipLimitTargets：启用且设置了上限的客户端，以及其入站端口与协议（HY2为UDP，其余TCP）。
+// 手动封禁也适用于没有设置IP上限的客户端；自动限制在判定时检查limit。
 func ipLimitTargets(data json.RawMessage) map[string]ipLimitTarget {
 	targets := map[string]ipLimitTarget{}
 	var draft workspaceDraft
@@ -210,7 +212,7 @@ func ipLimitTargets(data json.RawMessage) map[string]ipLimitTarget {
 	}
 	for _, client := range draft.Clients {
 		in, ok := inbounds[client.InboundID]
-		if !ok || client.IPLimit <= 0 || !client.Enabled || !in.Enabled {
+		if !ok || !client.Enabled || !in.Enabled {
 			continue
 		}
 		protocol := "tcp"
@@ -220,6 +222,14 @@ func ipLimitTargets(data json.RawMessage) map[string]ipLimitTarget {
 		targets[client.ID] = ipLimitTarget{name: client.Name, protocol: protocol, limit: client.IPLimit, port: in.Port}
 	}
 	return targets
+}
+
+func (ban ipBan) active(now time.Time) bool {
+	return ban.Manual && ban.Permanent || ban.Until.After(now)
+}
+
+func sameIPBanRule(a, b ipBan) bool {
+	return a.IP == b.IP && a.Port == b.Port && a.Protocol == b.Protocol
 }
 
 func (rt *Runtime) ipBan(ctx context.Context, action string, ban ipBan) error {
@@ -250,49 +260,60 @@ func (rt *Runtime) ipLimitTick(ctx context.Context, now time.Time) {
 		}
 	}
 	changed := false
-	// 面板启动后先清空本链再按记录重建：服务器重启后内核规则已清空，面板重启时也不留旧规则。
-	if !l.synced {
-		if _, err := runIPBan(ctx, "flush"); err == nil {
-			for _, ban := range record.Bans {
-				if ban.Until.After(now) {
-					note(rt.ipBan(ctx, "ban", ban))
-				}
-			}
-		} else {
-			note(err)
-		}
-		l.synced, l.reasserted = true, now
-	}
 	workspace, err := rt.state.ReadDocument(ctx, "workspace")
 	if err != nil {
 		l.issue = i18n.T("无法读取客户端记录", "Cannot read client records")
 		return
 	}
 	targets := ipLimitTargets(workspace.Data)
-	// 到期、客户端已删除/取消上限、入站端口或协议改变的封禁：解封。
+	valid := func(ban ipBan) bool {
+		target, ok := targets[ban.ClientID]
+		return ok && target.port == ban.Port && target.protocol == ban.Protocol && (ban.Manual || target.limit > 0) && ban.active(now)
+	}
+	// 启动重建与定期重申只处理仍有效的记录，失败留待下次重试。
+	reassert := !l.synced || now.Sub(l.reasserted) >= ipReassertEvery
+	if !l.synced {
+		_, err := runIPBan(ctx, "flush")
+		note(err)
+		l.synced = err == nil
+	}
 	bans := record.Bans[:0:0]
 	for _, ban := range record.Bans {
-		target, ok := targets[ban.ClientID]
-		if ban.Until.After(now) && ok && target.port == ban.Port && target.protocol == ban.Protocol {
+		if valid(ban) {
+			if reassert {
+				note(rt.ipBan(ctx, "ban", ban))
+			}
 			bans = append(bans, ban)
 			continue
 		}
-		note(rt.ipBan(ctx, "unban", ban))
+		// 共享入站的另一条有效记录仍需要同一条规则，不能提前撤销。
+		shared := false
+		for _, other := range record.Bans {
+			if valid(other) && sameIPBanRule(ban, other) {
+				shared = true
+				break
+			}
+		}
+		if !shared {
+			if err := rt.ipBan(ctx, "unban", ban); err != nil {
+				note(err)
+				bans = append(bans, ban) // 保留到期记录，让界面显示待解封并重试。
+				continue
+			}
+		}
 		changed = true
+	}
+	if reassert && issue == "" {
+		l.reasserted = now
 	}
 	exempt := record.Exempt[:0:0]
 	for _, item := range record.Exempt {
-		if _, ok := targets[item.ClientID]; ok && item.Until.After(now) {
+		target, ok := targets[item.ClientID]
+		if ok && item.Until.After(now) && (item.Port == 0 || item.Port == target.port && item.Protocol == target.protocol) {
 			exempt = append(exempt, item)
 		} else {
 			changed = true
 		}
-	}
-	if now.Sub(l.reasserted) >= ipReassertEvery {
-		for _, ban := range bans {
-			note(rt.ipBan(ctx, "ban", ban))
-		}
-		l.reasserted = now
 	}
 	l.online = map[string][]onlineIP{}
 	online, err := sampleOnlineIPs(ctx, rt)
@@ -333,12 +354,12 @@ func (rt *Runtime) ipLimitTick(ctx context.Context, now time.Time) {
 				delete(l.tracked, clientID)
 			}
 			target, limited := targets[clientID]
-			if !limited || len(ips) <= target.limit {
+			if !limited || target.limit <= 0 || len(ips) <= target.limit {
 				continue
 			}
 			skip, first := map[string]bool{}, map[string]time.Time{}
 			for _, ban := range bans {
-				if ban.ClientID == clientID {
+				if ban.Port == target.port && ban.Protocol == target.protocol {
 					skip[ban.IP] = true
 				}
 			}
@@ -421,10 +442,15 @@ func registerIPLimit(mux *http.ServeMux, rt *Runtime) {
 		l := rt.iplimit
 		l.mu.Lock()
 		defer l.mu.Unlock()
-		record, _, err := readIPLimit(ctx, rt.state)
+		record, revision, err := readIPLimit(ctx, rt.state)
 		if err != nil {
 			return nil, err
 		}
+		workspace, err := rt.state.ReadDocument(ctx, "workspace")
+		if err != nil {
+			return nil, err
+		}
+		targets := ipLimitTargets(workspace.Data)
 		clients := map[string]*ipLimitClientView{}
 		get := func(id string) *ipLimitClientView {
 			if clients[id] == nil {
@@ -437,8 +463,11 @@ func registerIPLimit(mux *http.ServeMux, rt *Runtime) {
 		}
 		now := time.Now()
 		for _, ban := range record.Bans {
-			if ban.Until.After(now) {
-				get(ban.ClientID).Banned = append(get(ban.ClientID).Banned, ban)
+			get(ban.ClientID).Banned = append(get(ban.ClientID).Banned, ban)
+			for id, target := range targets {
+				if id != ban.ClientID && target.port == ban.Port && target.protocol == ban.Protocol {
+					get(id).Banned = append(get(id).Banned, ban)
+				}
 			}
 		}
 		for _, item := range record.Exempt {
@@ -450,7 +479,7 @@ func registerIPLimit(mux *http.ServeMux, rt *Runtime) {
 		if helperErr != nil && issue == "" {
 			issue = helperErr.Error()
 		}
-		return map[string]any{"enforced": helperErr == nil, "issue": issue, "clients": clients}, nil
+		return map[string]any{"enforced": helperErr == nil, "issue": issue, "clients": clients, "revision": revision, "workspaceRevision": workspace.Revision, "serverTime": now}, nil
 	}
 	mux.HandleFunc("GET /api/runtime/iplimit", func(w http.ResponseWriter, r *http.Request) {
 		if rt == nil {
@@ -464,62 +493,139 @@ func registerIPLimit(mux *http.ServeMux, rt *Runtime) {
 		}
 		respond(w, 200, result)
 	})
-	// 手动解封：立即撤销防火墙规则，并在30分钟内放行该IP（不计入上限）。
-	mux.HandleFunc("POST /api/runtime/iplimit/unban", func(w http.ResponseWriter, r *http.Request) {
-		if rt == nil {
-			respond(w, 503, map[string]string{"error": i18n.T("核心运行控制未启用", "Core runtime control is not enabled")})
-			return
-		}
-		var request struct {
-			ClientID string `json:"clientId"`
-			IP       string `json:"ip"`
-		}
-		if !readJSON(w, r, &request, 1024) {
-			return
-		}
-		l := rt.iplimit
-		l.mu.Lock()
-		record, revision, err := readIPLimit(r.Context(), rt.state)
-		if err != nil {
-			l.mu.Unlock()
-			respond(w, 500, map[string]string{"error": err.Error()})
-			return
-		}
-		found, bans := false, record.Bans[:0:0]
-		for _, ban := range record.Bans {
-			if ban.ClientID == request.ClientID && ban.IP == request.IP {
-				found = true
-				if err := rt.ipBan(r.Context(), "unban", ban); err != nil {
-					l.mu.Unlock()
-					respond(w, 502, map[string]string{"error": err.Error()})
-					return
-				}
-				continue
+	for _, action := range []string{"ban", "unban"} {
+		mux.HandleFunc("POST /api/runtime/iplimit/"+action, func(w http.ResponseWriter, r *http.Request) {
+			if rt == nil {
+				respond(w, 503, map[string]string{"error": i18n.T("核心运行控制未启用", "Core runtime control is not enabled")})
+				return
 			}
-			bans = append(bans, ban)
-		}
-		if !found {
-			l.mu.Unlock()
-			respond(w, 404, map[string]string{"error": i18n.T("没有这条封禁记录，可能已到期解封", "No such ban; it may have expired")})
-			return
-		}
-		exempt := append(record.Exempt, ipBan{ClientID: request.ClientID, IP: request.IP, Until: time.Now().Add(ipExemptDuration)})
-		data, _ := json.Marshal(ipLimitRecord{Bans: bans, Exempt: exempt})
-		_, err = rt.state.SaveDocument(r.Context(), ipLimitDocument, revision, data)
-		l.mu.Unlock()
-		if err != nil {
-			code := 500
-			if errors.Is(err, store.ErrConflict) {
-				code = 409
+			var request ipBanRequest
+			if !readJSON(w, r, &request, 1024) {
+				return
 			}
-			respond(w, code, map[string]string{"error": i18n.T("解封已执行，但记录未保存，请刷新", "Unbanned, but the record was not saved; refresh")})
-			return
+			code, err := rt.changeIPBan(r.Context(), action, request)
+			if err != nil {
+				respond(w, code, map[string]string{"error": err.Error()})
+				return
+			}
+			result, err := view(r.Context())
+			if err != nil {
+				respond(w, 500, map[string]string{"error": err.Error()})
+				return
+			}
+			respond(w, 200, result)
+		})
+	}
+}
+
+type ipBanRequest struct {
+	ClientID          string `json:"clientId"`
+	IP                string `json:"ip"`
+	Minutes           int    `json:"minutes"`
+	Confirm           bool   `json:"confirm"`
+	Revision          int64  `json:"revision"`
+	WorkspaceRevision int64  `json:"workspaceRevision"`
+}
+
+func (rt *Runtime) changeIPBan(ctx context.Context, action string, request ipBanRequest) (int, error) {
+	ip := net.ParseIP(request.IP)
+	if !request.Confirm || ip == nil || request.IP != ip.String() || !draftID.MatchString(request.ClientID) {
+		return 400, i18n.New("请选择有效IP并确认本次操作", "Select a valid IP and confirm this operation")
+	}
+	if action == "ban" {
+		switch request.Minutes {
+		case 0, 10, 30, 60, 1440, 10080:
+		default:
+			return 400, i18n.New("请选择有效封禁时长", "Select a valid ban duration")
 		}
-		result, err := view(r.Context())
-		if err != nil {
-			respond(w, 500, map[string]string{"error": err.Error()})
-			return
+	}
+	// 与草稿保存串行，确认后不能因关联入站变化而操作另一个端口。
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	l := rt.iplimit
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	workspace, err := rt.state.ReadDocument(ctx, "workspace")
+	if err != nil {
+		return 500, err
+	}
+	record, revision, err := readIPLimit(ctx, rt.state)
+	if err != nil {
+		return 500, err
+	}
+	if workspace.Revision != request.WorkspaceRevision || revision != request.Revision {
+		return 409, i18n.New("IP状态或客户端配置已变化，请刷新后重新确认", "IP status or client settings changed; refresh and confirm again")
+	}
+	targets := ipLimitTargets(workspace.Data)
+	target, ok := targets[request.ClientID]
+	if !ok {
+		return 422, i18n.New("客户端或入站未启用，请刷新列表", "The client or inbound is not enabled; refresh the list")
+	}
+	now := time.Now()
+	ban := ipBan{ClientID: request.ClientID, IP: request.IP, Port: target.port, Protocol: target.protocol, Manual: true, Permanent: request.Minutes == 0}
+	if !ban.Permanent {
+		ban.Until = now.Add(time.Duration(request.Minutes) * time.Minute)
+	}
+	known, wasBanned := false, false
+	bans := make([]ipBan, 0, len(record.Bans)+1)
+	for _, item := range record.Bans {
+		if sameIPBanRule(ban, item) {
+			known, wasBanned = true, true
+		} else {
+			bans = append(bans, item)
 		}
-		respond(w, 200, result)
-	})
+	}
+	for _, item := range l.online[request.ClientID] {
+		if item.IP == request.IP {
+			known = true
+		}
+	}
+	exempt := make([]ipBan, 0, len(record.Exempt))
+	for _, item := range record.Exempt {
+		t, exists := targets[item.ClientID]
+		if item.IP == request.IP && exists && t.port == target.port && t.protocol == target.protocol {
+			if item.Until.After(now) {
+				known = true
+			}
+		} else {
+			exempt = append(exempt, item)
+		}
+	}
+	if action == "unban" && !wasBanned {
+		return 404, i18n.New("没有这条封禁记录，可能已到期解封", "No such ban; it may have expired")
+	}
+	if action == "ban" && !known {
+		return 422, i18n.New("此IP不在当前客户端的在线、封禁或放行列表中，请刷新", "This IP is not in this client's online, banned or allowed list; refresh")
+	}
+	if action == "ban" {
+		bans = append(bans, ban)
+	} else {
+		for id, t := range targets {
+			if t.port == target.port && t.protocol == target.protocol {
+				exempt = append(exempt, ipBan{ClientID: id, IP: request.IP, Port: target.port, Protocol: target.protocol, Until: now.Add(ipExemptDuration)})
+			}
+		}
+	}
+	if err := rt.ipBan(ctx, action, ban); err != nil {
+		l.issue = err.Error()
+		return 502, err
+	}
+	data, _ := json.Marshal(ipLimitRecord{Bans: bans, Exempt: exempt})
+	if _, err := rt.state.SaveDocument(ctx, ipLimitDocument, revision, data); err != nil {
+		// 持久化失败时恢复原规则；使用独立期限，不受浏览器断开影响。
+		recoverCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		restore := "unban"
+		if wasBanned {
+			restore = "ban"
+		}
+		if rollback := rt.ipBan(recoverCtx, restore, ban); rollback != nil {
+			l.synced = false
+			l.issue = i18n.T("IP操作保存与回退失败，正在重新同步防火墙，请刷新检查", "Saving and rollback failed; the firewall is being resynchronized, refresh to check")
+			return 500, errors.New(l.issue)
+		}
+		return 500, i18n.New("IP操作未保存，已恢复原规则，请刷新后重试", "IP change was not saved; the previous rule was restored, refresh and retry")
+	}
+	l.issue = ""
+	return 200, nil
 }

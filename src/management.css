@@ -256,8 +256,26 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent-bg); wi
 .quick-menu button:hover, .quick-menu button:focus-visible { background: var(--raised); outline: none; }
 @media (max-width: 700px) { .create-actions { flex-wrap: wrap; justify-content: flex-end; } }
 
-/* 在线IP弹窗 */
-.ip-list { list-style: none; margin: 0 0 12px; padding: 0; display: grid; gap: 8px; }
-.ip-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
-.ip-list code { font-variant-numeric: tabular-nums; word-break: break-all; }
-.ip-list .secondary-button { margin-left: auto; }
+/* 在线IP弹窗：颜色与文字状态并列，长IPv6和窄屏保持可读。 */
+.ip-list { list-style: none; margin: 0 0 18px; padding: 0; display: grid; gap: 8px; }
+.ip-card { --ip-color: var(--green); padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--ip-color) 25%, var(--border)); border-left: 3px solid var(--ip-color); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--ip-color) 5%, transparent); }
+.ip-banned { --ip-color: var(--danger); }
+.ip-allowed { --ip-color: var(--blue); }
+.ip-pending { --ip-color: var(--warning); }
+.ip-card.is-selected { outline: 2px solid var(--ip-color); outline-offset: 2px; }
+.ip-card-heading, .ip-action-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.ip-address { display: inline-flex; align-items: center; gap: 10px; min-height: 38px; min-width: 0; padding: 0; border: 0; background: none; color: var(--text); text-align: left; cursor: pointer; }
+.ip-address:hover { color: var(--ip-color); }
+.ip-address:focus-visible { outline: 2px solid var(--ip-color); outline-offset: 3px; border-radius: 4px; }
+.ip-manage-label { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.ip-list code, .ip-action-panel code { font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.ip-badge { font-size: 12px; font-weight: 600; color: var(--ip-color); padding: 3px 8px; border-radius: 20px; background: color-mix(in srgb, var(--ip-color) 12%, transparent); white-space: nowrap; }
+.ip-detail { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; line-height: 1.7; color: var(--muted); }
+.ip-detail strong, .ip-detail [data-ip-until] { color: var(--ip-color); font-weight: 500; }
+.ip-dialog-body h3 { display: flex; align-items: center; gap: 8px; }
+.ip-dialog-body h3 small { font-size: 12px; color: var(--muted); font-weight: 400; }
+.ip-action-panel { margin-top: 18px; padding: 16px; background: var(--raised); border: 1px solid var(--border-strong); border-radius: var(--radius); }
+.ip-action-panel .form-field { margin-top: 14px; }
+.ip-action-buttons { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
+.ip-empty { margin: 8px 0 18px; }
+@media (max-width: 500px) { .ip-card { padding: 10px; } .ip-address { min-height: 44px; flex-wrap: wrap; gap: 4px 8px; } .ip-action-buttons > button { flex: 1; } }

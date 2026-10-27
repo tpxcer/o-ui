@@ -3,6 +3,7 @@ package localapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http/httptest"
 	"reflect"
 	"strings"
@@ -126,8 +127,14 @@ func TestIPLimitTickBansUnbansAndRebuilds(t *testing.T) {
 	if len(client["online"].([]any)) != 2 || len(client["banned"].([]any)) != 1 {
 		t.Fatal("view", view)
 	}
-	call("POST", "/api/runtime/iplimit/unban", `{"clientId":"client-one","ip":"203.0.113.9"}`, 404)
-	call("POST", "/api/runtime/iplimit/unban", `{"clientId":"client-one","ip":"203.0.113.2"}`, 200)
+	unban := func(ip string, want int) {
+		doc, _ := s.ReadDocument(ctx, "workspace")
+		_, revision, _ := readIPLimit(ctx, s)
+		body, _ := json.Marshal(ipBanRequest{ClientID: "client-one", IP: ip, Confirm: true, Revision: revision, WorkspaceRevision: doc.Revision})
+		call("POST", "/api/runtime/iplimit/unban", string(body), want)
+	}
+	unban("203.0.113.9", 404)
+	unban("203.0.113.2", 200)
 	if got := take(); !reflect.DeepEqual(got, []string{"unban 203.0.113.2 18443 tcp"}) {
 		t.Fatal("manual unban", got)
 	}
@@ -163,5 +170,189 @@ func TestIPLimitTickBansUnbansAndRebuilds(t *testing.T) {
 	rt.ipLimitTick(ctx, t2.Add(14*time.Minute))
 	if len(record().Bans) != 0 || !strings.Contains(rt.iplimit.issue, "防火墙助手") {
 		t.Fatal("missing helper", record(), rt.iplimit.issue)
+	}
+}
+
+// 所有防火墙动作由内存规则表接管，不触碰宿主机规则。
+func TestManualIPBansSharedScopeDurationAndFailures(t *testing.T) {
+	s, rt, handler, cookie := subscriptionFixture(t)
+	ctx := context.Background()
+	previousBan, previousSample := runIPBan, sampleOnlineIPs
+	t.Cleanup(func() { runIPBan, sampleOnlineIPs = previousBan, previousSample })
+	rules := map[string]bool{}
+	fail := false
+	calls := 0
+	runIPBan = func(_ context.Context, args ...string) (string, error) {
+		calls++
+		if fail {
+			return "test-only failure", errors.New("fake failure")
+		}
+		if args[0] == "flush" {
+			clear(rules)
+			return "ok", nil
+		}
+		key := strings.Join(args[1:], " ")
+		if args[0] == "ban" {
+			rules[key] = true
+		} else {
+			delete(rules, key)
+		}
+		return "ok", nil
+	}
+	online := map[string][]onlineIP{"client-client-one": {{IP: "203.0.113.7", LastSeen: time.Now()}, {IP: "2001:db8::7", LastSeen: time.Now()}}}
+	sampleOnlineIPs = func(context.Context, *Runtime) (map[string][]onlineIP, error) { return online, nil }
+	doc, _ := s.ReadDocument(ctx, "workspace")
+	var draft workspaceDraft
+	_ = json.Unmarshal(doc.Data, &draft)
+	draft.Clients[0].IPLimit = 0
+	sibling := draft.Clients[0]
+	sibling.ID = "shared-client"
+	draft.Clients = append(draft.Clients, sibling)
+	otherIn := draft.Inbounds[0]
+	otherIn.ID = "other-in"
+	otherIn.Port = 19443
+	draft.Inbounds = append(draft.Inbounds, otherIn)
+	other := sibling
+	other.ID = "other-client"
+	other.InboundID = otherIn.ID
+	draft.Clients = append(draft.Clients, other)
+	data, _ := json.Marshal(draft)
+	_, err := s.SaveDocument(ctx, "workspace", doc.Revision, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt.ipLimitTick(ctx, time.Now())
+	request := func(id, ip string, minutes int) ipBanRequest {
+		doc, _ := s.ReadDocument(ctx, "workspace")
+		_, revision, _ := readIPLimit(ctx, s)
+		return ipBanRequest{ClientID: id, IP: ip, Minutes: minutes, Confirm: true, Revision: revision, WorkspaceRevision: doc.Revision}
+	}
+	call := func(action string, req ipBanRequest, want int, authenticated bool) map[string]json.RawMessage {
+		body, _ := json.Marshal(req)
+		r := httptest.NewRequest("POST", "/api/runtime/iplimit/"+action, strings.NewReader(string(body)))
+		r.Host, r.RemoteAddr = "127.0.0.1:5180", "127.0.0.1:1234"
+		r.Header.Set("Origin", "http://127.0.0.1:5180")
+		r.Header.Set("Content-Type", "application/json")
+		if authenticated {
+			r.AddCookie(cookie)
+		}
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("%s: got %d want %d: %s", action, w.Code, want, w.Body.String())
+		}
+		var result map[string]json.RawMessage
+		_ = json.Unmarshal(w.Body.Bytes(), &result)
+		return result
+	}
+	req := request("client-one", "203.0.113.7", 60)
+	before := calls
+	call("ban", req, 401, false)
+	invalid := req
+	invalid.Confirm = false
+	call("ban", invalid, 400, true)
+	invalid = req
+	invalid.Minutes = -1
+	call("ban", invalid, 400, true)
+	invalid = req
+	invalid.IP = "203.0.113.7;id"
+	call("ban", invalid, 400, true)
+	invalid = req
+	invalid.IP = "203.0.113.99"
+	call("ban", invalid, 422, true)
+	invalid = req
+	invalid.WorkspaceRevision--
+	call("ban", invalid, 409, true)
+	if calls != before {
+		t.Fatal("rejected requests touched firewall")
+	}
+	result := call("ban", req, 200, true)
+	var clients map[string]ipLimitClientView
+	_ = json.Unmarshal(result["clients"], &clients)
+	if len(clients["shared-client"].Banned) != 1 || len(clients["other-client"].Banned) != 0 {
+		t.Fatal("shared port scope", clients)
+	}
+	rec, _, _ := readIPLimit(ctx, s)
+	if len(rec.Bans) != 1 || !rec.Bans[0].Manual || rec.Bans[0].Permanent || time.Until(rec.Bans[0].Until) < 59*time.Minute || !rules["203.0.113.7 18443 tcp"] {
+		t.Fatal("timed manual ban with no limit", rec, rules)
+	}
+	call("ban", req, 409, true) // 同一确认不能重复提交覆盖时长。
+	call("ban", request("shared-client", "203.0.113.7", 0), 200, true)
+	rec, _, _ = readIPLimit(ctx, s)
+	if len(rec.Bans) != 1 || !rec.Bans[0].Permanent {
+		t.Fatal("duration replacement", rec)
+	}
+	rt.iplimit = newIPLimiter()
+	rt.ipLimitTick(ctx, time.Now().Add(8*24*time.Hour))
+	if !rules["203.0.113.7 18443 tcp"] {
+		t.Fatal("permanent ban lost after restart")
+	}
+	call("unban", request("client-one", "203.0.113.7", 0), 200, true)
+	rec, _, _ = readIPLimit(ctx, s)
+	if len(rec.Bans) != 0 || len(rec.Exempt) != 2 || len(rules) != 0 {
+		t.Fatal("shared unban and exemptions", rec, rules)
+	}
+	// 重新封禁撤销共享端口的临时豁免；其他端口不受影响。
+	call("ban", request("client-one", "203.0.113.7", 10), 200, true)
+	rec, _, _ = readIPLimit(ctx, s)
+	if len(rec.Exempt) != 0 {
+		t.Fatal("manual ban left exemption")
+	}
+	fail = true
+	call("unban", request("client-one", "203.0.113.7", 0), 502, true)
+	rt.ipLimitTick(ctx, time.Now().Add(11*time.Minute))
+	rec, _, _ = readIPLimit(ctx, s)
+	if len(rec.Bans) != 1 || rt.iplimit.issue == "" || !rules["203.0.113.7 18443 tcp"] {
+		t.Fatal("failed expiry forgotten", rec)
+	}
+	fail = false
+	rt.ipLimitTick(ctx, time.Now().Add(11*time.Minute+10*time.Second))
+	rec, _, _ = readIPLimit(ctx, s)
+	if len(rec.Bans) != 0 || len(rules) != 0 {
+		t.Fatal("expiry retry", rec, rules)
+	}
+	fail = true
+	call("ban", request("client-one", "2001:db8::7", 30), 502, true)
+	rec, _, _ = readIPLimit(ctx, s)
+	if len(rec.Bans) != 0 {
+		t.Fatal("failed ban recorded as successful")
+	}
+	fail = false
+	call("ban", request("client-one", "2001:db8::7", 30), 200, true)
+	if !rules["2001:db8::7 18443 tcp"] {
+		t.Fatal("IPv6 ban missing")
+	}
+	// 修改入站端口后，旧端口封禁被撤销，不能移到新端口。
+	doc, _ = s.ReadDocument(ctx, "workspace")
+	_ = json.Unmarshal(doc.Data, &draft)
+	draft.Inbounds[0].Port = 20443
+	data, _ = json.Marshal(draft)
+	_, err = s.SaveDocument(ctx, "workspace", doc.Revision, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt.ipLimitTick(ctx, time.Now())
+	if len(rules) != 0 {
+		t.Fatal("stale endpoint retained", rules)
+	}
+}
+
+func TestManualIPBanSaveFailureRestoresRule(t *testing.T) {
+	s, rt, _, _ := subscriptionFixture(t)
+	previous := runIPBan
+	t.Cleanup(func() { runIPBan = previous })
+	rt.iplimit.online["client-one"] = []onlineIP{{IP: "203.0.113.7", LastSeen: time.Now()}}
+	doc, _ := s.ReadDocument(context.Background(), "workspace")
+	calls := []string{}
+	runIPBan = func(_ context.Context, args ...string) (string, error) {
+		calls = append(calls, strings.Join(args, " "))
+		if args[0] == "ban" {
+			_ = s.Close()
+		}
+		return "ok", nil
+	}
+	code, err := rt.changeIPBan(context.Background(), "ban", ipBanRequest{ClientID: "client-one", IP: "203.0.113.7", Minutes: 10, Confirm: true, WorkspaceRevision: doc.Revision})
+	if code != 500 || err == nil || !strings.Contains(err.Error(), "已恢复原规则") || !reflect.DeepEqual(calls, []string{"ban 203.0.113.7 18443 tcp", "unban 203.0.113.7 18443 tcp"}) {
+		t.Fatal(code, err, calls)
 	}
 }
