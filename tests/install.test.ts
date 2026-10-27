@@ -347,7 +347,9 @@ test('脚本可被bash解析，以main调用收尾避免下载不完整时执行
   assert.doesNotMatch(text, /curl[^\n]*\|\s*(ba)?sh/, '不得管道执行远程脚本');
   assert.doesNotMatch(text, /3\) 仅本机|3\) Local only/);
   const shellcheck = spawnSync('shellcheck', ['--version']);
-  if (shellcheck.status === 0) execFileSync('shellcheck', ['-s', 'bash', installer]);
+  // 只拦warning及以上；排除逐条核对过的误报：有意的空赋值（a= b=）、提示文案里的中文弯引号、read读出未用的字段、
+  // 赋值里的[::]被误认作通配、case里network*.service已覆盖networking.service（2026-10-27 CI首次在Linux上真正运行）。
+  if (shellcheck.status === 0) execFileSync('shellcheck', ['-s', 'bash', '-S', 'warning', '-e', 'SC1007,SC1111,SC2034,SC2101,SC2125,SC2221,SC2222', installer]);
 });
 
 test('全新安装：中文、随机访问路径、HTTP-01域名证书自动续期、BBR与UFW，结束显示完整信息', async () => {

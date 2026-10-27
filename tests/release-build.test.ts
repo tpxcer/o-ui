@@ -54,7 +54,7 @@ test('打包只含o-ui目录、属主为root、无macOS附加文件，解压后�
   const names = execFileSync('tar', ['-tzf', out], { encoding: 'utf8' }).trim().split('\n');
   assert.ok(names.every(name => name === 'o-ui/' || name.startsWith('o-ui/')), names.join(','));
   assert.ok(!names.some(name => /(^|\/)\._/.test(name)), 'AppleDouble entry packed');
-  for (const line of execFileSync('tar', ['-tvzf', out], { encoding: 'utf8' }).trim().split('\n')) assert.match(line, /\broot\s+root\b|\b0\s+0\b/, line);
+  for (const line of execFileSync('tar', ['-tvzf', out], { encoding: 'utf8' }).trim().split('\n')) assert.match(line, /\broot[\s/]+root\b|\b0[\s/]+0\b/, line); // macOS bsdtar列为“0 0”，Linux GNU tar列为“0/0”
   const extracted = join(root, 'extract'); await mkdir(extracted);
   execFileSync('tar', ['-xzf', out, '-C', extracted]);
   execFileSync('shasum', ['-a', '256', '-c', '--quiet', 'SHA256SUMS'], { cwd: join(extracted, 'o-ui') });
