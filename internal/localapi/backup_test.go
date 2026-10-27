@@ -2,7 +2,9 @@ package localapi
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -95,7 +97,9 @@ func TestBusinessBackupAPI(t *testing.T) {
 	}
 	before, _ = s.ReadDocuments(ctx, backupDocuments)
 	// 业务包不带链接密钥；恢复后换代，旧链接不随相同业务身份重新生效。
-	grants := subscriptionState{Version: 1, Generation: 1, Clients: map[string]subscriptionToken{"client-one": {Hash: strings.Repeat("a", 64), Generation: 1}}}
+	token := base64.RawURLEncoding.EncodeToString(make([]byte, 32))
+	hash := sha256.Sum256([]byte(token))
+	grants := subscriptionState{Version: 1, Generation: 1, Clients: map[string]subscriptionToken{"client-one": {Hash: hex.EncodeToString(hash[:]), Token: token, Generation: 1}}}
 	grantData, _ := json.Marshal(grants)
 	if _, err = s.SaveDocument(ctx, subscriptionsDocument, 0, grantData); err != nil {
 		t.Fatal(err)
@@ -116,7 +120,7 @@ func TestBusinessBackupAPI(t *testing.T) {
 		t.Fatal("missing data/path")
 	}
 	plain, _ := json.Marshal(b)
-	if strings.Contains(string(plain), strings.Repeat("a", 64)) || strings.Contains(string(plain), `"subscriptions"`) {
+	if strings.Contains(string(plain), token) || strings.Contains(string(plain), hex.EncodeToString(hash[:])) || strings.Contains(string(plain), `"subscriptions"`) {
 		t.Fatal("subscription grants included in business backup")
 	}
 	if strings.Contains(w.Body.String(), "password_hash") || strings.Contains(string(file), b.Identities.Clients["client-one"].Auth) {
@@ -229,7 +233,7 @@ func TestBusinessBackupAPI(t *testing.T) {
 		t.Fatal("business restore retained old runtime history")
 	}
 	restoredGrants, err := readSubscriptions(docs[subscriptionsDocument])
-	if err != nil || restoredGrants.Generation <= 1 || restoredGrants.Clients["client-one"].Generation == restoredGrants.Generation {
+	if err != nil || restoredGrants.Generation <= 1 || restoredGrants.Clients["client-one"].Token != "" || restoredGrants.Clients["client-one"].Generation == restoredGrants.Generation {
 		t.Fatal("business restore retained active subscription grants", err)
 	}
 	var next workspaceDraft

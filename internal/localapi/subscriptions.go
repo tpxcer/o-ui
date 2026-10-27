@@ -27,6 +27,7 @@ var subscriptionPath = regexp.MustCompile(`^/sub/(?:(?:clash|json)/)?[A-Za-z0-9_
 
 type subscriptionToken struct {
 	Hash       string `json:"hash"`
+	Token      string `json:"token,omitempty"`
 	Generation uint64 `json:"generation"`
 }
 type subscriptionState struct {
@@ -62,6 +63,13 @@ func readSubscriptions(doc store.Document) (subscriptionState, error) {
 		decoded, err := hex.DecodeString(item.Hash)
 		if !draftID.MatchString(id) || err != nil || len(decoded) != sha256.Size || item.Hash != strings.ToLower(item.Hash) || item.Generation > state.Generation || seen[item.Hash] {
 			return state, i18n.New("订阅记录无效", "Invalid subscription records")
+		}
+		if item.Token != "" {
+			secret, err := base64.RawURLEncoding.DecodeString(item.Token)
+			hash := sha256.Sum256([]byte(item.Token))
+			if err != nil || len(secret) != 32 || base64.RawURLEncoding.EncodeToString(secret) != item.Token || hex.EncodeToString(hash[:]) != item.Hash {
+				return state, i18n.New("订阅记录无效", "Invalid subscription records")
+			}
 		}
 		seen[item.Hash] = true
 	}
@@ -102,7 +110,7 @@ func saveSubscriptionWorkspace(ctx context.Context, s *store.Store, old store.Do
 	}
 	for id, item := range state.Clients {
 		if !allowed[id] && item.Generation == state.Generation {
-			item.Generation = 0
+			item.Generation, item.Token = 0, ""
 			state.Clients[id] = item
 			changed = true
 		}
@@ -124,6 +132,10 @@ func invalidateSubscriptions(doc store.Document) (json.RawMessage, error) {
 		return nil, i18n.New("无法撤销原订阅链接，未恢复业务", "Cannot revoke the old subscription links; data not restored")
 	}
 	state.Generation++
+	for id, item := range state.Clients {
+		item.Token = ""
+		state.Clients[id] = item
+	}
 	return json.Marshal(state)
 }
 
@@ -170,6 +182,9 @@ func registerSubscriptions(mux *http.ServeMux, rt *Runtime) {
 				result.Clash, result.JSON = settings.ClashEnabled, settings.JSONEnabled
 			}
 			if action == "status" {
+				if result.Active && result.Allowed && item.Token != "" {
+					result.Path = "/sub/" + item.Token
+				}
 				respond(w, 200, result)
 				return
 			}
@@ -189,10 +204,10 @@ func registerSubscriptions(mux *http.ServeMux, rt *Runtime) {
 				}
 				token := base64.RawURLEncoding.EncodeToString(secret)
 				hash := sha256.Sum256([]byte(token))
-				state.Clients[client.ID] = subscriptionToken{Hash: hex.EncodeToString(hash[:]), Generation: state.Generation}
+				state.Clients[client.ID] = subscriptionToken{Hash: hex.EncodeToString(hash[:]), Token: token, Generation: state.Generation}
 				result.Path, result.Active = "/sub/"+token, true
 			} else if result.Active {
-				item.Generation = 0
+				item.Generation, item.Token = 0, ""
 				state.Clients[client.ID] = item
 				result.Active = false
 			} else {

@@ -67,8 +67,8 @@ func subscriptionCall(t *testing.T, handler http.Handler, action string, request
 	if want == 200 && json.Unmarshal(w.Body.Bytes(), &result) != nil {
 		t.Fatal("invalid result")
 	}
-	if action != "rotate" && result.Path != "" {
-		t.Fatal("existing link recovered from digest")
+	if action == "revoke" && result.Path != "" {
+		t.Fatal("revoked link returned")
 	}
 	return result
 }
@@ -108,12 +108,12 @@ func TestSubscriptionManagement(t *testing.T) {
 	doc, _ := s.ReadDocument(context.Background(), subscriptionsDocument)
 	token := strings.TrimPrefix(first.Path, "/sub/")
 	hash := sha256.Sum256([]byte(token))
-	if strings.Contains(string(doc.Data), token) || !strings.Contains(string(doc.Data), hex.EncodeToString(hash[:])) {
-		t.Fatal("raw subscription secret persisted")
+	if !strings.Contains(string(doc.Data), token) || !strings.Contains(string(doc.Data), hex.EncodeToString(hash[:])) {
+		t.Fatal("recoverable subscription token or digest missing")
 	}
 	status = subscriptionCall(t, handler, "status", req, cookie, 200)
-	if !status.Active || status.Revision != 1 || status.Path != "" {
-		t.Fatal("status leak/mismatch")
+	if !status.Active || status.Revision != 1 || status.Path != first.Path {
+		t.Fatal("status recovery mismatch")
 	}
 	subscriptionCall(t, handler, "rotate", req, cookie, 409)
 	req.Revision = 1
@@ -139,6 +139,10 @@ func TestSubscriptionManagement(t *testing.T) {
 	}
 	subscriptionGET(t, handler, first.Path, 404)
 	subscriptionGET(t, handler, second.Path, 503)
+	status = subscriptionCall(t, handler, "status", req, cookie, 200)
+	if status.Path != second.Path {
+		t.Fatal("reopened runtime did not recover link")
+	}
 	req.Revision = second.Revision
 	revoked := subscriptionCall(t, handler, "revoke", req, cookie, 200)
 	if revoked.Active || revoked.Revision != 3 {
@@ -177,6 +181,8 @@ func TestSubscriptionBoundary(t *testing.T) {
 		{"nested-format", "GET", "/sub/clash/json/" + strings.TrimPrefix(created.Path, "/sub/"), "127.0.0.1:1234", "127.0.0.1:5180", "", "", 404},
 		{"format-remote", "GET", "/sub/clash/" + strings.TrimPrefix(created.Path, "/sub/"), "192.0.2.1:1234", "127.0.0.1:5180", "", "", 403},
 		{"root", "GET", "/sub", "127.0.0.1:1234", "127.0.0.1:5180", "", "", 404},
+		{"status-no-origin", "POST", "/api/subscription/status", "127.0.0.1:1234", "127.0.0.1:5180", "", "", 403},
+		{"status-cross-origin", "POST", "/api/subscription/status", "127.0.0.1:1234", "127.0.0.1:5180", "https://evil.test", "", 403},
 		{"management-no-origin", "POST", "/api/subscription/rotate", "127.0.0.1:1234", "127.0.0.1:5180", "", "", 403},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -225,12 +231,17 @@ func TestSubscriptionWorkspaceRevocationAtomic(t *testing.T) {
 				t.Fatal(err)
 			}
 			subscriptionGET(t, handler, created.Path, 404)
+			cleared, _ := s.ReadDocument(context.Background(), subscriptionsDocument)
+			grants, err := readSubscriptions(cleared)
+			if err != nil || grants.Clients[req.ClientID].Token != "" {
+				t.Fatal("workspace revocation retained recoverable token")
+			}
 			if _, err = saveSubscriptionWorkspace(context.Background(), s, next, old.Data); err != nil {
 				t.Fatal(err)
 			}
 			req.WorkspaceRevision = 3
 			status := subscriptionCall(t, handler, "status", req, cookie, 200)
-			if status.Active {
+			if status.Active || status.Path != "" {
 				t.Fatal("off/on or recreated ID resurrected old grant")
 			}
 			subscriptionGET(t, handler, created.Path, 404)
@@ -310,7 +321,96 @@ func TestSubscriptionFormatsToggle(t *testing.T) {
 	subscriptionGET(t, handler, "/sub/clash/"+token, 404)
 	subscriptionGET(t, handler, "/sub/json/"+token, 404)
 	status := subscriptionCall(t, handler, "status", subscriptionRequest{ClientID: "client-one", WorkspaceRevision: 1}, cookie, 200)
-	if status.Clash || status.JSON || status.Path != "" {
-		t.Fatal("status should report disabled formats without a path", status)
+	if status.Clash || status.JSON || status.Path != created.Path {
+		t.Fatal("status should report disabled formats and retain universal link")
+	}
+}
+
+func TestSubscriptionLegacyHashAndRecoverableToken(t *testing.T) {
+	s, _, handler, cookie := subscriptionFixture(t)
+	req := subscriptionRequest{ClientID: "client-one", WorkspaceRevision: 1, Confirm: true}
+	created := subscriptionCall(t, handler, "rotate", req, cookie, 200)
+	doc, _ := s.ReadDocument(context.Background(), subscriptionsDocument)
+	state, err := readSubscriptions(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := state.Clients[req.ClientID]
+	token := item.Token
+	item.Token = ""
+	state.Clients[req.ClientID] = item
+	data, _ := json.Marshal(state)
+	if _, err = s.SaveDocument(context.Background(), subscriptionsDocument, doc.Revision, data); err != nil {
+		t.Fatal(err)
+	}
+	status := subscriptionCall(t, handler, "status", req, cookie, 200)
+	if !status.Active || status.Path != "" {
+		t.Fatal("legacy hash-only link should remain active without recovery")
+	}
+	subscriptionGET(t, handler, created.Path, 503)
+	req.Revision = status.Revision
+	rotated := subscriptionCall(t, handler, "rotate", req, cookie, 200)
+	status = subscriptionCall(t, handler, "status", req, cookie, 200)
+	if rotated.Path == created.Path || status.Path != rotated.Path {
+		t.Fatal("manual reset did not enable recovery")
+	}
+	subscriptionGET(t, handler, created.Path, 404)
+
+	for _, bad := range []string{"short", token + "=", strings.Repeat("b", 43), token[:42] + "B"} {
+		item.Token = bad
+		state.Clients[req.ClientID] = item
+		data, _ = json.Marshal(state)
+		if _, err := readSubscriptions(store.Document{Revision: 1, Data: data}); err == nil {
+			t.Fatal("malformed or mismatched recovery token accepted")
+		}
+	}
+	doc, _ = s.ReadDocument(context.Background(), subscriptionsDocument)
+	invalidated, err := invalidateSubscriptions(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err = readSubscriptions(store.Document{Revision: doc.Revision + 1, Data: invalidated})
+	if err != nil || state.Clients[req.ClientID].Token != "" {
+		t.Fatal("backup invalidation retained recoverable token")
+	}
+	req.Revision = rotated.Revision
+	revoked := subscriptionCall(t, handler, "revoke", req, cookie, 200)
+	status = subscriptionCall(t, handler, "status", req, cookie, 200)
+	doc, _ = s.ReadDocument(context.Background(), subscriptionsDocument)
+	state, err = readSubscriptions(doc)
+	if err != nil || revoked.Path != "" || status.Path != "" || state.Clients[req.ClientID].Token != "" {
+		t.Fatal("revoked token remains recoverable")
+	}
+}
+
+func TestSubscriptionTokenSurvivesDatabaseReopen(t *testing.T) {
+	root := t.TempDir()
+	s, err := store.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := base64.RawURLEncoding.EncodeToString(make([]byte, 32))
+	hash := sha256.Sum256([]byte(token))
+	data, _ := json.Marshal(subscriptionState{Version: 1, Generation: 1, Clients: map[string]subscriptionToken{
+		"client-one": {Hash: hex.EncodeToString(hash[:]), Token: token, Generation: 1},
+	}})
+	if _, err = s.SaveDocument(context.Background(), subscriptionsDocument, 0, data); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err = store.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	doc, err := s.ReadDocument(context.Background(), subscriptionsDocument)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := readSubscriptions(doc)
+	if err != nil || state.Clients["client-one"].Token != token {
+		t.Fatal("database reopen lost recoverable token")
 	}
 }
