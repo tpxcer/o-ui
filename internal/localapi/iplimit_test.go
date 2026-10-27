@@ -106,7 +106,7 @@ func TestIPLimitTickBansUnbansAndRebuilds(t *testing.T) {
 	if got := take(); !reflect.DeepEqual(got, []string{"flush", "ban 203.0.113.2 18443 tcp"}) {
 		t.Fatal("restart should rebuild bans", got)
 	}
-	// 页面查询与手动解封：解封后30分钟内放行，不再计入上限。
+	// 页面查询与手动解封：只取消封禁，仍超限时按正常规则再次封禁。
 	call := func(method, path, body string, want int) map[string]any {
 		r := httptest.NewRequest(method, path, strings.NewReader(body))
 		r.Host, r.RemoteAddr = "127.0.0.1:5180", "127.0.0.1:1234"
@@ -138,10 +138,22 @@ func TestIPLimitTickBansUnbansAndRebuilds(t *testing.T) {
 	if got := take(); !reflect.DeepEqual(got, []string{"unban 203.0.113.2 18443 tcp"}) {
 		t.Fatal("manual unban", got)
 	}
-	rt.ipLimitTick(ctx, t1.Add(time.Minute))
-	if got := take(); len(got) != 0 || len(record().Exempt) != 1 {
-		t.Fatal("exempt IP must not be banned again", got, record())
+	legacy, legacyRevision, _ := readIPLimit(ctx, s)
+	legacy.Exempt = []ipBan{{ClientID: "client-one", IP: "203.0.113.2", Port: 18443, Protocol: "tcp", Until: time.Now().Add(30 * time.Minute)}}
+	legacyData, _ := json.Marshal(legacy)
+	if _, err := s.SaveDocument(ctx, ipLimitDocument, legacyRevision, legacyData); err != nil {
+		t.Fatal(err)
 	}
+	view = call("GET", "/api/runtime/iplimit", "", 200)
+	if len(view["clients"].(map[string]any)["client-one"].(map[string]any)["exempt"].([]any)) != 0 {
+		t.Fatal("legacy exemption must not be advertised", view)
+	}
+	rt.ipLimitTick(ctx, t1.Add(time.Minute))
+	if got := take(); !reflect.DeepEqual(got, []string{"ban 203.0.113.2 18443 tcp"}) || len(record().Exempt) != 0 {
+		t.Fatal("unban must restore normal limit enforcement without exemptions", got, record())
+	}
+	unban("203.0.113.2", 200)
+	take()
 	// 换网：旧IP 3分钟没有新连接，新IP在活动，新IP接替、旧IP被封。
 	t2 := t1.Add(31 * time.Minute)
 	online["client-client-one"] = []onlineIP{{"203.0.113.1", t2.Add(-3 * time.Minute)}, {"203.0.113.3", t2}}
@@ -289,10 +301,10 @@ func TestManualIPBansSharedScopeDurationAndFailures(t *testing.T) {
 	}
 	call("unban", request("client-one", "203.0.113.7", 0), 200, true)
 	rec, _, _ = readIPLimit(ctx, s)
-	if len(rec.Bans) != 0 || len(rec.Exempt) != 2 || len(rules) != 0 {
-		t.Fatal("shared unban and exemptions", rec, rules)
+	if len(rec.Bans) != 0 || len(rec.Exempt) != 0 || len(rules) != 0 {
+		t.Fatal("shared unban restores normal status", rec, rules)
 	}
-	// 重新封禁撤销共享端口的临时豁免；其他端口不受影响。
+	// 重新封禁；其他端口不受影响。
 	call("ban", request("client-one", "203.0.113.7", 10), 200, true)
 	rec, _, _ = readIPLimit(ctx, s)
 	if len(rec.Exempt) != 0 {

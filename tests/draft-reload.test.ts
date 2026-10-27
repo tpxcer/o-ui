@@ -527,3 +527,97 @@ test('IP管理点击后再确认，携带显示时修订，失败禁重试并允
     modal.querySelector('[data-ip-ban]').fire(); await settle(); assert.equal(writes, 1);
   });
 });
+
+test('IP弹窗保存上限只改当前客户端，保留输入并阻止重复提交', async () => {
+  const initial = workspaceFixture(), id = initial.clients[0].id;
+  let state = structuredClone(initial), revision = 2, writes = 0, saved = 0;
+  let finish!: (value: Response) => void;
+  const pending = new Promise<Response>(resolve => { finish = resolve; });
+  await withPage(async (url, options) => {
+    const path = String(url);
+    if (path.endsWith('/api/workspace')) {
+      if (options?.method === 'PUT') {
+        writes++;
+        const request = JSON.parse(String(options.body));
+        const expected = structuredClone(initial); expected.clients[0].ipLimit = 3;
+        assert.deepEqual(request, { revision: 2, data: expected });
+        state = request.data; revision = 3; return pending;
+      }
+      return Response.json({ revision, data: state });
+    }
+    if (path.endsWith('/api/runtime/iplimit')) return Response.json({ enforced: false, issue: '助手未安装', revision: 0, workspaceRevision: revision, serverTime: new Date().toISOString(), clients: {} });
+    return Response.json({ totals: {}, clients: [], data: { enabled: false } });
+  }, async (root, dialogs) => {
+    initManagement(root as unknown as HTMLElement, () => {}, () => {}, () => {}, true, () => { saved++; }).render('clients'); await settle();
+    clickWorkspace(root, 'op', 'iplimit', id); await settle();
+    const modal = dialogs.find(item => item.id === 'edit-dialog')!;
+    const input = modal.querySelector('[data-ip-limit]'); input.value = '3'; input.fire('input', { target: input });
+    modal.querySelector('[data-ip-refresh]').fire(); await settle();
+    assert.match(modal.innerHTML, /value="3"/);
+    assert.doesNotMatch(modal.innerHTML, /data-ip-save disabled/); // 无助手仍能保存配置
+    modal.querySelector('[data-ip-save]').fire(); await settle();
+    modal.querySelector('[data-ip-save]').fire(); modal.querySelector('form').fire('submit'); await settle();
+    assert.equal(writes, 1); assert.match(modal.innerHTML, /data-ip-limit[^>]*disabled/);
+    let prevented = false; modal.fire('cancel', { preventDefault() { prevented = true; } }); assert.equal(prevented, true);
+    finish(Response.json({ revision, data: state, applied: true })); await settle();
+    assert.equal(saved, 1); assert.equal(modal.open, true); assert.match(modal.innerHTML, /IP 上限已保存并生效/);
+    assert.match(modal.innerHTML, /IP 上限 3/); assert.match(modal.innerHTML, /value="3"/);
+    assert.equal(state.clients[1].ipLimit, initial.clients[1].ipLimit);
+  });
+});
+
+test('IP上限拒绝空值、负数、小数、超范围，未保存输入可继续修改', async () => {
+  const state = workspaceFixture(); let writes = 0;
+  await withPage(async (url, options) => {
+    if (options?.method === 'PUT') { writes++; return Response.json({ error: '无效' }, { status: 400 }); }
+    if (String(url).endsWith('/api/workspace')) return Response.json({ revision: 1, data: state });
+    if (String(url).endsWith('/api/runtime/iplimit')) return Response.json({ enforced: true, revision: 0, workspaceRevision: 1, clients: {} });
+    return Response.json({ totals: {}, clients: [], data: { enabled: false } });
+  }, async (root, dialogs) => {
+    initManagement(root as unknown as HTMLElement, () => {}, () => {}, () => {}, true).render('clients'); await settle();
+    clickWorkspace(root, 'op', 'iplimit', state.clients[0].id); await settle();
+    const modal = dialogs.find(item => item.id === 'edit-dialog')!;
+    for (const value of ['', '-1', '1.5', '10001', 'NaN']) {
+      const input = modal.querySelector('[data-ip-limit]'); input.value = value; input.fire('input', { target: input });
+      modal.querySelector('[data-ip-save]').fire(); await settle();
+      assert.match(modal.innerHTML, /须为 0～10000 的整数/); assert.equal(writes, 0);
+    }
+    for (const value of ['0', '10000']) {
+      const input = modal.querySelector('[data-ip-limit]'); input.value = value; input.fire('input', { target: input });
+      modal.querySelector('[data-ip-save]').fire(); await settle();
+    }
+    assert.equal(writes, 2);
+  });
+});
+
+test('IP上限冲突或不确定保存保留输入并锁定，断线确认成功更新修订', async t => {
+  for (const outcome of ['conflict', 'uncertain', 'confirmed']) await t.test(outcome, async () => {
+    const initial = workspaceFixture(); let state = initial, revision = 1, writes = 0;
+    await withPage(async (url, options) => {
+      if (String(url).endsWith('/api/workspace')) {
+        if (options?.method === 'PUT') {
+          writes++;
+          if (outcome === 'conflict') return Response.json({ error: '修订冲突' }, { status: 409 });
+          if (outcome === 'confirmed') { state = JSON.parse(String(options.body)).data; revision++; }
+          throw new Error('response lost');
+        }
+        return Response.json({ revision, data: state });
+      }
+      if (String(url).endsWith('/api/runtime/iplimit')) return Response.json({ enforced: true, revision: 0, workspaceRevision: revision, clients: {} });
+      return Response.json({ totals: {}, clients: [], data: { enabled: false } });
+    }, async (root, dialogs) => {
+      initManagement(root as unknown as HTMLElement, () => {}, () => {}, () => {}, true).render('clients'); await settle();
+      clickWorkspace(root, 'op', 'iplimit', state.clients[0].id); await settle();
+      const modal = dialogs.find(item => item.id === 'edit-dialog')!, input = modal.querySelector('[data-ip-limit]');
+      input.value = '2'; input.fire('input', { target: input });
+      modal.querySelector('[data-ip-save]').fire(); await settle();
+      assert.equal(writes, 1); assert.match(modal.innerHTML, /value="2"/);
+      if (outcome === 'confirmed') {
+        assert.match(modal.innerHTML, /IP 上限已保存.*连接曾中断/); assert.equal(state.clients[0].ipLimit, 2);
+      } else {
+        assert.match(modal.innerHTML, /输入已保留.*重新读取列表/);
+        modal.querySelector('[data-ip-save]').fire(); await settle(); assert.equal(writes, 1);
+      }
+    });
+  });
+});

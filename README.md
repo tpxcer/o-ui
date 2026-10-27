@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="src/logo.svg" width="88" height="88" alt="o-ui 标志">
+  <img src="src/logo.png" width="88" height="88" alt="o-ui 标志">
 </p>
 
 <h1 align="center">o-ui</h1>

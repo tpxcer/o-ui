@@ -28,9 +28,8 @@ const (
 	ipLimitDocument  = "iplimit"
 	ipLimitInterval  = 10 * time.Second
 	ipBanDuration    = 10 * time.Minute
-	ipStaleAfter     = 2 * time.Minute  // 换网判定：旧IP这么久没有新连接、新IP在活动，就让新IP接替
-	ipForgetAfter    = 5 * time.Minute  // 离线超过此时长才忘记首次出现时间，短暂断开不丢先到的位置
-	ipExemptDuration = 30 * time.Minute // 手动解封后放行这么久
+	ipStaleAfter     = 2 * time.Minute // 换网判定：旧IP这么久没有新连接、新IP在活动，就让新IP接替
+	ipForgetAfter    = 5 * time.Minute // 离线超过此时长才忘记首次出现时间，短暂断开不丢先到的位置
 	ipNotifyCooldown = 30 * time.Minute
 	ipReassertEvery  = time.Minute // 定期重申封禁，防止防火墙重载冲掉规则
 )
@@ -52,7 +51,7 @@ type ipBan struct {
 
 type ipLimitRecord struct {
 	Bans   []ipBan `json:"bans"`
-	Exempt []ipBan `json:"exempt"`
+	Exempt []ipBan `json:"exempt"` // 兼容旧记录；不再参与上限判定，下一次采样清空。
 }
 
 type trackedIP struct{ first, lastOnline time.Time }
@@ -306,14 +305,9 @@ func (rt *Runtime) ipLimitTick(ctx context.Context, now time.Time) {
 	if reassert && issue == "" {
 		l.reasserted = now
 	}
-	exempt := record.Exempt[:0:0]
-	for _, item := range record.Exempt {
-		target, ok := targets[item.ClientID]
-		if ok && item.Until.After(now) && (item.Port == 0 || item.Port == target.port && item.Protocol == target.protocol) {
-			exempt = append(exempt, item)
-		} else {
-			changed = true
-		}
+	// 旧版手动解封写入30分钟豁免；升级后恢复正常上限规则并清理旧记录。
+	if len(record.Exempt) > 0 {
+		changed = true
 	}
 	l.online = map[string][]onlineIP{}
 	online, err := sampleOnlineIPs(ctx, rt)
@@ -363,11 +357,6 @@ func (rt *Runtime) ipLimitTick(ctx context.Context, now time.Time) {
 					skip[ban.IP] = true
 				}
 			}
-			for _, item := range exempt {
-				if item.ClientID == clientID {
-					skip[item.IP] = true
-				}
-			}
 			for ip, entry := range tracked {
 				first[ip] = entry.first
 			}
@@ -394,7 +383,7 @@ func (rt *Runtime) ipLimitTick(ctx context.Context, now time.Time) {
 	}
 	l.issue = issue
 	if changed {
-		data, _ := json.Marshal(ipLimitRecord{Bans: bans, Exempt: exempt})
+		data, _ := json.Marshal(ipLimitRecord{Bans: bans})
 		if _, err := rt.state.SaveDocument(ctx, ipLimitDocument, revision, data); err != nil {
 			l.issue = i18n.T("无法保存IP上限记录", "Cannot save IP limit records")
 		}
@@ -468,11 +457,6 @@ func registerIPLimit(mux *http.ServeMux, rt *Runtime) {
 				if id != ban.ClientID && target.port == ban.Port && target.protocol == ban.Protocol {
 					get(id).Banned = append(get(id).Banned, ban)
 				}
-			}
-		}
-		for _, item := range record.Exempt {
-			if item.Until.After(now) {
-				get(item.ClientID).Exempt = append(get(item.ClientID).Exempt, item)
 			}
 		}
 		issue, helperErr := l.issue, ipLimitHelperReady()
@@ -580,37 +564,20 @@ func (rt *Runtime) changeIPBan(ctx context.Context, action string, request ipBan
 			known = true
 		}
 	}
-	exempt := make([]ipBan, 0, len(record.Exempt))
-	for _, item := range record.Exempt {
-		t, exists := targets[item.ClientID]
-		if item.IP == request.IP && exists && t.port == target.port && t.protocol == target.protocol {
-			if item.Until.After(now) {
-				known = true
-			}
-		} else {
-			exempt = append(exempt, item)
-		}
-	}
 	if action == "unban" && !wasBanned {
 		return 404, i18n.New("没有这条封禁记录，可能已到期解封", "No such ban; it may have expired")
 	}
 	if action == "ban" && !known {
-		return 422, i18n.New("此IP不在当前客户端的在线、封禁或放行列表中，请刷新", "This IP is not in this client's online, banned or allowed list; refresh")
+		return 422, i18n.New("此IP不在当前客户端的在线或封禁列表中，请刷新", "This IP is not in this client's online or banned list; refresh")
 	}
 	if action == "ban" {
 		bans = append(bans, ban)
-	} else {
-		for id, t := range targets {
-			if t.port == target.port && t.protocol == target.protocol {
-				exempt = append(exempt, ipBan{ClientID: id, IP: request.IP, Port: target.port, Protocol: target.protocol, Until: now.Add(ipExemptDuration)})
-			}
-		}
 	}
 	if err := rt.ipBan(ctx, action, ban); err != nil {
 		l.issue = err.Error()
 		return 502, err
 	}
-	data, _ := json.Marshal(ipLimitRecord{Bans: bans, Exempt: exempt})
+	data, _ := json.Marshal(ipLimitRecord{Bans: bans})
 	if _, err := rt.state.SaveDocument(ctx, ipLimitDocument, revision, data); err != nil {
 		// 持久化失败时恢复原规则；使用独立期限，不受浏览器断开影响。
 		recoverCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

@@ -260,7 +260,6 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent-bg); wi
 .ip-list { list-style: none; margin: 0 0 18px; padding: 0; display: grid; gap: 8px; }
 .ip-card { --ip-color: var(--green); padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--ip-color) 25%, var(--border)); border-left: 3px solid var(--ip-color); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--ip-color) 5%, transparent); }
 .ip-banned { --ip-color: var(--danger); }
-.ip-allowed { --ip-color: var(--blue); }
 .ip-pending { --ip-color: var(--warning); }
 .ip-card.is-selected { outline: 2px solid var(--ip-color); outline-offset: 2px; }
 .ip-card-heading, .ip-action-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
@@ -279,3 +278,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent-bg); wi
 .ip-action-buttons { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
 .ip-empty { margin: 8px 0 18px; }
 @media (max-width: 500px) { .ip-card { padding: 10px; } .ip-address { min-height: 44px; flex-wrap: wrap; gap: 4px 8px; } .ip-action-buttons > button { flex: 1; } }
+
+.ip-limit-settings { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 12px; margin: 16px 0 8px; }
+.ip-limit-settings .form-field { width: 150px; margin: 0; }
+.ip-limit-settings button { min-height: 42px; }

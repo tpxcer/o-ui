@@ -5,7 +5,7 @@
 .auth-heading { margin-bottom: 24px; position: relative; }
 .auth-heading .lang-toggle { position: absolute; top: -12px; right: -12px; }
 .auth-heading > span { display: inline-flex; align-items: center; gap: 9px; color: var(--text); font-size: 16px; font-weight: 650; letter-spacing: -.02em; }
-.auth-heading > span::before { content: ""; width: 26px; height: 26px; background: url(./logo.svg) center / contain no-repeat; }
+.auth-heading > span::before { content: ""; width: 26px; height: 26px; background: url(./logo.png) center / contain no-repeat; }
 .auth-heading .slogan { font-size: 13px; margin-top: 10px; }
 .auth-heading h1 { font-size: 22px; font-weight: 650; letter-spacing: -.02em; margin: 20px 0 6px; }
 .auth-heading p, .auth-boundary { color: var(--muted); font-size: 13px; }

@@ -328,7 +328,7 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
     returnFocus = document.activeElement as HTMLElement;
     const generation = ++ipDialogGeneration;
     let busy = false, ready = false, selected = '', minutes = '10', message = '', failed = false, selectionView: IPLimitView | null = null;
-    let clockOffset = 0;
+    let clockOffset = 0, limitInput = String(client.ipLimit);
     const current = () => generation === ipDialogGeneration && modal.open;
     const time = (value: string) => new Date(value).toLocaleString(lang === 'en' ? 'en' : 'zh-CN', { hour12: false });
     const now = () => Date.now() + clockOffset;
@@ -350,27 +350,28 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
       const view = ipView?.clients[client.id] ?? { online: [], banned: [], exempt: [] };
       const banned = [...new Map(view.banned.map(item => [item.ip, item])).values()];
       const bannedIPs = new Set(banned.map(item => item.ip));
-      const exempt = view.exempt.filter(item => !bannedIPs.has(item.ip));
-      const exemptIPs = new Set(exempt.map(item => item.ip));
-      const online = view.online.filter(item => !bannedIPs.has(item.ip) && !exemptIPs.has(item.ip));
+      const online = view.online.filter(item => !bannedIPs.has(item.ip));
       const list = (items: string[], empty: string) => items.length ? `<ul class="ip-list">${items.join('')}</ul>` : `<p class="form-hint ip-empty">${empty}</p>`;
       const row = (ip: string, tone: string, status: string, detail: string) => `<li class="ip-card ip-${tone}${selected === ip ? ' is-selected' : ''}"><div class="ip-card-heading"><button type="button" class="ip-address" data-ip="${esc(ip)}" aria-expanded="${selected === ip}" aria-controls="ip-action-panel" ${busy || !ready ? 'disabled' : ''}><code>${esc(ip)}</code><span class="ip-manage-label">${t('管理', 'Manage')}</span></button><span class="ip-badge">${status}</span></div><div class="ip-detail">${detail}</div></li>`;
       const deadline = (item: IPBan, label: string) => item.permanent ? `<strong>${t('永久封禁 · 需手动解封', 'Permanent ban · manual unban required')}</strong>` : `<span data-ip-until="${esc(item.until)}">${remaining(item.until)}</span><span>${label}${time(item.until)}</span>`;
       const selectedBan = banned.find(item => item.ip === selected);
-      const changedWorkspace = ready && ipView?.workspaceRevision !== revision;
+      const changedWorkspace = reloadRequired || ready && ipView?.workspaceRevision !== revision;
       const disabled = busy || !ready || !ipView?.enforced || changedWorkspace;
       modal.innerHTML = `<form novalidate data-ip-dialog><header class="dialog-heading"><h2 id="edit-title">${t('在线 IP', 'Online IPs')} · ${esc(client.name)}</h2><button type="button" class="icon-button" data-close aria-label="${t('关闭弹窗', 'Close dialog')}">${icon('x')}</button></header><div class="edit-body ip-dialog-body">
         <p class="form-intro">${client.ipLimit ? t(`IP 上限 ${client.ipLimit}：超限自动封禁 10 分钟；手动封禁按你选择的时长执行。`, `IP limit ${client.ipLimit}: excess IPs are automatically banned for 10 minutes; manual bans use your chosen duration.`) : t('未设置 IP 上限，可点击下方 IP 手动封禁。', 'No IP limit is set. Click an IP below to ban it manually.')}</p>
+        <div class="ip-limit-settings"><label class="form-field" for="ip-limit-input">${t('IP 上限', 'IP limit')}<input id="ip-limit-input" data-ip-limit name="ipLimit" type="number" min="0" max="10000" step="1" required value="${esc(limitInput)}" ${busy || changedWorkspace ? 'disabled' : ''}></label><button type="button" class="primary-button" data-ip-save ${busy || !ready || changedWorkspace ? 'disabled' : ''}>${t('保存上限', 'Save limit')}</button></div>
+        <p class="form-hint">${t('0 表示不限，最多 10000；仅修改当前客户端。保存后立即生效，代理连接可能短暂中断。', '0 means unlimited, up to 10000; changes this client only. Saving applies immediately and may briefly interrupt proxy connections.')}</p>
         <p class="form-hint">${t('点击 IP 管理；到期后通常在 10 秒内自动解封。', 'Click an IP to manage it. Expired bans are normally removed within 10 seconds.')}</p>
         ${changedWorkspace ? `<p class="form-error">${t('客户端配置已变化，请关闭弹窗并重新读取列表后操作。', 'Client settings changed; close this dialog and reload the list before acting.')}</p>` : ''}
         ${ipView?.issue ? `<p class="form-error">${esc(ipView.issue)}</p>` : ipView && !ipView.enforced ? `<p class="form-error">${t('防火墙助手不可用，请更新安装后重试。', 'The firewall helper is unavailable; update the installation and retry.')}</p>` : ''}
         <h3>${t('在线', 'Online')} <small>${online.length}</small></h3>${list(online.map(item => row(item.ip, 'online', t('在线', 'Online'), `<span>${t('最近新连接 ', 'Last new connection ')}${time(item.lastSeen)}</span>`)), t('当前没有未封禁的在线 IP。', 'No unblocked IP is online.'))}
         <h3>${t('已封禁', 'Banned')} <small>${banned.length}</small></h3>${list(banned.map(item => row(item.ip, item.permanent || Date.parse(item.until) > now() ? 'banned' : 'pending', item.permanent || Date.parse(item.until) > now() ? t('已封禁', 'Banned') : t('待解封', 'Unban pending'), `<span>${item.manual ? t('手动封禁', 'Manual ban') : t('超限自动封禁', 'Automatic limit ban')} · ${item.port ?? inbound?.port}/${(item.protocol ?? 'tcp').toUpperCase()}</span>${deadline(item, t('解封时间 ', 'Unban at '))}`)), t('没有被封禁的 IP。', 'No IP is banned.'))}
-        ${exempt.length ? `<h3>${t('临时放行', 'Temporarily allowed')} <small>${exempt.length}</small></h3>${list(exempt.map(item => row(item.ip, 'allowed', t('已解封 · 放行中', 'Unbanned · allowed'), deadline(item, t('放行到 ', 'Allowed until ')))), '')}` : ''}
-        ${selected ? `<section id="ip-action-panel" class="ip-action-panel" aria-label="${t('IP 操作', 'IP actions')}"><div class="ip-action-heading"><strong><code>${esc(selected)}</code></strong><button type="button" class="text-button" data-ip-cancel ${busy ? 'disabled' : ''}>${t('取消选择', 'Cancel selection')}</button></div><p class="form-hint">${esc(scope)}</p><label class="form-field">${t('封禁时长（从确认时开始）', 'Ban duration (from confirmation)')}<select data-ip-duration ${disabled ? 'disabled' : ''}>${durations.map(([value, label]) => `<option value="${value}" ${String(value) === minutes ? 'selected' : ''}>${label}</option>`).join('')}</select></label><div class="ip-action-buttons"><button type="button" class="danger-button" data-ip-ban ${disabled ? 'disabled' : ''}>${selectedBan ? t('更新封禁时长', 'Update ban duration') : t('确认封禁', 'Confirm ban')}</button>${selectedBan ? `<button type="button" class="primary-button" data-ip-unban ${disabled ? 'disabled' : ''}>${t('确认解封', 'Confirm unban')}</button>` : ''}</div>${selectedBan ? `<p class="form-hint">${t('解封后临时放行 30 分钟，期间不参与 IP 上限判定。', 'After unbanning, this IP is exempt from the IP limit for 30 minutes.')}</p>` : ''}</section>` : ''}
+        ${selected ? `<section id="ip-action-panel" class="ip-action-panel" aria-label="${t('IP 操作', 'IP actions')}"><div class="ip-action-heading"><strong><code>${esc(selected)}</code></strong><button type="button" class="text-button" data-ip-cancel ${busy ? 'disabled' : ''}>${t('取消选择', 'Cancel selection')}</button></div><p class="form-hint">${esc(scope)}</p><label class="form-field">${t('封禁时长（从确认时开始）', 'Ban duration (from confirmation)')}<select data-ip-duration ${disabled ? 'disabled' : ''}>${durations.map(([value, label]) => `<option value="${value}" ${String(value) === minutes ? 'selected' : ''}>${label}</option>`).join('')}</select></label><div class="ip-action-buttons"><button type="button" class="danger-button" data-ip-ban ${disabled ? 'disabled' : ''}>${selectedBan ? t('更新封禁时长', 'Update ban duration') : t('确认封禁', 'Confirm ban')}</button>${selectedBan ? `<button type="button" class="primary-button" data-ip-unban ${disabled ? 'disabled' : ''}>${t('确认解封', 'Confirm unban')}</button>` : ''}</div>${selectedBan ? `<p class="form-hint">${t('手动解封会取消封禁，恢复正常状态；仍超过 IP 上限时会再次自动封禁。', 'Manual unban removes the ban and restores normal status; exceeding the IP limit may trigger another automatic ban.')}</p>` : ''}</section>` : ''}
         <p class="${failed ? 'form-error' : 'form-hint'}" role="status">${esc(message)}</p></div><footer><button type="button" class="secondary-button" data-ip-refresh ${busy ? 'disabled' : ''}>${t('刷新状态', 'Refresh status')}</button><button type="button" class="secondary-button" data-close>${t('关闭', 'Close')}</button></footer></form>`;
-      modal.querySelector('form')!.addEventListener('submit', event => event.preventDefault());
-      modal.querySelectorAll('[data-close]').forEach(button => button.addEventListener('click', () => modal.close()));
+      modal.querySelector('form')!.addEventListener('submit', event => { event.preventDefault(); void saveLimit(); });
+      modal.querySelector<HTMLInputElement>('[data-ip-limit]')!.addEventListener('input', event => { limitInput = (event.target as HTMLInputElement).value; });
+      modal.querySelector('[data-ip-save]')!.addEventListener('click', () => { void saveLimit(); });
+      modal.querySelectorAll('[data-close]').forEach(button => button.addEventListener('click', () => { if (!submitting) modal.close(); }));
       modal.querySelectorAll<HTMLButtonElement>('[data-ip]').forEach(button => button.addEventListener('click', () => {
         if (busy || !ready) return;
         selected = button.dataset.ip!; selectionView = ipView; failed = false; message = ''; render();
@@ -383,6 +384,45 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
       modal.querySelector('[data-ip-unban]')?.addEventListener('click', () => { void change('unban'); });
       refreshIcons();
     };
+    async function saveLimit(): Promise<void> {
+      if (busy || !ready || reloadRequired || loading || submitting || ipView?.workspaceRevision !== revision) return;
+      const value = Number(limitInput);
+      if (!limitInput.trim() || !Number.isInteger(value) || value < 0 || value > 10000) {
+        failed = true; message = t('IP 上限须为 0～10000 的整数，0 表示不限。', 'IP limit must be an integer from 0 to 10000; 0 means unlimited.'); render(); modal.querySelector<HTMLInputElement>('[data-ip-limit]')?.focus(); return;
+      }
+      const sent = structuredClone(state), target = sent.clients.find(item => item.id === client.id);
+      if (!target) return;
+      target.ipLimit = value;
+      const before = revision;
+      busy = true; submitting = true; failed = false; message = t('正在保存并生效…', 'Saving and applying…'); render(); updateApplicationStatus();
+      let saved = false;
+      try {
+        let result;
+        try {
+          result = await api<{ revision: number; data: Workspace; applied?: boolean; applyError?: string; firewall?: string }>('workspace', jsonBody('PUT', { revision: before, data: sent }));
+        } catch (reason) {
+          if (!uncertainSave(reason)) throw reason;
+          const confirmed = await confirmSaved('workspace', sent, before + 1);
+          if (!confirmed) throw reason;
+          result = { ...confirmed, applyError: t('连接曾中断，请核对核心与防火墙状态。', 'Connection was interrupted; check core and firewall status.') };
+        }
+        revision = result.revision; state = result.data; client = state.clients.find(item => item.id === client.id)!;
+        limitInput = String(client.ipLimit); selected = ''; selectionView = null; saved = true;
+        message = result.applied ? t('IP 上限已保存并生效。', 'IP limit saved and applied.') : t('IP 上限已保存，请核对生效状态：', 'IP limit saved; check application status: ') + (result.applyError ?? '');
+        if (result.firewall) message += ` ${result.firewall}`;
+        onSaved(); void refreshFirewall();
+      } catch (reason) {
+        if (!(reason instanceof APIError) || reason.status === 409 || reason.status >= 500) reloadRequired = true;
+        failed = true; message = (reason as Error).message + (reloadRequired ? t(' 输入已保留。请关闭弹窗，重新读取列表后再操作。', ' Input is kept. Close this dialog and reload the list before trying again.') : '');
+      } finally {
+        submitting = false; busy = false; pendingNotice = ''; renderList(); updateApplicationStatus();
+      }
+      if (saved) {
+        try { ipView = await api<IPLimitView>('runtime/iplimit'); }
+        catch { ready = false; message += t(' IP 状态读取失败，请刷新状态。', ' IP status could not be read; refresh the status.'); }
+      }
+      if (current()) render();
+    }
     async function refresh(): Promise<void> {
       if (busy) return;
       busy = true; ready = false; failed = false; message = t('正在读取…', 'Loading…'); render();
@@ -395,20 +435,20 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
       finally { if (current()) { busy = false; render(); } }
     }
     async function change(action: 'ban' | 'unban'): Promise<void> {
-      if (busy || !ready || !selected || !selectionView || !ipView?.enforced || ipView.workspaceRevision !== revision) return;
+      if (busy || !ready || !selected || !selectionView || !ipView?.enforced || reloadRequired || ipView.workspaceRevision !== revision) return;
       const request = { clientId: client.id, ip: selected, minutes: Number(minutes), confirm: true, revision: selectionView.revision, workspaceRevision: revision };
       busy = true; failed = false; message = t('正在执行…', 'Applying…'); render();
       try {
         const result = await api<IPLimitView>(`runtime/iplimit/${action}`, jsonBody('POST', request));
         if (!current()) return;
-        ipView = result; selected = ''; message = action === 'ban' ? t('封禁已生效。', 'Ban applied.') : t('已解封，临时放行 30 分钟。', 'Unbanned and allowed for 30 minutes.');
+        ipView = result; selected = ''; message = action === 'ban' ? t('封禁已生效。', 'Ban applied.') : t('已取消封禁，恢复正常状态。', 'Ban removed; normal status restored.');
       } catch (reason) { if (!current()) return; ready = false; failed = true; message = (reason as Error).message + t(' 请刷新状态后再操作。', ' Refresh the status before trying again.'); }
       finally { if (current()) { busy = false; render(); } }
     }
     render();
     if (!modal.open) modal.showModal();
     ipDialogRefresh = () => {
-      if (!current() || busy || selected || !ready) return;
+      if (!current() || busy || selected || !ready || document.activeElement?.hasAttribute('data-ip-limit')) return;
       const active = document.activeElement as HTMLElement | null, focused = !!active && modal.contains(active);
       const focusedIP = active?.dataset.ip, closing = active?.hasAttribute('data-close');
       const scroll = modal.querySelector('.edit-body')!.scrollTop;

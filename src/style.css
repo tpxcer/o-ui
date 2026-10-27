@@ -100,7 +100,7 @@ h2 { font-size: 15px; font-weight: 600; letter-spacing: -.005em; }
 .sidebar { position: fixed; inset: 0 auto 0 0; width: var(--sidebar-width); background: var(--sidebar); display: flex; flex-direction: column; z-index: 20; border-right: 1px solid var(--border); }
 .brand { display: flex; align-items: center; justify-content: space-between; min-height: 60px; padding: 8px 10px 8px 20px; }
 .brand-name { display: inline-flex; align-items: center; gap: 9px; font-size: 17px; font-weight: 650; letter-spacing: -.02em; white-space: nowrap; }
-.brand-name::before { content: ""; width: 22px; height: 22px; background: url(./logo.svg) center / contain no-repeat; }
+.brand-name::before { content: ""; width: 22px; height: 22px; background: url(./logo.png) center / contain no-repeat; }
 .brand-actions { display: flex; align-items: center; gap: 2px; }
 .brand-title { display: grid; gap: 1px; min-width: 0; }
 /* 标语：渐变细字，侧栏里对齐在图标右侧的名称下方 */
