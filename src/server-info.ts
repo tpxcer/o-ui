@@ -32,9 +32,14 @@ export function initServerInfo(root: HTMLElement, reveal: () => boolean): { refr
     const providerValues = [...body.querySelectorAll<HTMLElement>('[data-public]')];
     setPrivate(providerValues[0], publicInfo?.ipv4?.ip ?? '', publicInfo ? t('查询失败', 'Lookup failed') : failed);
     setPrivate(providerValues[1], publicInfo?.ipv4?.hostname ?? '', publicInfo ? t('无', 'None') : failed);
+    if (providerValues[1]) providerValues[1].closest<HTMLElement>('.field')!.hidden = !publicInfo?.ipv4?.hostname;
   }
   function field(label: string, value: string, attribute = ''): string {
     return `<div class="field"><dt>${label}</dt><dd${attribute}>${value}</dd></div>`;
+  }
+  function planDetails(node: string, name: string, tags: string, source: 'provider' | 'public'): string {
+    const description = `<span class="package-plan-name">${esc(name || '—')}</span>${tags ? `<div class="package-resources" aria-label="${t('套餐资源', 'Plan resources')}">${tags}</div>` : ''}`;
+    return `<dl>${field(t('节点', 'Node'), esc(node || '—'))}${field(t('套餐', 'Plan'), description)}</dl><dl class="package-network">${field(t('服务商 IP', 'Provider IP'), '—', ` data-${source}`)}${field('PTR', '—', ` data-${source}`)}</dl>`;
   }
   // 服务商拉取：本月流量、节点、套餐与IP/PTR都来自服务商接口（参照OUI）。
   function paintProvider(): void {
@@ -48,10 +53,12 @@ export function initServerInfo(root: HTMLElement, reveal: () => boolean): { refr
         <p>${t('下次重置：', 'Next reset: ')}${esc(reset)} · ${t('数据来自服务商接口', 'From the provider API')}</p>`;
     }
     const tags = p ? [['RAM', p.planRam], ['Disk', p.planDisk], ['Swap', p.planSwap]].filter(([, value]) => binaryGB(value)).map(([name, value]) => `<span class="tag">${name} ${binaryGB(value)}</span>`).join(' ') : '';
-    body.innerHTML = `<div class="traffic-allowance">${summary}</div><dl>${field(t('节点', 'Node'), esc(p ? p.nodeLocation || p.nodeAlias || '—' : '—'))}${field(t('套餐', 'Plan'), esc(p?.plan || '—'))}${field(t('套餐资源', 'Plan resources'), tags || '—')}${field(t('服务商 IP', 'Provider IP'), '—', ' data-provider')}${field('PTR', '—', ' data-provider')}</dl>`;
+    body.innerHTML = `<div class="traffic-allowance">${summary}</div>${planDetails(p?.nodeLocation || p?.nodeAlias || '', p?.plan || '', tags, 'provider')}`;
     const [ips, ptr] = [...body.querySelectorAll<HTMLElement>('[data-provider]')];
     setPrivate(ips, p?.ipAddresses.join(', ') ?? '', '—');
-    setPrivate(ptr, p ? Object.values(p.ptr).filter(Boolean).join(', ') : '', '—');
+    const hostname = p ? Object.values(p.ptr).filter(Boolean).join(', ') : '';
+    setPrivate(ptr, hostname, '—');
+    ptr.closest<HTMLElement>('.field')!.hidden = !hostname;
   }
   function paintPlan(): void {
     const mode = planMode(plan);
@@ -66,7 +73,7 @@ export function initServerInfo(root: HTMLElement, reveal: () => boolean): { refr
         <p>${t('下次重置：', 'Next reset: ')}${esc(a.reset)}${usage.inexact ? t(' · 本周期用量可能不精确（中途开始统计、重启或停机跨周期），可在设置中校准', ' · usage this period may be inexact (started mid-period, rebooted, or stopped across the reset); calibrate it in settings') : ''}${plan?.issue ? ` · ${esc(plan.issue)}` : ''}</p>`;
     }
     const tags = data ? planTags(data.resources).map(tag => `<span class="tag">${esc(tag)}</span>`).join(' ') : '';
-    body.innerHTML = `<div class="traffic-allowance">${summary}</div><dl>${field(t('节点', 'Node'), esc(data?.node || '—'))}${field(t('套餐', 'Plan'), esc(data?.name || '—'))}${field(t('套餐资源', 'Plan resources'), tags || '—')}${field(t('服务商 IP', 'Provider IP'), '—', ' data-public')}${field('PTR', '—', ' data-public')}</dl>`;
+    body.innerHTML = `<div class="traffic-allowance">${summary}</div>${planDetails(data?.node || '', data?.name || '', tags, 'public')}`;
     paintPublic();
   }
   async function loadPublic(): Promise<void> {

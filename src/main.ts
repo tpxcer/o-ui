@@ -113,7 +113,7 @@ app.innerHTML = `
         <div class="card-body" id="package-body"><div class="traffic-allowance"><div class="allowance-heading"><span>${t('本月流量', 'Traffic this month')}</span><strong>${demo.trafficUsed} GB / 2.00 TB</strong></div>
           <div class="allowance-progress"><div class="meter" role="progressbar" aria-label="${t('本月流量使用率（演示）', 'Monthly traffic usage (demo)')}" aria-valuenow="${percent(demo.trafficUsed, demo.trafficTotal).toFixed(1)}" aria-valuemin="0" aria-valuemax="100"><span style="width:${percent(demo.trafficUsed, demo.trafficTotal)}%"></span></div><span>10.4%</span></div>
           <p>${t('下次重置：', 'Next reset: ')}${demo.reset}</p></div>
-          <dl>${field(t('节点', 'Node'), 'demo-01 / US, California')}${field(t('套餐', 'Plan'), t('演示套餐 · 2核 / 2GB / 40GB', 'Demo plan · 2 cores / 2GB / 40GB'))}${field(t('套餐资源', 'Plan resources'), '<span class="tag">RAM 2.00 GB</span> <span class="tag">Disk 40.00 GB</span>')}${field(t('服务商 IP', 'Provider IP'), demo.ipv4, true)}${field('PTR', 'demo.example', true)}</dl>
+          <dl>${field(t('节点', 'Node'), 'demo-01 / US, California')}${field(t('套餐', 'Plan'), `<span class="package-plan-name">${t('演示套餐 · 2核 / 2GB / 40GB', 'Demo plan · 2 cores / 2GB / 40GB')}</span><div class="package-resources" aria-label="${t('套餐资源', 'Plan resources')}"><span class="tag">RAM 2.00 GB</span><span class="tag">Disk 40.00 GB</span></div>`)}</dl><dl class="package-network">${field(t('服务商 IP', 'Provider IP'), demo.ipv4, true)}${field('PTR', 'demo.example', true)}</dl>
         </div>
       </section>
     </div>

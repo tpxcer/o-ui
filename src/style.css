@@ -173,6 +173,15 @@ main { margin-left: var(--sidebar-width); padding: 20px 28px 40px; outline: none
 .private-value { letter-spacing: 2px; filter: blur(2px); user-select: none; color: var(--muted); }
 .private-value.revealed { filter: none; user-select: text; letter-spacing: normal; color: var(--text); }
 .traffic-allowance { padding: 14px 16px; margin-bottom: 12px; background: var(--raised); border-radius: var(--radius); }
+.package-card .traffic-allowance { padding: 12px 14px; margin-bottom: 6px; }
+.package-card .allowance-progress { margin-top: 6px; }
+.package-plan-name { display: block; }
+.package-resources { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+.package-resources .tag { margin: 0; }
+.package-network { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 20px; border-top: 1px solid var(--border); }
+.package-network:has(> [hidden]) { grid-template-columns: minmax(0, 1fr); }
+.package-network > .field { min-width: 0; border: 0; }
+@media (max-width: 600px) { .package-network { grid-template-columns: minmax(0, 1fr); } }
 .allowance-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
 .allowance-heading > span, .traffic-allowance p { color: var(--muted); font-size: 13px; }
 .allowance-heading strong { font-size: 15px; font-variant-numeric: tabular-nums; }
