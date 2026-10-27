@@ -1,17 +1,20 @@
 import { api } from './api.ts';
-import { bytes, duration, fresh, networkArea, networkPath, networkSegments, coreReadings, type CoreMetrics, type SystemSnapshot, type Capacity } from './monitor-model.ts';
+import { bytes, chartScale, duration, fresh, networkArea, networkPath, networkSegments, coreReadings, type CoreMetrics, type SystemSnapshot, type Capacity } from './monitor-model.ts';
 import { escapeHtml as esc } from './workspace.ts';
 import { resourceColor } from './model.ts';
 import type { RuntimeStatus } from './runtime.ts';
 import './monitor.css';
 import { locale, t } from './i18n.ts';
+import { infoTip } from './info-tip.ts';
 
 export function initMonitor(root: HTMLElement, runtime: () => RuntimeStatus | null): void {
   const $ = <T extends Element = HTMLElement>(selector: string) => root.querySelector<T>(selector)!;
+  // 状态与采样时间常显，统计口径收进ⓘ。
   const status = document.createElement('p');
-  status.className = 'monitor-status';
-  status.textContent = t('正在读取系统采样…', 'Reading system samples…');
+  status.className = 'monitor-status info-tip-host';
+  status.innerHTML = `<span>${t('正在读取系统采样…', 'Reading system samples…')}</span>${infoTip('')}`;
   $('.network-panel').append(status);
+  const statusText = status.querySelector('span')!, statusTip = status.querySelector('.info-tip-text')!;
   $('.status-card').setAttribute('aria-label', t('真实系统资源', 'System resources'));
   $('.statistics').setAttribute('aria-label', t('真实运行统计', 'Runtime statistics'));
   const groups = [...root.querySelectorAll('.stat-group')];
@@ -25,8 +28,10 @@ export function initMonitor(root: HTMLElement, runtime: () => RuntimeStatus | nu
   groups[3].querySelectorAll('dt')[0].textContent = t('TCP 已建立', 'TCP established');
   groups[3].querySelectorAll('dt')[1].textContent = t('UDP 套接字', 'UDP sockets');
   const coreStatus = document.createElement('p');
-  coreStatus.className = 'monitor-status core-metrics-status';
+  coreStatus.className = 'monitor-status core-metrics-status info-tip-host';
+  coreStatus.innerHTML = `<span></span>${infoTip(t('仅本面板自有 Xray：内存为 RSS，线程不含监督进程；TCP 不含监听，UDP 含监听、不是 QUIC 会话或设备数。', 'o-ui\'s own Xray only: memory is RSS, threads exclude the supervisor; TCP excludes listeners, UDP includes listeners and is not QUIC sessions or devices.'))}`;
   $('.statistics').after(coreStatus);
+  const coreStatusText = coreStatus.querySelector('span')!;
   const dd = [...root.querySelectorAll<HTMLElement>('.statistics dd')];
   let last: SystemSnapshot | null = null, disposed = false, busy = false, error = '';
   let lastCore: CoreMetrics | null = null, coreBusy = false, coreError = '';
@@ -36,7 +41,7 @@ export function initMonitor(root: HTMLElement, runtime: () => RuntimeStatus | nu
     if (disposed || !root.isConnected) return;
     const readings = coreReadings(coreError ? null : lastCore);
     for (const [i, target] of [2, 3, 6, 7].entries()) dd[target].textContent = readings.values[i];
-    coreStatus.textContent = `${coreError || readings.note}${t('。仅本面板自有 Xray：内存为 RSS，线程不含监督进程；TCP 不含监听，UDP 含监听、不是 QUIC 会话或设备数。', '. o-ui\'s own Xray only: memory is RSS, threads exclude the supervisor; TCP excludes listeners, UDP includes listeners and is not QUIC sessions or devices.')}`;
+    coreStatusText.textContent = coreError || readings.note;
   }
   function resource(index: number, detail: string, value: number | null): void {
     const row = root.querySelectorAll<HTMLElement>('.resource')[index];
@@ -92,7 +97,7 @@ export function initMonitor(root: HTMLElement, runtime: () => RuntimeStatus | nu
     let best = points[0], gap = Infinity;
     for (const point of points) { const distance = Math.abs(Date.parse(point.at) - target); if (distance < gap) { gap = distance; best = point; } }
     if (gap > 6000 || (best.upload === null && best.download === null)) return;
-    const peak = Math.max(1000, ...points.flatMap(p => [p.upload ?? 0, p.download ?? 0]));
+    const peak = chartScale(Math.max(0, ...points.flatMap(p => [p.upload ?? 0, p.download ?? 0])));
     const box = svg.getBoundingClientRect(), host = chart.getBoundingClientRect();
     const x = box.left - host.left + (Date.parse(best.at) - start) / 180000 * box.width, top = box.top - host.top;
     const y = (value: number) => top + (1 - Math.min(value / peak, 1)) * box.height;
@@ -122,14 +127,15 @@ export function initMonitor(root: HTMLElement, runtime: () => RuntimeStatus | nu
     dd[1].textContent = active && s.host ? duration(s.host.uptime) : '—';
     dd[4].textContent = bytes(net?.sent ?? null, 1000); dd[5].textContent = bytes(net?.received ?? null, 1000);
     const points = view().points, end = Date.parse(s?.at ?? '');
-    const peak = Math.max(1000, ...points.flatMap(p => [p.upload ?? 0, p.download ?? 0]));
+    const peak = chartScale(Math.max(0, ...points.flatMap(p => [p.upload ?? 0, p.download ?? 0])));
     const graph = $('.traffic-chart');
     const series: ['upload' | 'download', string][] = [['upload', 'var(--series-1)'], ['download', 'var(--series-2)']];
     graph.setAttribute('aria-label', source === 'host' ? t('最近三分钟服务器网卡总速度', 'Server NIC speed over the last three minutes') : t('最近三分钟面板业务速度', 'Proxy traffic speed over the last three minutes'));
     graph.innerHTML = !points.length ? t('<p class="form-intro">等待采样</p>', '<p class="form-intro">Waiting for samples</p>') : `<div class="axis-labels">${[1, .75, .5, .25].map(n => `<span>${esc(bytes(peak * n, 1000))}/s</span>`).join('')}</div><div class="chart-plot"><svg viewBox="0 0 900 170" preserveAspectRatio="none" aria-hidden="true"><defs>${series.map(([direction, color]) => `<linearGradient id="live-${direction}-fill" x1="0" y1="0" x2="0" y2="1"><stop stop-color="${color}" stop-opacity=".38"/><stop offset="1" stop-color="${color}" stop-opacity=".02"/></linearGradient>`).join('')}</defs>${[0,42.5,85,127.5,169].map(y => `<line x1="0" y1="${y}" x2="900" y2="${y}" class="grid-line"/>`).join('')}${series.map(([direction]) => `<path d="${networkArea(points, direction, peak, end)}" fill="url(#live-${direction}-fill)"/>`).join('')}${series.map(([direction, color]) => `<path d="${networkPath(points, direction, peak, end)}" class="chart-line" stroke="${color}"/>`).join('')}</svg>${series.map(([direction, color]) => { const tail = networkSegments(points, direction, peak, end).at(-1)?.at(-1); return tail && tail[0] > 880 ? `<span class="chart-live" style="left:${(tail[0] / 9).toFixed(2)}%;top:${(tail[1] / 1.7).toFixed(2)}%;color:${color}"></span>` : ''; }).join('')}</div>`;
     drawHover();
     const at = s && fresh(s.at) ? new Date(s.at).toLocaleTimeString(locale, {hour12:false}) : s && Date.parse(s.at) > 0 ? `${t('已过期', 'stale')} ${new Date(s.at).toLocaleTimeString(locale, {hour12:false})}` : t('尚无有效采样', 'No valid samples yet');
-    status.textContent = `${error || (active ? s.issues.length ? `${t('部分不可用：', 'Partly unavailable: ')}${s.issues.join(t('；', '; '))}` : speed?.upload == null ? t('正在建立速率基线', 'Building the rate baseline') : t('采集中', 'Sampling') : t('采样已过期或尚未就绪', 'Sample is stale or not ready'))} · ${at}${source === 'host' ? t('。按服务器物理网卡统计（同 OUI，不含回环与 docker、tun 等虚拟网卡）：上传为服务器发出，下载为服务器收到，含网站、SSH 等全部流量；经节点的流量进出各计一次。', '. Measured on the server\'s physical NICs (like OUI; loopback and virtual NICs such as docker or tun excluded): upload is sent by the server, download is received, including all traffic such as websites and SSH; proxied traffic counts once in and once out.') : t('。只统计本面板客户端经 Xray 的流量（客户端角度），不含系统其他程序。', '. Counts only client traffic through o-ui\'s Xray (from the client\'s side), not other programs.')}`;
+    statusText.textContent = `${error || (active ? s.issues.length ? `${t('部分不可用：', 'Partly unavailable: ')}${s.issues.join(t('；', '; '))}` : speed?.upload == null ? t('正在建立速率基线', 'Building the rate baseline') : t('采集中', 'Sampling') : t('采样已过期或尚未就绪', 'Sample is stale or not ready'))} · ${at}`;
+    statusTip.textContent = source === 'host' ? t('按服务器物理网卡统计（同 OUI，不含回环与 docker、tun 等虚拟网卡）：上传为服务器发出，下载为服务器收到，含网站、SSH 等全部流量；经节点的流量进出各计一次。', 'Measured on the server\'s physical NICs (like OUI; loopback and virtual NICs such as docker or tun excluded): upload is sent by the server, download is received, including all traffic such as websites and SSH; proxied traffic counts once in and once out.') : t('只统计本面板客户端经 Xray 的流量（客户端角度），不含系统其他程序。', 'Counts only client traffic through o-ui\'s Xray (from the client\'s side), not other programs.');
   }
   async function refresh(): Promise<void> {
     if (disposed || busy) return;

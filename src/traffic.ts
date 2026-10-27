@@ -1,5 +1,6 @@
 import { locale, t } from './i18n.ts';
 import type { Inbound } from './workspace.ts';
+import type { StatusTone } from './workspace-status.ts';
 export type TrafficPeriod = 'total' | 'day' | 'week' | 'month';
 export function inboundTrafficPeriod(inbound?: Pick<Inbound, 'trafficReset'>): TrafficPeriod {
   switch (inbound?.trafficReset) {
@@ -54,6 +55,16 @@ export function trafficStatus(snapshot: TrafficSnapshot | null, error = '', now 
   const sampled = snapshot.sampledAt ? Date.parse(snapshot.sampledAt) : NaN;
   const state = snapshot.collecting ? Number.isFinite(sampled) && now - sampled <= 10_000 ? t('正在采集', 'Collecting') : t('采样已过旧', 'Sample is stale') : t('未采集（核心停止或统计关闭）', 'Not collected (core stopped or statistics off)');
   return `${state} · ${Number.isFinite(sampled) ? `${t('最后采样', 'Last sample')} ${new Date(sampled).toLocaleString(locale)}` : t('尚无采样', 'No samples yet')}${snapshot.issue ? ` · ${snapshot.issue}` : ''}${snapshot.incomplete ? t(' · 历史存在未知尾流，累计可能不完整', ' · history has unmeasured traffic, totals may be incomplete') : ''}`;
+}
+
+// 列表顶部的流量采集短标签；完整句子见trafficStatus。
+export function trafficChip(snapshot: TrafficSnapshot | null, error = '', now = Date.now()): [string, StatusTone] {
+  if (error) return [t('流量读取失败', 'Traffic read failed'), 'bad'];
+  if (!snapshot) return [t('正在读取流量', 'Reading traffic'), 'muted'];
+  if (!snapshot.collecting) return [t('流量未采集', 'Traffic not collected'), 'muted'];
+  const sampled = snapshot.sampledAt ? Date.parse(snapshot.sampledAt) : NaN;
+  if (!Number.isFinite(sampled) || now - sampled > 10_000) return [t('流量采样过旧', 'Traffic sample stale'), 'warn'];
+  return [t('流量采集中', 'Collecting traffic'), snapshot.issue || snapshot.incomplete ? 'warn' : 'good'];
 }
 
 // 全站字节统一标B、KB、MB、GB、TB等并按大小自动选单位：流量与速率按十进制（与流量上限的GB、服务商计费一致）；

@@ -1,7 +1,7 @@
 import { createIcons, Gauge, LogIn, Users, Settings, Wrench, PanelLeftClose,
   PanelLeftOpen, Moon, Sun, Eye, EyeOff, ArrowUp, ArrowDown, List, Power, RotateCw,
   RefreshCw, SlidersHorizontal, DatabaseBackup, ChartArea, ChartNoAxesCombined, Menu, X,
-  Info, Plus, Search, Pencil, Trash2, CalendarDays, Shuffle, QrCode, Zap, LogOut, GripVertical, Bell, BellOff } from 'lucide';
+  Info, Plus, Search, Pencil, Trash2, CalendarDays, Shuffle, QrCode, Zap, LogOut, GripVertical, Bell, BellOff, SunMoon, ChevronDown } from 'lucide';
 import { demo, linePath, percent, resourceColor, samples } from './model.ts';
 import { initManagement } from './management.ts';
 import { initCore } from './core.ts';
@@ -11,6 +11,7 @@ import { initMonitor } from './monitor.ts';
 import { initLogs } from './logs.ts';
 import type { RuntimeStatus } from './runtime.ts';
 import { initXraySettings } from './xray-settings.ts';
+import { installInfoTips } from './info-tip.ts';
 import { initPanelSettings } from './panel-settings.ts';
 import { initServerInfo } from './server-info.ts';
 import { requireLogin } from './auth.ts';
@@ -31,7 +32,7 @@ document.addEventListener('click', event => {
 const icons = { Gauge, LogIn, Users, Settings, Wrench, PanelLeftClose,
   PanelLeftOpen, Moon, Sun, Eye, EyeOff, ArrowUp, ArrowDown, List, Power, RotateCw,
   RefreshCw, SlidersHorizontal, DatabaseBackup, ChartArea, ChartNoAxesCombined, Menu, X,
-  Info, Plus, Search, Pencil, Trash2, CalendarDays, Shuffle, QrCode, Zap, LogOut, GripVertical, Bell, BellOff };
+  Info, Plus, Search, Pencil, Trash2, CalendarDays, Shuffle, QrCode, Zap, LogOut, GripVertical, Bell, BellOff, SunMoon, ChevronDown };
 const icon = (name: string) => `<i data-lucide="${name}" aria-hidden="true"></i>`;
 const action = (label: string, name: string, id: string) =>
   `<button class="action" data-action="${id}">${icon(name)}<span>${label}</span></button>`;
@@ -103,13 +104,13 @@ app.innerHTML = `
       </div>
     </section>
     <div class="two-columns server-row">
-      <section class="card server-card" aria-labelledby="server-title"><header class="card-header"><h2 id="server-title">${demo.hostname}</h2><button class="icon-button" id="privacy-toggle" aria-label="${t('显示 IP 地址', 'Show IP address')}" aria-pressed="false">${icon('eye-off')}</button></header>
-        <div class="card-body"><p class="server-description">${demo.provider} · ${demo.system} · KVM</p><dl>
+      <section class="card server-card" aria-labelledby="server-title"><header class="card-header"><h2 id="server-title">${demo.hostname}</h2><div class="card-header-actions"><button class="icon-button" id="privacy-toggle" aria-label="${t('显示 IP 地址', 'Show IP address')}" aria-pressed="false">${icon('eye-off')}</button><button class="icon-button card-collapse" aria-expanded="true" aria-controls="server-body" aria-label="${t('服务器信息', 'Server info')}">${icon('chevron-down')}</button></div></header>
+        <div class="card-body" id="server-body"><p class="server-description">${demo.provider} · ${demo.system} · KVM</p><dl>
           ${field('IPv4', demo.ipv4, true)}${field('IPv6', demo.ipv6, true)}${field(t('归属地', 'Location'), demo.location)}${field(t('运营商', 'ISP'), demo.network)}${field(t('系统负载', 'System load'), demo.load)}
         </dl></div>
       </section>
-      <section class="card package-card" aria-labelledby="package-title"><header class="card-header"><h2 id="package-title">${t('服务器套餐', 'Server plan')}</h2></header>
-        <div class="card-body"><div class="traffic-allowance"><div class="allowance-heading"><span>${t('本月流量', 'Traffic this month')}</span><strong>${demo.trafficUsed} GB / 2.00 TB</strong></div>
+      <section class="card package-card" aria-labelledby="package-title"><header class="card-header"><h2 id="package-title">${t('服务器套餐', 'Server plan')}</h2><button class="icon-button card-collapse" aria-expanded="true" aria-controls="package-body" aria-label="${t('服务器套餐', 'Server plan')}">${icon('chevron-down')}</button></header>
+        <div class="card-body" id="package-body"><div class="traffic-allowance"><div class="allowance-heading"><span>${t('本月流量', 'Traffic this month')}</span><strong>${demo.trafficUsed} GB / 2.00 TB</strong></div>
           <div class="allowance-progress"><div class="meter" role="progressbar" aria-label="${t('本月流量使用率（演示）', 'Monthly traffic usage (demo)')}" aria-valuenow="${percent(demo.trafficUsed, demo.trafficTotal).toFixed(1)}" aria-valuemin="0" aria-valuemax="100"><span style="width:${percent(demo.trafficUsed, demo.trafficTotal)}%"></span></div><span>10.4%</span></div>
           <p>${t('下次重置：', 'Next reset: ')}${demo.reset}</p></div>
           <dl>${field(t('节点', 'Node'), 'demo-01 / US, California')}${field(t('套餐', 'Plan'), t('演示套餐 · 2核 / 2GB / 40GB', 'Demo plan · 2 cores / 2GB / 40GB'))}${field(t('套餐资源', 'Plan resources'), '<span class="tag">RAM 2.00 GB</span> <span class="tag">Disk 40.00 GB</span>')}${field(t('服务商 IP', 'Provider IP'), demo.ipv4, true)}${field('PTR', 'demo.example', true)}</dl>
@@ -118,7 +119,7 @@ app.innerHTML = `
     </div>
     <div class="two-columns service-row">
       <section class="card" aria-labelledby="xray-title"><header class="card-header"><h2 id="xray-title"><button class="core-title-trigger" data-action="core-open" aria-label="${t('Xray版本管理', 'Xray version management')}">Xray</button></h2><span class="core-stopped" id="core-home-status">${t('核心管理待连接 · 代理未启动', 'Core management not connected · proxy not started')}</span></header><div class="actions four-actions">
-        ${action(t('日志', 'Logs'), 'list', 'xray-log')}${action(t('停止', 'Stop'), 'power', 'stop')}${action(t('重启', 'Restart'), 'rotate-cw', 'restart')}${action('v26.7.28', 'wrench', 'core-version')}
+        ${action(t('日志', 'Logs'), 'list', 'xray-log')}${action(t('停止', 'Stop'), 'power', 'stop')}${action(t('重启', 'Restart'), 'rotate-cw', 'restart')}${action(t('切换版本', 'Switch version'), 'wrench', 'core-version')}
       </div></section>
       <section class="card panel-card" aria-labelledby="panel-title"><header class="card-header"><h2 id="panel-title">o-ui <span class="version-tag">${t('原型', 'prototype')}</span></h2></header><div class="actions six-actions">
         ${action(t('日志', 'Logs'), 'list', 'panel-log')}${action(t('配置', 'Config'), 'sliders-horizontal', 'config')}${action(t('备份和恢复', 'Backup and restore'), 'database-backup', 'backup')}${action(t('系统历史', 'System history'), 'chart-area', 'history')}${action(t('Xray 指标', 'Xray metrics'), 'chart-no-axes-combined', 'metrics')}${action(t('检测更新', 'Check for updates'), 'refresh-cw', 'update')}
@@ -156,21 +157,40 @@ if (authenticated) {
 }
 
 function refreshIcons(): void { createIcons({ icons, attrs: { 'stroke-width': 1.7 } }); }
+installInfoTips();
 
+// 主题三档循环：深色 → 浅色 → 跟随系统；没保存过选择时沿用原来的深色默认（用户2026-10-27要求加跟随系统）。
+type ThemeChoice = 'dark' | 'light' | 'system';
 const themeToggle = document.querySelector<HTMLButtonElement>('#theme-toggle')!;
-function setTheme(theme: 'light' | 'dark'): void {
-  document.documentElement.dataset.theme = theme;
-  themeToggle.setAttribute('aria-label', `${t('切换到', 'Switch to ')}${theme === 'dark' ? t('浅', 'light') : t('深', 'dark')}${t('色主题', ' theme')}`);
-  themeToggle.innerHTML = icon(theme === 'dark' ? 'moon' : 'sun');
+const systemDark = window.matchMedia('(prefers-color-scheme: dark)');
+const nextTheme = (choice: ThemeChoice): ThemeChoice => choice === 'dark' ? 'light' : choice === 'light' ? 'system' : 'dark';
+let themeChoice: ThemeChoice = 'dark';
+function applyTheme(): void {
+  document.documentElement.dataset.theme = themeChoice === 'system' ? systemDark.matches ? 'dark' : 'light' : themeChoice;
+  const names: Record<ThemeChoice, string> = { dark: t('深色', 'dark'), light: t('浅色', 'light'), system: t('跟随系统', 'system') };
+  const label = `${t('主题：', 'Theme: ')}${names[themeChoice]}${t('，点击切换为', '; switch to ')}${names[nextTheme(themeChoice)]}`;
+  themeToggle.setAttribute('aria-label', label); themeToggle.title = label;
+  themeToggle.innerHTML = icon(themeChoice === 'system' ? 'sun-moon' : themeChoice === 'dark' ? 'moon' : 'sun');
   refreshIcons();
 }
 let savedTheme: string | null = null;
 try { savedTheme = localStorage.getItem('independent-panel-theme'); } catch { /* 禁用存储不影响主题切换。 */ }
-setTheme(savedTheme === 'light' ? 'light' : 'dark');
+if (savedTheme === 'light' || savedTheme === 'system') themeChoice = savedTheme;
+applyTheme();
+systemDark.addEventListener('change', () => { if (themeChoice === 'system') applyTheme(); });
 themeToggle.addEventListener('click', () => {
-  const theme = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
-  setTheme(theme);
-  try { localStorage.setItem('independent-panel-theme', theme); } catch { /* 同上。 */ }
+  themeChoice = nextTheme(themeChoice);
+  applyTheme();
+  try { localStorage.setItem('independent-panel-theme', themeChoice); } catch { /* 同上。 */ }
+});
+
+// 手机上服务器信息和套餐卡默认收起、只留标题，点箭头展开；桌面始终展开（用户2026-10-27要求）。
+const narrow = window.matchMedia('(max-width: 700px)');
+document.querySelectorAll<HTMLButtonElement>('.card-collapse').forEach(button => {
+  const card = button.closest<HTMLElement>('.card')!, name = button.getAttribute('aria-label')!;
+  const set = (collapsed: boolean) => { card.classList.toggle('is-collapsed', collapsed); button.setAttribute('aria-expanded', String(!collapsed)); button.title = `${collapsed ? t('展开', 'Expand ') : t('收起', 'Collapse ')}${name}`; };
+  set(narrow.matches);
+  button.addEventListener('click', () => set(!card.classList.contains('is-collapsed')));
 });
 
 let showPrivate = false;
@@ -335,8 +355,10 @@ const serverInfo = authenticated ? initServerInfo(document.querySelector<HTMLEle
 if (authenticated) window.setInterval(() => { if (!document.hidden) void runtime.refresh(); }, 5000);
 management = initManagement(document.querySelector('#workspace-view')!, refreshIcons, navigate, showDetail, authenticated, () => { void runtime.refresh(); });
 const core = initCore(refreshIcons, status => {
-  const label = document.querySelector('[data-action="core-version"] span');
-  if (label) label.textContent = status ? `v${status.selected}` : t('版本管理', 'Version management');
+  // 按钮固定写“切换版本”，当前选用的版本放在悬停提示与读屏名称里。
+  const button = document.querySelector<HTMLElement>('[data-action="core-version"]');
+  const hint = status ? `${t('切换 Xray 版本，当前 v', 'Switch Xray version, current v')}${status.selected}` : t('Xray 版本管理', 'Xray version management');
+  if (button) { button.title = hint; button.setAttribute('aria-label', hint); }
 });
 xraySettings = initXraySettings(document.querySelector('#core-view')!, refreshIcons, authenticated, () => { void quickRuntime('restart'); }, () => { void runtime.refresh(); });
 const panelSettings = initPanelSettings(document.querySelector('#panel-view')!, authenticated);

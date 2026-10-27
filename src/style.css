@@ -158,6 +158,10 @@ main { margin-left: var(--sidebar-width); padding: 20px 28px 40px; outline: none
 .meter > span { display: block; border-radius: inherit; height: 100%; background: var(--resource-color, var(--blue)); transition: width .4s ease; }
 .two-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; margin-top: 16px; }
 .two-columns:has(> .package-card[hidden]) { grid-template-columns: minmax(0, 1fr); }
+/* 服务器信息与套餐卡按各自内容高度，不再被拉成一样高留出空白。 */
+.server-row { align-items: start; }
+.card-header-actions { display: flex; align-items: center; gap: 4px; }
+.card-collapse { display: none; }
 .card-header { min-height: 54px; padding: 8px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .card-header h2 { min-width: 0; overflow-wrap: anywhere; }
 .card-body { padding: 20px; }
@@ -200,6 +204,19 @@ main { margin-left: var(--sidebar-width); padding: 20px 28px 40px; outline: none
 .stat-group dl > div { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; padding: 6px 0; }
 .stat-group dt { color: var(--muted); font-size: 14px; }
 .stat-group dd { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+/* ⓘ说明：悬停、键盘聚焦或点按后在宿主行下方展开，宽度跟随宿主行。 */
+.info-tip-host { position: relative; }
+.info-tip { display: inline-flex; vertical-align: middle; margin-left: 6px; }
+.info-tip-button { display: inline-grid; place-items: center; width: 18px; height: 18px; padding: 0; border: 1.5px solid var(--muted); border-radius: 50%; background: transparent; color: var(--muted); font: italic 700 11px/1 Georgia, 'Times New Roman', serif; cursor: help; }
+.info-tip-button:hover, .info-tip-button[aria-expanded="true"] { color: var(--text); border-color: var(--text); }
+.info-tip-text { display: none; position: absolute; z-index: 25; left: 0; right: 0; top: calc(100% + 6px); padding: 10px 12px; background: var(--menu); border: 1px solid var(--border-strong); border-radius: var(--radius-sm); box-shadow: var(--shadow-pop); color: var(--text); font-size: 13px; font-weight: 400; line-height: 1.65; white-space: normal; text-align: left; overflow-wrap: anywhere; }
+.info-tip-text:empty { display: none !important; }
+.info-tip-text > * { display: block; }
+.info-tip-text > * + * { margin-top: 4px; }
+.info-tip:hover .info-tip-text, .info-tip-button:focus-visible + .info-tip-text, .info-tip-button[aria-expanded="true"] + .info-tip-text { display: block; }
+/* 卡片的毛玻璃会形成独立层叠，展开时把所在卡片提到后续卡片之上，说明框才不被盖住。 */
+.card:has(.info-tip:hover), .card:has(.info-tip-button:is(:focus-visible, [aria-expanded="true"])) { position: relative; z-index: 26; }
+@media (pointer: coarse) { .info-tip-button { width: 24px; height: 24px; } }
 .mobile-header, .menu-scrim { display: none; }
 .sidebar-collapsed { --sidebar-width: 68px; }
 .sidebar-collapsed .brand { padding: 8px 10px; justify-content: center; }
@@ -284,11 +301,18 @@ dialog footer { padding: 12px 22px 18px; display: flex; justify-content: flex-en
   .six-actions { grid-template-columns: repeat(3, minmax(0, 1fr)); row-gap: 8px; }
   .six-actions .action:nth-child(3) { border-right: 0; }
   .six-actions .action { min-height: 48px; flex-direction: column; }
-  .statistics { grid-template-columns: 1fr; padding: 0 16px; }
-  .stat-group, .stat-group:first-child, .stat-group:last-child { border-right: 0; border-bottom: 1px solid var(--border); padding: 18px 0; }
-  .stat-group:last-child { border-bottom: 0; }
+  .card-collapse { display: inline-grid; }
+  .card-collapse svg { transition: transform .2s; }
+  .card.is-collapsed > .card-body { display: none; }
+  .card.is-collapsed > .card-header { border-bottom: 0; }
+  .card.is-collapsed .card-collapse svg { transform: rotate(-90deg); }
+  .statistics { grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 0 16px; }
+  .stat-group, .stat-group:first-child, .stat-group:last-child { border-right: 0; border-bottom: 1px solid var(--border); padding: 16px 0; }
+  .stat-group:nth-child(odd) { border-right: 1px solid var(--border); padding-right: 12px; }
+  .stat-group:nth-child(even) { padding-left: 12px; }
+  .stat-group:nth-last-child(-n + 2) { border-bottom: 0; }
   .stat-group h2 { margin-bottom: 6px; }
-  .stat-group dl > div { flex-direction: row; padding: 5px 0; }
+  .stat-group dl > div { flex-direction: column; gap: 0; padding: 4px 0; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; scroll-behavior: auto !important; }

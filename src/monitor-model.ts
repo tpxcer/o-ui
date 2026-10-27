@@ -25,6 +25,11 @@ export function coreReadings(m: CoreMetrics | null, now = Date.now()): { values:
   return { values: [bytes(m.memory), count(m.threads), count(m.tcp), count(m.udp)], note: m.issues.join(t('；', '; ')) || `${t('采样', 'Sampled')} ${new Date(m.at).toLocaleTimeString(locale, { hour12: false })}` };
 }
 
+// 速度图纵轴上限取整：四等分后每格为1、2、2.5或5乘10的幂（如1 MB/s、750 KB/s、500 KB/s、250 KB/s），最低1 KB/s。
+export function chartScale(peak: number): number {
+  const step = Math.max(peak, 1000) / 4, power = 10 ** Math.floor(Math.log10(step));
+  return [1, 2, 2.5, 5, 10].find(n => n * power >= step)! * power * 4;
+}
 // 后端数值可能是十进制字符串；容量（内存、交换、磁盘）用默认1024，网卡流量与速率传1000。
 export function bytes(value: string | number | null, base: 1000 | 1024 = 1024): string {
   if (value === null || (typeof value === 'string' && !/^\d+$/.test(value))) return '—';

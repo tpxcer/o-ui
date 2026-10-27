@@ -37,9 +37,8 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent-bg); wi
 .workspace-summary > span { display: inline-flex; align-items: baseline; gap: 8px; padding: 6px 12px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); }
 .workspace-summary strong { color: var(--text); font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .workspace-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-.workspace-status { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 0; margin-bottom: 16px; }
-.workspace-status .form-hint { font-size: 13px; line-height: 1.7; }
-.workspace-status .form-hint:not(:empty) + .form-hint:not(:empty)::before { content: "·"; margin: 0 8px; color: var(--border-strong); }
+.workspace-status { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 16px; }
+.workspace-status .info-tip { margin-left: 0; }
 .list-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 14px 16px; border-bottom: 1px solid var(--border); }
 .search-box { display: flex; gap: 8px; align-items: center; flex: 1 1 240px; max-width: 360px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); padding-left: 11px; background: var(--input); transition: border-color .15s, box-shadow .15s; }
 .search-box:focus-within { border-color: var(--blue); box-shadow: var(--focus); }
@@ -74,6 +73,8 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent-bg); wi
 .client-identity { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .client-identity > .switch { flex: 0 0 auto; }
 .client-identity-text { min-width: 0; overflow-wrap: anywhere; }
+/* 入站名过长时单行截断，悬停看全称，行高保持一致。 */
+.client-identity-text .table-secondary { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .firewall-maintenance { margin-bottom: 16px; padding: 12px 16px; border: 1px solid color-mix(in srgb, var(--orange) 45%, var(--border)); border-radius: 8px; background: color-mix(in srgb, var(--orange) 6%, transparent); }
 .firewall-maintenance summary { cursor: pointer; font-size: 14px; font-weight: 600; }
 .firewall-maintenance p { color: var(--muted); font-size: 14px; line-height: 1.7; }
@@ -121,6 +122,8 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent-bg); wi
 .status-badge b { width: 6px; height: 6px; background: currentColor; border-radius: 50%; flex-shrink: 0; }
 .status-badge.is-good { color: var(--green); }
 .status-badge.is-muted { color: var(--muted); }
+.status-badge.is-warn { color: var(--warning); }
+.status-badge.is-bad { color: var(--danger); }
 .row-actions { display: flex; gap: 2px; }
 .row-actions .icon-button { width: 32px; min-width: 0; height: 32px; }
 .row-actions .icon-button svg { width: 16px; height: 16px; }
@@ -230,8 +233,6 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent-bg); wi
   .page-heading p { max-width: 190px; font-size: 13px; }
   .create-button { padding: 0 12px; font-size: 14px; }
   .workspace-summary > span { padding: 4px 10px; }
-  .workspace-status { display: grid; gap: 2px; }
-  .workspace-status .form-hint:not(:empty) + .form-hint:not(:empty)::before { content: none; }
   .workspace-actions { width: 100%; }
   .workspace-actions button { flex: 1; }
   .list-toolbar { padding: 12px; gap: 8px; }
@@ -284,5 +285,8 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent-bg); wi
 .ip-empty { margin: 8px 0 18px; }
 @media (max-width: 500px) { .ip-card { padding: 10px; } .ip-address { min-height: 44px; flex-wrap: wrap; gap: 4px 8px; } .ip-action-buttons > button { flex: 1; } }
 
-.ip-limit-settings { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 12px; margin: 16px 0 8px; }
+/* IP上限单独成卡，和下面的在线、封禁列表分开。 */
+.ip-limit-card { margin-bottom: 16px; padding: 14px 16px; background: var(--raised); border: 1px solid var(--border-strong); border-radius: var(--radius); }
+.ip-limit-card .form-intro { margin: 0; }
+.ip-limit-settings { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 12px; margin: 12px 0 8px; }
 .ip-limit-settings .form-field { width: 150px; margin: 0; }

@@ -13,3 +13,15 @@ export function workspaceStatusText(persistent: boolean, revision: number, runti
   if (revision < runtime.workspaceRevision) return t(`页面入站/客户端修订${revision}已落后于运行配置（${running}），请重新读取已保存草稿后核对。`, `This page's inbound/client revision ${revision} is behind the running configuration (${running}); reload the saved draft and check.`);
   return t(`已保存入站/客户端修订${revision}待应用；当前运行${running}。`, `Saved inbound/client revision ${revision} is pending; running ${running}.`);
 }
+
+export type StatusTone = 'good' | 'muted' | 'warn' | 'bad';
+// 列表顶部的状态短标签；完整句子仍由workspaceStatusText给出，放在ⓘ里。
+export function workspaceStatusChip(persistent: boolean, revision: number, runtime: RuntimeStatus | null, at: number, now = Date.now()): [string, StatusTone] {
+  if (!persistent) return [t('离线草稿', 'Offline draft'), 'muted'];
+  if (!runtime) return [t('状态未连接', 'Status unavailable'), 'warn'];
+  const age = now - at;
+  if (!Number.isFinite(age) || age < -5000 || age > 10000) return [t('状态已过期', 'Status stale'), 'warn'];
+  if (!runtime.running) return runtime.unexpectedExit ? [t('核心异常退出', 'Core exited'), 'bad'] : [t('核心未运行', 'Core stopped'), 'muted'];
+  if (revision === runtime.workspaceRevision) return [t('已生效', 'Applied'), 'good'];
+  return revision < runtime.workspaceRevision ? [t('页面已落后', 'Page outdated'), 'warn'] : [t('待应用', 'Pending'), 'warn'];
+}

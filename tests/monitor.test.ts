@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { bytes, duration, fresh, networkArea, networkPath, coreReadings, type CoreMetrics } from '../src/monitor-model.ts';
+import { bytes, chartScale, duration, fresh, networkArea, networkPath, coreReadings, type CoreMetrics } from '../src/monitor-model.ts';
 
 test('核心指标区分真实零、不可用、停止和过期，不冒充设备数', () => {
   const now = Date.now();
@@ -52,4 +52,10 @@ test('网速曲线平滑但不越界：单调三次曲线的控制点不超出�
   assert.match(path, /C[\d.]+,170\.00 [\d.]+,170\.00 870\.00,170\.00/, '平坦的零速度段保持贴底');
   assert.equal(networkArea([point(0,50)], 'upload', 100, end), '', '单个样本没有面积');
   assert.match(networkArea(samples, 'upload', 100, end), / L900\.00,170 L860\.00,170 Z$/);
+});
+
+test('速度图纵轴上限取整，四等分刻度都是整齐的数', () => {
+  for (const [peak, top] of [[0, 1000], [999, 1000], [1001, 2000], [221, 1000], [2_560_000, 4_000_000], [639_000, 800_000], [9_100, 10_000], [10_001, 20_000], [123_456_789, 200_000_000]]) assert.equal(chartScale(peak), top, String(peak));
+  assert.deepEqual([1, .75, .5, .25].map(n => bytes(chartScale(2_560_000) * n, 1000)), ['4 MB', '3 MB', '2 MB', '1 MB']);
+  assert.deepEqual([1, .75, .5, .25].map(n => bytes(chartScale(900_000) * n, 1000)), ['1 MB', '750 KB', '500 KB', '250 KB']);
 });

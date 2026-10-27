@@ -6,13 +6,14 @@ import { initCalendar } from './calendar.ts';
 import Sortable from 'sortablejs';
 import { mergeVisibleOrder, orderedRecords, type ListKind, type ListOrder } from './list-order.ts';
 import { initConnections } from './connections.ts';
-import { expiryLeft, formatBytes, inboundTrafficPeriod, onlineWindowMs, relativeTime, trafficPeriodHint, trafficPeriodLabel, trafficSpeedVisible, trafficStatus, usedBytes } from './traffic.ts';
+import { expiryLeft, formatBytes, inboundTrafficPeriod, onlineWindowMs, relativeTime, trafficChip, trafficPeriodHint, trafficPeriodLabel, trafficSpeedVisible, trafficStatus, usedBytes } from './traffic.ts';
 import type { TrafficSnapshot } from './traffic.ts';
 import { newRealityConnection, nextRealityTarget, realityServerName, realityTargets, readSniffing, sniffingLabels } from './inbound-options.ts';
 import type { PanelTLSStatus } from './panel-settings.ts';
 import { readProxyEndpoint } from './proxy-endpoint.ts';
 import type { RuntimeStatus } from './runtime.ts';
-import { workspaceStatusText } from './workspace-status.ts';
+import { workspaceStatusChip, workspaceStatusText, type StatusTone } from './workspace-status.ts';
+import { infoTip } from './info-tip.ts';
 import { firewallStatusText, oldFirewallCleanupAllowed, type FirewallReport } from './firewall-status.ts';
 import { confirmAction } from './confirm.ts';
 import { regionLabel, type PublicInfo } from './server-plan-model.ts';
@@ -358,9 +359,9 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
       const changedWorkspace = reloadRequired || ready && ipView?.workspaceRevision !== revision;
       const disabled = busy || !ready || !ipView?.enforced || changedWorkspace;
       modal.innerHTML = `<form novalidate data-ip-dialog><header class="dialog-heading"><h2 id="edit-title">${t('在线 IP', 'Online IPs')} · ${esc(client.name)}</h2><button type="button" class="icon-button" data-close aria-label="${t('关闭弹窗', 'Close dialog')}">${icon('x')}</button></header><div class="edit-body ip-dialog-body">
-        <p class="form-intro">${client.ipLimit ? t(`IP 上限 ${client.ipLimit}：超限自动封禁 10 分钟；手动封禁按你选择的时长执行。`, `IP limit ${client.ipLimit}: excess IPs are automatically banned for 10 minutes; manual bans use your chosen duration.`) : t('未设置 IP 上限，可点击下方 IP 手动封禁。', 'No IP limit is set. Click an IP below to ban it manually.')}</p>
+        <section class="ip-limit-card" aria-label="${t('IP 上限', 'IP limit')}"><p class="form-intro">${client.ipLimit ? t(`IP 上限 ${client.ipLimit}：超限自动封禁 10 分钟；手动封禁按你选择的时长执行。`, `IP limit ${client.ipLimit}: excess IPs are automatically banned for 10 minutes; manual bans use your chosen duration.`) : t('未设置 IP 上限，可点击下方 IP 手动封禁。', 'No IP limit is set. Click an IP below to ban it manually.')}</p>
         <div class="ip-limit-settings"><label class="form-field" for="ip-limit-input">${t('IP 上限', 'IP limit')}<input id="ip-limit-input" data-ip-limit name="ipLimit" type="number" min="0" max="10000" step="1" required value="${esc(limitInput)}" ${busy || changedWorkspace ? 'disabled' : ''}></label></div>
-        <p class="form-hint">${t('0 表示不限，最多 10000；仅修改当前客户端。保存后立即生效，代理连接可能短暂中断。', '0 means unlimited, up to 10000; changes this client only. Saving applies immediately and may briefly interrupt proxy connections.')}</p>
+        <p class="form-hint">${t('0 表示不限，最多 10000；仅修改当前客户端。保存后立即生效，代理连接可能短暂中断。', '0 means unlimited, up to 10000; changes this client only. Saving applies immediately and may briefly interrupt proxy connections.')}</p></section>
         <p class="form-hint">${t('点击 IP 管理；到期后通常在 10 秒内自动解封。', 'Click an IP to manage it. Expired bans are normally removed within 10 seconds.')}</p>
         ${changedWorkspace ? `<p class="form-error">${t('客户端配置已变化，请关闭弹窗并重新读取列表后操作。', 'Client settings changed; close this dialog and reload the list before acting.')}</p>` : ''}
         ${ipView?.issue ? `<p class="form-error">${esc(ipView.issue)}</p>` : ipView && !ipView.enforced ? `<p class="form-error">${t('防火墙助手不可用，请更新安装后重试。', 'The firewall helper is unavailable; update the installation and retry.')}</p>` : ''}
@@ -596,7 +597,7 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
       <td data-label="${t('客户端', 'Clients')}"><button class="text-button" data-op="clients" data-id="${esc(item.id)}">${state.clients.filter(client => client.inboundId === item.id).length} ${t('个客户端', 'clients')}</button></td>
       <td data-label="${t('总流量', 'Total traffic')}" data-inbound-traffic="${esc(item.id)}">${inboundTraffic(item.id)}</td><td data-label="${t('操作', 'Actions')}">${rowActions(item, 'inbound')}</td></tr>`).join('') : clientRows.map(item => {
         const inbound = state.inbounds.find(record => record.id === item.inboundId)!;
-        return `<tr data-client-row="${esc(item.id)}">${selectCell(item)}<td data-label="${t('客户端 / 入站', 'Client / inbound')}"><div class="client-identity"><label class="switch" title="${item.enabled ? t('停用', 'Disable') : t('启用', 'Enable')}"><input type="checkbox" data-toggle-client="${esc(item.id)}" ${item.enabled ? 'checked' : ''} ${loading || submitting || reloadRequired ? 'disabled' : ''} aria-label="${t('启用客户端', 'Enable client')} ${esc(item.name)}"><span aria-hidden="true"></span></label><div class="client-identity-text"><strong class="record-name">${esc(item.name)}</strong><small class="table-secondary">${esc(inbound.name)}</small></div></div></td>
+        return `<tr data-client-row="${esc(item.id)}">${selectCell(item)}<td data-label="${t('客户端 / 入站', 'Client / inbound')}"><div class="client-identity"><label class="switch" title="${item.enabled ? t('停用', 'Disable') : t('启用', 'Enable')}"><input type="checkbox" data-toggle-client="${esc(item.id)}" ${item.enabled ? 'checked' : ''} ${loading || submitting || reloadRequired ? 'disabled' : ''} aria-label="${t('启用客户端', 'Enable client')} ${esc(item.name)}"><span aria-hidden="true"></span></label><div class="client-identity-text"><strong class="record-name">${esc(item.name)}</strong><small class="table-secondary" title="${esc(inbound.name)}">${esc(inbound.name)}</small></div></div></td>
           <td data-label="${t('流量', 'Traffic')}" data-client-traffic>${trafficCell(item)}</td>
           <td data-label="${t('到期', 'Expiry')}">${item.expiresAt === null ? `<span class="date-value">${t('永不过期', 'Never expires')}</span>` : `<span class="date-value">${expiryLeft(item.expiresAt, now)}</span><small class="table-secondary">${chineseDate(item.expiresAt)}</small>`}</td>
           <td data-label="${t('最近上线', 'Last online')}" data-client-last>${lastOnlineCell(item)}</td>
@@ -663,7 +664,7 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
       <div id="firewall-maintenance" class="firewall-maintenance" hidden></div>
       ${reloadRequired ? t('<p class="form-error" role="alert">保存失败或结果未确认，当前列表可能已过期；请重新读取草稿后再修改，不会自动覆盖最新数据。</p>', '<p class="form-error" role="alert">The save failed or was not confirmed, so this list may be stale. Reload the draft before editing; the latest data is never overwritten automatically.</p>') : ''}
       <div class="workspace-bar"><div class="workspace-summary"><span>${t('入站', 'Inbounds')} <strong>${state.inbounds.length}</strong></span><span>${t('客户端', 'Clients')} <strong>${state.clients.length}</strong></span><span>${persistent ? t('可用', 'Available') : t('演示可用', 'Demo available')} <strong>${available}</strong></span></div>${persistent ? `<div class="workspace-actions"><button class="icon-button bordered" data-reload title="${t('从服务器重新读取列表（别处修改过时使用）', 'Reload the list from the server (after changes elsewhere)')}" aria-label="${t('刷新', 'Refresh')}" ${loading || submitting ? 'disabled' : ''}>${icon('refresh-cw')}</button></div>` : ''}</div>
-      ${persistent ? `<div class="workspace-status"><p class="form-hint" id="workspace-application-status" role="status"></p><p class="form-hint" id="traffic-status">${esc(trafficStatus(traffic, trafficError))}</p><p class="form-hint">${t('流量约每2秒统计一次；客户端到期或用尽额度时会自动停用。', 'Traffic is counted about every 2 seconds; clients stop working automatically when they expire or run out of quota.')}</p></div>` : ''}
+      ${persistent ? `<div class="workspace-status info-tip-host"><span class="status-badge" id="workspace-application-chip" role="status"></span><span class="status-badge" id="traffic-chip"></span>${infoTip(`<span id="workspace-application-status" role="status"></span><span id="traffic-status">${esc(trafficStatus(traffic, trafficError))}</span><span>${t('流量约每2秒统计一次；客户端到期或用尽额度时会自动停用。', 'Traffic is counted about every 2 seconds; clients stop working automatically when they expire or run out of quota.')}</span>`, t('状态详情', 'Status details'))}</div>` : ''}
       <section class="card list-card" aria-label="${page === 'inbounds' ? t('入站管理', 'Inbound management') : t('客户端管理', 'Client management')}"><div class="list-toolbar"><label class="search-box">${icon('search')}<span class="sr-only">${page === 'inbounds' ? t('搜索入站', 'Search inbounds') : t('搜索客户端', 'Search clients')}</span><input type="search" id="workspace-search" value="${esc(search)}" placeholder="${page === 'inbounds' ? t('搜索名称、类型或端口', 'Search name, type or port') : t('搜索客户端或入站名称', 'Search client or inbound name')}" autocomplete="off"></label>
         <label class="filter-control"><span class="sr-only">${t('筛选状态', 'Filter by status')}</span><select id="status-filter">${(page === 'inbounds' ? [['all', t('全部状态', 'All states')], ['enabled', t('已启用', 'Enabled')], ['disabled', t('已停用', 'Disabled')]] : [['all', t('全部状态', 'All states')], ['available', persistent ? t('可用', 'Available') : t('演示可用', 'Demo available')], ['unavailable', persistent ? t('不可用', 'Unavailable') : t('演示不可用', 'Demo unavailable')]]).map(([value, label]) => `<option value="${value}"${value === filter ? ' selected' : ''}>${label}</option>`).join('')}</select></label>
         ${page === 'clients' ? `<label class="filter-control inbound-filter"><span class="sr-only">${t('筛选关联入站', 'Filter by linked inbound')}</span><select id="inbound-filter"><option value="">${t('全部入站', 'All inbounds')}</option>${state.inbounds.map(item => `<option value="${esc(item.id)}"${item.id === inboundFilter ? ' selected' : ''}>${esc(item.name)}</option>`).join('')}</select></label>` : ''}<button type="button" class="danger-button is-solid" data-delete-selected hidden>${icon('trash-2')}<span></span></button><span id="result-count" class="result-count" aria-live="polite"></span></div><div id="list-content"></div>
@@ -680,6 +681,13 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
     if (!label) return;
     const text = loading ? t('正在读取已保存入站和客户端草稿…', 'Reading saved inbound and client drafts…') : !loaded ? t('草稿尚未读取，无法核对应用状态。', 'The draft is not loaded; cannot check the apply status.') : submitting ? t('正在保存并应用…', 'Saving and applying…') : reloadRequired ? t('上次保存失败或结果未确认，当前列表可能已过期；请先重新读取草稿，暂不判断此修订已应用。', 'The last save failed or was not confirmed, so this list may be stale; reload the draft first. Whether this revision is applied is not determined.') : `${modal.open ? '' : ''}${workspaceStatusText(persistent, revision, runtime, runtimeAt)}`;
     if (label.textContent !== text) label.textContent = text;
+    // 短标签只在变化时重写，避免每秒刷新打扰读屏。
+    const [chipText, tone]: [string, StatusTone] = loading ? [t('读取中', 'Loading'), 'muted'] : !loaded ? [t('未读取', 'Not loaded'), 'muted'] : submitting ? [t('保存中', 'Saving'), 'muted'] : reloadRequired ? [t('需重新读取', 'Reload needed'), 'bad'] : workspaceStatusChip(persistent, revision, runtime, runtimeAt);
+    paintChip(root.querySelector('#workspace-application-chip'), [chipText, tone]);
+    paintChip(root.querySelector('#traffic-chip'), trafficChip(traffic, trafficError));
+  }
+  function paintChip(chip: HTMLElement | null, [text, tone]: [string, StatusTone]): void {
+    if (chip && (chip.textContent !== text || chip.className !== `status-badge is-${tone}`)) { chip.className = `status-badge is-${tone}`; chip.innerHTML = `<b></b>${esc(text)}`; }
   }
   root.addEventListener('click', event => {
     const button = (event.target as Element).closest<HTMLButtonElement>('button');
@@ -732,7 +740,9 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
     const key = `${inbound.port}/${inbound.preset === 'hy2' ? 'udp' : 'tcp'}`;
     const status = firewall?.workspaceRevision === revision ? firewall.endpoints[key] : undefined;
     const hint = status ? `${status.message} · ${status.checkedAt}` : t('尚无放行记录；不代表公网可达。', 'No firewall record; public reachability is unverified.');
-    return `<small class="table-secondary${status?.state === 'failed' ? ' form-error' : ''}" title="${esc(hint)}">${esc(firewallStatusText(status))}</small>${status?.state !== 'allowed' ? `<button class="icon-button" data-firewall-retry="${esc(inbound.id)}" title="${t('重试放行防火墙', 'Retry firewall update')}" aria-label="${t('重试放行防火墙', 'Retry firewall update')}" ${firewallBusy || loading || submitting ? 'disabled' : ''}>${icon('refresh-cw')}</button>` : ''}`;
+    // 放行成功是常态，不再每行重复显示；只给读屏留一句，失败和未确认照常提示并可重试。
+    if (status?.state === 'allowed') return `<small class="sr-only">${esc(firewallStatusText(status))}</small>`;
+    return `<small class="table-secondary${status?.state === 'failed' ? ' form-error' : ''}" title="${esc(hint)}">${esc(firewallStatusText(status))}</small><button class="icon-button" data-firewall-retry="${esc(inbound.id)}" title="${t('重试放行防火墙', 'Retry firewall update')}" aria-label="${t('重试放行防火墙', 'Retry firewall update')}" ${firewallBusy || loading || submitting ? 'disabled' : ''}>${icon('refresh-cw')}</button>`;
   }
   function renderFirewall(): void {
     root.querySelectorAll<HTMLElement>('[data-inbound-firewall]').forEach(cell => {
@@ -815,6 +825,7 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
     finally {
       trafficLoading = false;
       const label = root.querySelector('#traffic-status'); if (label) label.textContent = trafficStatus(traffic, trafficError);
+      updateApplicationStatus();
       // 周期更新不替换操作按钮，避免用户的键盘焦点丢失。
       if (!root.hidden && !root.contains(document.activeElement) && !document.querySelector('dialog[open]')) listRows();
       else root.querySelectorAll<HTMLElement>('[data-client-row]').forEach(row => {
