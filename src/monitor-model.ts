@@ -1,4 +1,5 @@
 import { locale, t } from './i18n.ts';
+import { formatBytes } from './traffic.ts';
 export type Capacity = { used: string; total: string; percent: number | null };
 export type NetworkPoint = { at: string; upload: number | null; download: number | null };
 export type SystemSnapshot = {
@@ -24,14 +25,10 @@ export function coreReadings(m: CoreMetrics | null, now = Date.now()): { values:
   return { values: [bytes(m.memory), count(m.threads), count(m.tcp), count(m.udp)], note: m.issues.join(t('；', '; ')) || `${t('采样', 'Sampled')} ${new Date(m.at).toLocaleTimeString(locale, { hour12: false })}` };
 }
 
-export function bytes(value: string | number | null): string {
+// 后端数值可能是十进制字符串；容量（内存、交换、磁盘）用默认1024，网卡流量与速率传1000。
+export function bytes(value: string | number | null, base: 1000 | 1024 = 1024): string {
   if (value === null || (typeof value === 'string' && !/^\d+$/.test(value))) return '—';
-  let n = Number(value);
-  if (!Number.isFinite(n) || n < 0) return '—';
-  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB', 'EiB'];
-  let i = 0;
-  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
-  return `${n.toFixed(i ? 2 : 0)} ${units[i]}`;
+  return formatBytes(Number(value), base);
 }
 export function duration(seconds: number | null): string {
   if (seconds === null || !Number.isFinite(seconds) || seconds < 0) return '—';

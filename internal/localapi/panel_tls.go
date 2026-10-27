@@ -34,11 +34,11 @@ func loadPanelPair(d panelTLSDraft) (*PanelTLS, error) {
 	}
 	cert, err := readPEM(d.CertificateFile)
 	if err != nil {
-		return nil, i18n.New("无法读取面板证书（限1 MiB普通PEM文件）", "Cannot read the panel certificate (regular PEM file up to 1 MiB)")
+		return nil, i18n.New("无法读取面板证书（限1 MB普通PEM文件）", "Cannot read the panel certificate (regular PEM file up to 1 MB)")
 	}
 	key, err := readPEM(d.KeyFile)
 	if err != nil {
-		return nil, i18n.New("无法读取面板私钥（限1 MiB普通PEM文件）", "Cannot read the panel private key (regular PEM file up to 1 MiB)")
+		return nil, i18n.New("无法读取面板私钥（限1 MB普通PEM文件）", "Cannot read the panel private key (regular PEM file up to 1 MB)")
 	}
 	pair, err := tls.X509KeyPair(cert, key)
 	if err != nil || len(pair.Certificate) == 0 {

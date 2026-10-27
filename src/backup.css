@@ -6,7 +6,7 @@
 .backup-body section + section { border-top: 1px solid var(--border); margin-top: 24px; padding-top: 12px; }
 .backup-body h3 { font-size: 15px; font-weight: 600; }
 .backup-body section > .form-hint { margin-bottom: 18px; }
-.backup-body [data-preview-content] { background: var(--raised); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; margin-top: 16px; font-size: 13px; }
+.backup-body [data-preview-content] { background: var(--raised); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; margin-top: 16px; font-size: 14px; }
 .backup-body h4 { margin: 0 0 12px; font-size: 14px; }
 .backup-body details { border-top: 1px solid var(--border); padding: 12px 0; }
 .backup-body summary { cursor: pointer; min-height: 32px; }
@@ -16,6 +16,6 @@
 .backup-body small { color: var(--muted); }
 .backup-body .check-field { align-items: flex-start; line-height: 1.8; padding: 16px 0; }
 .backup-body .check-field input { margin-top: 4px; }
-.backup-body input[type="file"] { font-size: 12px; padding: 8px; }
+.backup-body input[type="file"] { font-size: 13px; padding: 8px; }
 .backup-body [data-status]:not(:empty) { padding-top: 12px; }
 @media (max-width: 600px) { .backup-body { padding: 18px; } .backup-body .primary-button { white-space: normal; } }

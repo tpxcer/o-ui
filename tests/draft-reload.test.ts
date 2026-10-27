@@ -249,6 +249,11 @@ test('客户端启用与最近上线分列，在线有效采样显示速度，�
     html = root.querySelector('#list-content').innerHTML;
     assert.match(html, /class="speed-up"[^>]*>↑ 1 KB\/s/);
     assert.match(html, /class="speed-down"[^>]*>↓ 2 KB\/s/);
+    // 速度跟在“在线”标记下，流量列只放用量；TG通知是铃铛按钮而不是第二个开关。
+    assert.match(html, /data-client-last><span class="status-badge is-online"><b><\/b>在线<\/span><small class="table-secondary speed-pair">/);
+    assert.doesNotMatch(html.match(/data-client-traffic>[\s\S]*?<\/td>/)![0], /speed-pair/);
+    assert.match(html, /<button type="button" class="icon-button notify-toggle" data-toggle-notify="[^"]+" aria-pressed="false"/);
+    assert.doesNotMatch(html, /<input type="checkbox" data-toggle-notify/);
     mode = 'offline'; poll.callback(); await settle();
     html = root.querySelector('#list-content').innerHTML;
     assert.match(html, /33 分钟前上线过/);

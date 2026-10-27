@@ -205,7 +205,7 @@ func (rt *Runtime) capture(ctx context.Context) (businessBackup, map[string]stor
 		size += len(doc.Data)
 	}
 	if size > backup.MaxPlaintext {
-		return b, nil, i18n.New("业务数据超过8 MiB备份上限", "Data exceeds the 8 MiB backup limit")
+		return b, nil, i18n.New("业务数据超过8 MB备份上限", "Data exceeds the 8 MB backup limit")
 	}
 	for index := range b.Workspace.Inbounds {
 		in := &b.Workspace.Inbounds[index]
@@ -230,7 +230,7 @@ func (rt *Runtime) capture(ctx context.Context) (businessBackup, map[string]stor
 			}
 			size += base64.StdEncoding.EncodedLen(len(cert)) + base64.StdEncoding.EncodedLen(len(key))
 			if size > backup.MaxPlaintext {
-				return b, nil, i18n.New("含证书的业务数据超过8 MiB备份上限", "Data including certificates exceeds the 8 MiB backup limit")
+				return b, nil, i18n.New("含证书的业务数据超过8 MB备份上限", "Data including certificates exceeds the 8 MB backup limit")
 			}
 			b.Certificates[in.ID] = backupCertificate{cert, key}
 		}

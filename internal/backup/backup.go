@@ -36,7 +36,7 @@ func Encrypted(file []byte) bool { return bytes.HasPrefix(file, []byte(magic)) }
 // Seal按口令加密；口令为空时不加密，返回JSON内容的副本。
 func Seal(plaintext []byte, password string) ([]byte, error) {
 	if len(plaintext) == 0 || len(plaintext) > MaxPlaintext {
-		return nil, i18n.New("备份内容为空或超过8 MiB上限", "Backup content is empty or exceeds the 8 MiB limit")
+		return nil, i18n.New("备份内容为空或超过8 MB上限", "Backup content is empty or exceeds the 8 MB limit")
 	}
 	if password == "" {
 		return bytes.Clone(plaintext), nil

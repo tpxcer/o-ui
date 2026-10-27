@@ -86,7 +86,7 @@ export function initBackup(refreshIcons: () => void): { open: () => void } {
     }); });
     async function requestFile(): Promise<{ archive: string; password: string; shareHost?: string }> {
       const selected = file.files?.[0];
-      if (!selected || selected.size === 0 || selected.size > maxBackupFile) throw new Error(t('请选择有效的备份文件（最大约8 MiB）。', 'Choose a valid backup file (up to about 8 MiB).'));
+      if (!selected || selected.size === 0 || selected.size > maxBackupFile) throw new Error(t('请选择有效的备份文件（最大约 8 MB）。', 'Choose a valid backup file (up to about 8 MB).'));
       const data = new Uint8Array(await selected.arrayBuffer());
       return isOUIBackup(data) ? { archive: encodeBackup(data), password: '', shareHost: shareHost.value.trim() } : { archive: encodeBackup(data), password: restorePassword.value };
     }

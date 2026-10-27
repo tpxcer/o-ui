@@ -1,4 +1,4 @@
-.monitor-status { margin: 8px 0 0; color: var(--muted); font-size: 11px; line-height: 1.55; overflow-wrap: anywhere; }
+.monitor-status { margin: 8px 0 0; color: var(--muted); font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
 .monitor-stale .traffic-chart svg { opacity: .4; }
 .resource-copy { flex: 1; }
 /* 提高特异性：style.css 后加载，同级规则会把这里的换行改回不换行，导致长说明压到百分比上 */
@@ -9,7 +9,7 @@
 .chart-hover { position: absolute; inset: 0; pointer-events: none; }
 .chart-cursor { position: absolute; width: 1px; background: var(--border-strong); }
 .chart-dot { position: absolute; width: 8px; height: 8px; border-radius: 50%; background: currentColor; transform: translate(-50%, -50%); box-shadow: 0 0 0 2px var(--surface); }
-.chart-tip { position: absolute; transform: translateX(12px); display: grid; gap: 3px; min-width: 150px; padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--overlay); -webkit-backdrop-filter: var(--glass); backdrop-filter: var(--glass); box-shadow: var(--shadow-pop); font-size: 12px; white-space: nowrap; }
+.chart-tip { position: absolute; transform: translateX(12px); display: grid; gap: 3px; min-width: 150px; padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--overlay); -webkit-backdrop-filter: var(--glass); backdrop-filter: var(--glass); box-shadow: var(--shadow-pop); font-size: 13px; white-space: nowrap; }
 .chart-tip.is-left { transform: translateX(calc(-100% - 12px)); }
 .chart-tip time { color: var(--muted); font-variant-numeric: tabular-nums; }
 .chart-tip span { display: flex; align-items: center; gap: 6px; color: var(--muted); }
@@ -26,7 +26,7 @@
 .network-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px 12px; flex-wrap: wrap; margin-bottom: 6px; }
 .network-heading .section-label { margin: 0; }
 .speed-source { display: inline-flex; padding: 2px; gap: 2px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--raised); }
-.speed-source button { min-height: 26px; padding: 2px 10px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font-size: 12px; font-weight: 500; white-space: nowrap; }
+.speed-source button { min-height: 26px; padding: 2px 10px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font-size: 13px; font-weight: 500; white-space: nowrap; }
 .speed-source button:hover { color: var(--text); }
 .speed-source button[aria-pressed="true"] { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
 @media (pointer: coarse) { .speed-source button { min-height: 36px; padding: 4px 12px; } }

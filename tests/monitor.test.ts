@@ -5,7 +5,7 @@ import { bytes, duration, fresh, networkArea, networkPath, coreReadings, type Co
 test('核心指标区分真实零、不可用、停止和过期，不冒充设备数', () => {
   const now = Date.now();
   const m: CoreMetrics = { at: new Date(now).toISOString(), running: true, memory: '1024', threads: 7, tcp: 0, udp: 1, issues: [] };
-  assert.deepEqual(coreReadings(m, now).values, ['1.00 KiB', '7', '0', '1']);
+  assert.deepEqual(coreReadings(m, now).values, ['1 KB', '7', '0', '1']);
   assert.deepEqual(coreReadings(null, now).values, ['—', '—', '—', '—']);
   assert.deepEqual(coreReadings({ ...m, running: false }, now).values, ['—', '—', '—', '—']);
   assert.deepEqual(coreReadings(m, now + 11000).values, ['—', '—', '—', '—']);
@@ -17,8 +17,8 @@ test('核心指标区分真实零、不可用、停止和过期，不冒充设�
 test('资源显示不把缺失当零，字节单位一致', () => {
   assert.equal(bytes(null), '—'); assert.equal(bytes('bad'), '—');
   assert.equal(bytes(Infinity), '—'); assert.equal(bytes(-1), '—');
-  assert.equal(bytes('0'), '0 B'); assert.equal(bytes('1024'), '1.00 KiB');
-  assert.equal(bytes('18446744073709551615'), '16.00 EiB');
+  assert.equal(bytes('0'), '0 B'); assert.equal(bytes('1024'), '1 KB'); assert.equal(bytes('1000', 1000), '1 KB'); assert.equal(bytes(2147483648), '2 GB'); assert.equal(bytes(1536000, 1000), '1.54 MB');
+  assert.equal(bytes('18446744073709551615'), '16 EB');
   assert.equal(duration(null), '—'); assert.equal(duration(0), '0秒');
   assert.equal(duration(3660), '1小时1分钟'); assert.equal(duration(90000), '1天1小时');
 });

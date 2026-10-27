@@ -92,12 +92,12 @@ export function initMonitor(root: HTMLElement, runtime: () => RuntimeStatus | nu
     let best = points[0], gap = Infinity;
     for (const point of points) { const distance = Math.abs(Date.parse(point.at) - target); if (distance < gap) { gap = distance; best = point; } }
     if (gap > 6000 || (best.upload === null && best.download === null)) return;
-    const peak = Math.max(1024, ...points.flatMap(p => [p.upload ?? 0, p.download ?? 0]));
+    const peak = Math.max(1000, ...points.flatMap(p => [p.upload ?? 0, p.download ?? 0]));
     const box = svg.getBoundingClientRect(), host = chart.getBoundingClientRect();
     const x = box.left - host.left + (Date.parse(best.at) - start) / 180000 * box.width, top = box.top - host.top;
     const y = (value: number) => top + (1 - Math.min(value / peak, 1)) * box.height;
     const dot = (value: number | null, color: string) => value === null ? '' : `<b class="chart-dot" style="left:${x}px;top:${y(value)}px;color:${color}"></b>`;
-    const row = (value: number | null, color: string, label: string) => `<span><b style="background:${color}"></b>${label}<strong>${value === null ? '—' : `${esc(bytes(value))}/s`}</strong></span>`;
+    const row = (value: number | null, color: string, label: string) => `<span><b style="background:${color}"></b>${label}<strong>${value === null ? '—' : `${esc(bytes(value, 1000))}/s`}</strong></span>`;
     const overlay = document.createElement('div');
     overlay.className = 'chart-hover';
     overlay.setAttribute('aria-hidden', 'true');
@@ -110,7 +110,7 @@ export function initMonitor(root: HTMLElement, runtime: () => RuntimeStatus | nu
     $('.status-card').classList.toggle('monitor-stale', !active);
     const net = active ? s.network : null, speed = active ? view().speed : null;
     toggle.querySelectorAll<HTMLElement>('[data-speed-source]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.speedSource === source)));
-    $('.speed-readings').innerHTML = `<div class="speed upload"><span class="speed-label"><b></b>${t('上传', 'Upload')}</span><strong>${speed?.upload == null ? '—' : esc(bytes(speed.upload))}<small>/s</small></strong></div><div class="speed download"><span class="speed-label"><b></b>${t('下载', 'Download')}</span><strong>${speed?.download == null ? '—' : esc(bytes(speed.download))}<small>/s</small></strong></div>`;
+    $('.speed-readings').innerHTML = `<div class="speed upload"><span class="speed-label"><b></b>${t('上传', 'Upload')}</span><strong>${speed?.upload == null ? '—' : esc(bytes(speed.upload, 1000))}<small>/s</small></strong></div><div class="speed download"><span class="speed-label"><b></b>${t('下载', 'Download')}</span><strong>${speed?.download == null ? '—' : esc(bytes(speed.download, 1000))}<small>/s</small></strong></div>`;
     resource(0, active && s.host ? `${s.host.cpus} ${t('核 ·', 'cores ·')} ${s.host.cpuModel || s.host.architecture}` : t('采集不可用', 'Sampling unavailable'), active ? s.cpu : null);
     capacity(1, s?.memory ?? null, active); capacity(2, s?.swap ?? null, active); capacity(3, s?.disk ?? null, active);
     const server = [...root.querySelectorAll<HTMLElement>('.server-card dd')];
@@ -120,13 +120,13 @@ export function initMonitor(root: HTMLElement, runtime: () => RuntimeStatus | nu
     const rt = runtime();
     dd[0].textContent = rt ? rt.running && rt.startedAt ? duration(Math.max(0, (Date.now() - Date.parse(rt.startedAt)) / 1000)) : t('已停止', 'Stopped') : '—';
     dd[1].textContent = active && s.host ? duration(s.host.uptime) : '—';
-    dd[4].textContent = bytes(net?.sent ?? null); dd[5].textContent = bytes(net?.received ?? null);
+    dd[4].textContent = bytes(net?.sent ?? null, 1000); dd[5].textContent = bytes(net?.received ?? null, 1000);
     const points = view().points, end = Date.parse(s?.at ?? '');
-    const peak = Math.max(1024, ...points.flatMap(p => [p.upload ?? 0, p.download ?? 0]));
+    const peak = Math.max(1000, ...points.flatMap(p => [p.upload ?? 0, p.download ?? 0]));
     const graph = $('.traffic-chart');
     const series: ['upload' | 'download', string][] = [['upload', 'var(--series-1)'], ['download', 'var(--series-2)']];
     graph.setAttribute('aria-label', source === 'host' ? t('最近三分钟服务器网卡总速度', 'Server NIC speed over the last three minutes') : t('最近三分钟面板业务速度', 'Proxy traffic speed over the last three minutes'));
-    graph.innerHTML = !points.length ? t('<p class="form-intro">等待采样</p>', '<p class="form-intro">Waiting for samples</p>') : `<div class="axis-labels">${[1, .75, .5, .25].map(n => `<span>${esc(bytes(peak * n))}/s</span>`).join('')}</div><div class="chart-plot"><svg viewBox="0 0 900 170" preserveAspectRatio="none" aria-hidden="true"><defs>${series.map(([direction, color]) => `<linearGradient id="live-${direction}-fill" x1="0" y1="0" x2="0" y2="1"><stop stop-color="${color}" stop-opacity=".38"/><stop offset="1" stop-color="${color}" stop-opacity=".02"/></linearGradient>`).join('')}</defs>${[0,42.5,85,127.5,169].map(y => `<line x1="0" y1="${y}" x2="900" y2="${y}" class="grid-line"/>`).join('')}${series.map(([direction]) => `<path d="${networkArea(points, direction, peak, end)}" fill="url(#live-${direction}-fill)"/>`).join('')}${series.map(([direction, color]) => `<path d="${networkPath(points, direction, peak, end)}" class="chart-line" stroke="${color}"/>`).join('')}</svg>${series.map(([direction, color]) => { const tail = networkSegments(points, direction, peak, end).at(-1)?.at(-1); return tail && tail[0] > 880 ? `<span class="chart-live" style="left:${(tail[0] / 9).toFixed(2)}%;top:${(tail[1] / 1.7).toFixed(2)}%;color:${color}"></span>` : ''; }).join('')}</div>`;
+    graph.innerHTML = !points.length ? t('<p class="form-intro">等待采样</p>', '<p class="form-intro">Waiting for samples</p>') : `<div class="axis-labels">${[1, .75, .5, .25].map(n => `<span>${esc(bytes(peak * n, 1000))}/s</span>`).join('')}</div><div class="chart-plot"><svg viewBox="0 0 900 170" preserveAspectRatio="none" aria-hidden="true"><defs>${series.map(([direction, color]) => `<linearGradient id="live-${direction}-fill" x1="0" y1="0" x2="0" y2="1"><stop stop-color="${color}" stop-opacity=".38"/><stop offset="1" stop-color="${color}" stop-opacity=".02"/></linearGradient>`).join('')}</defs>${[0,42.5,85,127.5,169].map(y => `<line x1="0" y1="${y}" x2="900" y2="${y}" class="grid-line"/>`).join('')}${series.map(([direction]) => `<path d="${networkArea(points, direction, peak, end)}" fill="url(#live-${direction}-fill)"/>`).join('')}${series.map(([direction, color]) => `<path d="${networkPath(points, direction, peak, end)}" class="chart-line" stroke="${color}"/>`).join('')}</svg>${series.map(([direction, color]) => { const tail = networkSegments(points, direction, peak, end).at(-1)?.at(-1); return tail && tail[0] > 880 ? `<span class="chart-live" style="left:${(tail[0] / 9).toFixed(2)}%;top:${(tail[1] / 1.7).toFixed(2)}%;color:${color}"></span>` : ''; }).join('')}</div>`;
     drawHover();
     const at = s && fresh(s.at) ? new Date(s.at).toLocaleTimeString(locale, {hour12:false}) : s && Date.parse(s.at) > 0 ? `${t('已过期', 'stale')} ${new Date(s.at).toLocaleTimeString(locale, {hour12:false})}` : t('尚无有效采样', 'No valid samples yet');
     status.textContent = `${error || (active ? s.issues.length ? `${t('部分不可用：', 'Partly unavailable: ')}${s.issues.join(t('；', '; '))}` : speed?.upload == null ? t('正在建立速率基线', 'Building the rate baseline') : t('采集中', 'Sampling') : t('采样已过期或尚未就绪', 'Sample is stale or not ready'))} · ${at}${source === 'host' ? t('。按服务器物理网卡统计（同 OUI，不含回环与 docker、tun 等虚拟网卡）：上传为服务器发出，下载为服务器收到，含网站、SSH 等全部流量；经节点的流量进出各计一次。', '. Measured on the server\'s physical NICs (like OUI; loopback and virtual NICs such as docker or tun excluded): upload is sent by the server, download is received, including all traffic such as websites and SSH; proxied traffic counts once in and once out.') : t('。只统计本面板客户端经 Xray 的流量（客户端角度），不含系统其他程序。', '. Counts only client traffic through o-ui\'s Xray (from the client\'s side), not other programs.')}`;

@@ -14,6 +14,7 @@ import {
 import './xray-settings.css';
 import { t } from './i18n.ts';
 import { confirmAction } from './confirm.ts';
+import { formatBytes } from './traffic.ts';
 
 type Tab = 'basic' | 'routing' | 'outbounds' | 'balancers' | 'dns' | 'advanced';
 type AdvancedPart = 'rules' | 'outbounds' | 'balancers' | 'dns' | 'advanced' | 'preview';
@@ -22,7 +23,7 @@ type Traffic = Record<string, { uplink: string; downlink: string }>;
 const tabs: [Tab, string][] = [['basic', t('基础配置', 'Basics')], ['routing', t('路由规则', 'Routing rules')], ['outbounds', t('出站', 'Outbounds')], ['balancers', t('负载均衡', 'Balancers')], ['dns', 'DNS'], ['advanced', t('高级', 'Advanced')]];
 const advancedParts: [AdvancedPart, string][] = [['rules', t('路由规则', 'Routing rules')], ['outbounds', t('出站', 'Outbounds')], ['balancers', t('负载均衡', 'Balancers')], ['dns', 'DNS'], ['advanced', t('其他', 'Other')], ['preview', t('完整配置预览', 'Full config preview')]];
 const button = (label: string, attrs: string, kind = 'secondary-button') => `<button type="button" class="${kind}" ${attrs}>${label}</button>`;
-const bytes = (value: string | number | undefined) => { let n = Number(value ?? 0), unit = 0; while (n >= 1024 && unit < 4) { n /= 1024; unit++; } return `${n.toFixed(unit ? 2 : 0)} ${['B', 'KiB', 'MiB', 'GiB', 'TiB'][unit]}`; };
+const bytes = (value: string | number | undefined) => formatBytes(Number(value ?? 0));
 
 export function initXraySettings(root: HTMLElement, icons: () => void, persistent = false, onApply: () => void = () => {}, onSaved: () => void = () => {}): { render: () => void; setRuntime: (status: RuntimeStatus | null, at: number) => void } {
   let draft = defaultSettings(), saved = structuredClone(draft), revision = 0, tab: Tab = 'basic', part: AdvancedPart = 'rules';

@@ -359,15 +359,15 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
       const disabled = busy || !ready || !ipView?.enforced || changedWorkspace;
       modal.innerHTML = `<form novalidate data-ip-dialog><header class="dialog-heading"><h2 id="edit-title">${t('在线 IP', 'Online IPs')} · ${esc(client.name)}</h2><button type="button" class="icon-button" data-close aria-label="${t('关闭弹窗', 'Close dialog')}">${icon('x')}</button></header><div class="edit-body ip-dialog-body">
         <p class="form-intro">${client.ipLimit ? t(`IP 上限 ${client.ipLimit}：超限自动封禁 10 分钟；手动封禁按你选择的时长执行。`, `IP limit ${client.ipLimit}: excess IPs are automatically banned for 10 minutes; manual bans use your chosen duration.`) : t('未设置 IP 上限，可点击下方 IP 手动封禁。', 'No IP limit is set. Click an IP below to ban it manually.')}</p>
-        <div class="ip-limit-settings"><label class="form-field" for="ip-limit-input">${t('IP 上限', 'IP limit')}<input id="ip-limit-input" data-ip-limit name="ipLimit" type="number" min="0" max="10000" step="1" required value="${esc(limitInput)}" ${busy || changedWorkspace ? 'disabled' : ''}></label><button type="button" class="primary-button" data-ip-save ${busy || !ready || changedWorkspace ? 'disabled' : ''}>${t('保存上限', 'Save limit')}</button></div>
+        <div class="ip-limit-settings"><label class="form-field" for="ip-limit-input">${t('IP 上限', 'IP limit')}<input id="ip-limit-input" data-ip-limit name="ipLimit" type="number" min="0" max="10000" step="1" required value="${esc(limitInput)}" ${busy || changedWorkspace ? 'disabled' : ''}></label></div>
         <p class="form-hint">${t('0 表示不限，最多 10000；仅修改当前客户端。保存后立即生效，代理连接可能短暂中断。', '0 means unlimited, up to 10000; changes this client only. Saving applies immediately and may briefly interrupt proxy connections.')}</p>
         <p class="form-hint">${t('点击 IP 管理；到期后通常在 10 秒内自动解封。', 'Click an IP to manage it. Expired bans are normally removed within 10 seconds.')}</p>
         ${changedWorkspace ? `<p class="form-error">${t('客户端配置已变化，请关闭弹窗并重新读取列表后操作。', 'Client settings changed; close this dialog and reload the list before acting.')}</p>` : ''}
         ${ipView?.issue ? `<p class="form-error">${esc(ipView.issue)}</p>` : ipView && !ipView.enforced ? `<p class="form-error">${t('防火墙助手不可用，请更新安装后重试。', 'The firewall helper is unavailable; update the installation and retry.')}</p>` : ''}
         <h3>${t('在线', 'Online')} <small>${online.length}</small></h3>${list(online.map(item => row(item.ip, 'online', t('在线', 'Online'), `<span>${t('最近新连接 ', 'Last new connection ')}${time(item.lastSeen)}</span>`)), t('当前没有未封禁的在线 IP。', 'No unblocked IP is online.'))}
         <h3>${t('已封禁', 'Banned')} <small>${banned.length}</small></h3>${list(banned.map(item => row(item.ip, item.permanent || Date.parse(item.until) > now() ? 'banned' : 'pending', item.permanent || Date.parse(item.until) > now() ? t('已封禁', 'Banned') : t('待解封', 'Unban pending'), `<span>${item.manual ? t('手动封禁', 'Manual ban') : t('超限自动封禁', 'Automatic limit ban')} · ${item.port ?? inbound?.port}/${(item.protocol ?? 'tcp').toUpperCase()}</span>${deadline(item, t('解封时间 ', 'Unban at '))}`)), t('没有被封禁的 IP。', 'No IP is banned.'))}
-        ${selected ? `<section id="ip-action-panel" class="ip-action-panel" aria-label="${t('IP 操作', 'IP actions')}"><div class="ip-action-heading"><strong><code>${esc(selected)}</code></strong><button type="button" class="text-button" data-ip-cancel ${busy ? 'disabled' : ''}>${t('取消选择', 'Cancel selection')}</button></div><p class="form-hint">${esc(scope)}</p><label class="form-field">${t('封禁时长（从确认时开始）', 'Ban duration (from confirmation)')}<select data-ip-duration ${disabled ? 'disabled' : ''}>${durations.map(([value, label]) => `<option value="${value}" ${String(value) === minutes ? 'selected' : ''}>${label}</option>`).join('')}</select></label><div class="ip-action-buttons"><button type="button" class="danger-button" data-ip-ban ${disabled ? 'disabled' : ''}>${selectedBan ? t('更新封禁时长', 'Update ban duration') : t('确认封禁', 'Confirm ban')}</button>${selectedBan ? `<button type="button" class="primary-button" data-ip-unban ${disabled ? 'disabled' : ''}>${t('确认解封', 'Confirm unban')}</button>` : ''}</div>${selectedBan ? `<p class="form-hint">${t('手动解封会取消封禁，恢复正常状态；仍超过 IP 上限时会再次自动封禁。', 'Manual unban removes the ban and restores normal status; exceeding the IP limit may trigger another automatic ban.')}</p>` : ''}</section>` : ''}
-        <p class="${failed ? 'form-error' : 'form-hint'}" role="status">${esc(message)}</p></div><footer><button type="button" class="secondary-button" data-ip-refresh ${busy ? 'disabled' : ''}>${t('刷新状态', 'Refresh status')}</button><button type="button" class="secondary-button" data-close>${t('关闭', 'Close')}</button></footer></form>`;
+        ${selected ? `<section id="ip-action-panel" class="ip-action-panel" aria-label="${t('IP 操作', 'IP actions')}"><div class="ip-action-heading"><strong><code>${esc(selected)}</code></strong></div><p class="form-hint">${esc(scope)}</p><label class="form-field">${t('封禁时长（从确认时开始）', 'Ban duration (from confirmation)')}<select data-ip-duration ${disabled ? 'disabled' : ''}>${durations.map(([value, label]) => `<option value="${value}" ${String(value) === minutes ? 'selected' : ''}>${label}</option>`).join('')}</select></label><div class="ip-action-buttons"><button type="button" class="secondary-button" data-ip-cancel ${busy ? 'disabled' : ''}>${t('取消选择', 'Cancel selection')}</button><button type="button" class="danger-button" data-ip-ban ${disabled ? 'disabled' : ''}>${selectedBan ? t('更新封禁时长', 'Update ban duration') : t('确认封禁', 'Confirm ban')}</button>${selectedBan ? `<button type="button" class="primary-button" data-ip-unban ${disabled ? 'disabled' : ''}>${t('确认解封', 'Confirm unban')}</button>` : ''}</div>${selectedBan ? `<p class="form-hint">${t('手动解封会取消封禁，恢复正常状态；仍超过 IP 上限时会再次自动封禁。', 'Manual unban removes the ban and restores normal status; exceeding the IP limit may trigger another automatic ban.')}</p>` : ''}</section>` : ''}
+        <p class="${failed ? 'form-error' : 'form-hint'}" role="status">${esc(message)}</p></div><footer><button type="button" class="secondary-button" data-ip-refresh ${busy ? 'disabled' : ''}>${t('刷新状态', 'Refresh status')}</button><button type="button" class="secondary-button" data-close>${t('关闭', 'Close')}</button><button type="button" class="primary-button" data-ip-save ${busy || !ready || changedWorkspace ? 'disabled' : ''}>${t('保存上限', 'Save limit')}</button></footer></form>`;
       modal.querySelector('form')!.addEventListener('submit', event => { event.preventDefault(); void saveLimit(); });
       modal.querySelector<HTMLInputElement>('[data-ip-limit]')!.addEventListener('input', event => { limitInput = (event.target as HTMLInputElement).value; });
       modal.querySelector('[data-ip-save]')!.addEventListener('click', () => { void saveLimit(); });
@@ -499,19 +499,28 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
   // 面板设置里关闭了订阅服务时，所有订阅链接都不返回内容；此时不再按客户端各自的选项显示“订阅开启”。
   const subscriptionLabel = (item: Client) => persistent && subscriptionService === false ? t('订阅已停用（全局）', 'Subscriptions off (global)') : item.subscription ? t('订阅开启', 'Subscription on') : t('订阅关闭', 'Subscription off');
   // 在线IP数/上限与封禁数（真实模式点开看明细与解封）；演示数据只显示上限。
+  // TG上线通知用铃铛按钮，和左侧的启用开关区分开。
+  const notifyHint = (on: boolean) => `${on ? t('TG 上线通知已开启', 'TG online alerts on') : t('TG 上线通知已关闭', 'TG online alerts off')}${t('：', ': ')}${notifyView && !notifyView.botEnabled ? t('Telegram 机器人未启用，开启后也暂不发送', 'the Telegram bot is off, so nothing is sent until it is enabled') : t('通过 Telegram 通知上线（本次累计 1 MB 流量）和离线（10 分钟无流量）', 'alerts when the client comes online (1 MB this session) or goes offline (10 minutes without traffic)')}`;
   const notifyCell = (item: Client) => {
-    const hint = notifyView && !notifyView.botEnabled ? t('Telegram 机器人未启用：开启后也暂不发送', 'The Telegram bot is off: nothing is sent until it is enabled') : t('通过 Telegram 通知上线（本次累计 1 MB 流量）和离线（10 分钟无流量）', 'Telegram alerts when the client comes online (1 MB this session) or goes offline (10 minutes without traffic)');
-    return `<label class="switch" title="${hint}"><input type="checkbox" data-toggle-notify="${esc(item.id)}" ${notifyView?.clients.has(item.id) ? 'checked' : ''} ${notifyView ? '' : 'disabled'} aria-label="${t('TG 上线通知', 'TG online alerts')} ${esc(item.name)}"><span aria-hidden="true"></span></label>`;
+    const on = !!notifyView?.clients.has(item.id);
+    return `<button type="button" class="icon-button notify-toggle" data-toggle-notify="${esc(item.id)}" aria-pressed="${on}" title="${notifyHint(on)}" aria-label="${t('TG 上线通知', 'TG online alerts')} ${esc(item.name)}" ${notifyView ? '' : 'disabled'}>${icon(on ? 'bell' : 'bell-off')}</button>`;
   };
-  async function toggleNotify(input: HTMLInputElement): Promise<void> {
-    const id = input.dataset.toggleNotify!, enabled = input.checked, name = state.clients.find(item => item.id === id)?.name ?? '';
-    input.disabled = true;
+  async function toggleNotify(button: HTMLButtonElement): Promise<void> {
+    const id = button.dataset.toggleNotify!, enabled = button.getAttribute('aria-pressed') !== 'true', name = state.clients.find(item => item.id === id)?.name ?? '';
+    // 请求中用aria-busy防重复点击而不禁用按钮，禁用会让键盘焦点丢失。
+    if (button.getAttribute('aria-busy') === 'true') return;
+    button.setAttribute('aria-busy', 'true');
     try {
       const view = await api<{ clients: string[]; botEnabled: boolean }>('panel/telegram/notify', jsonBody('PUT', { clientId: id, enabled }));
       notifyView = { clients: new Set(view.clients), botEnabled: view.botEnabled };
       announce(`${enabled ? t('已开启 ', 'TG alerts on for ') : t('已关闭 ', 'TG alerts off for ')}${name}${t(' 的 TG 上线通知', '')}${enabled && !view.botEnabled ? t('（Telegram 机器人未启用，暂不发送）', ' (the Telegram bot is off, so nothing is sent yet)') : ''}`);
-    } catch (reason) { input.checked = !enabled; announce((reason as Error).message); }
-    finally { input.disabled = false; }
+    } catch (reason) { announce((reason as Error).message); }
+    finally {
+      // 原地更新按钮而不重绘整格，保留键盘焦点。
+      const on = !!notifyView?.clients.has(id);
+      button.setAttribute('aria-pressed', String(on)); button.title = notifyHint(on); button.innerHTML = icon(on ? 'bell' : 'bell-off'); button.removeAttribute('aria-busy');
+      refreshIcons();
+    }
   }
   const ipCell = (item: Client) => {
     if (!persistent) return item.ipLimit ? `${item.ipLimit} ${t('个 IP', 'IPs')}` : t('IP 不限', 'Unlimited IPs');
@@ -528,14 +537,14 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
     const trafficPeriod = inboundTrafficPeriod(state.inbounds.find(inbound => inbound.id === item.inboundId));
     const bytes = persistent ? usedBytes(traffic, item.id, trafficPeriod) : BigInt(Math.round(item.usedGB * 1e9));
     const percent = item.quotaGB > 0 ? Math.min(100, viewClient(item).usedGB / item.quotaGB * 100) : 0;
-    const rate = persistent && traffic?.collecting && !trafficError && traffic.sampledAt && Date.now() - Date.parse(traffic.sampledAt) <= 10_000 ? speeds[item.id] : undefined;
-    const speed = trafficSpeedVisible(isOnline(item), rate) ? `<small class="table-secondary speed-pair"><span class="speed-up" title="${t('上传', 'Upload')}">↑ ${formatBytes(rate!.up)}/s</span><span class="speed-down" title="${t('下载', 'Download')}">↓ ${formatBytes(rate!.down)}/s</span></small>` : '';
     const quota = `${formatBytes(persistent ? usedBytes(traffic, item.id) : bytes)} / ${item.quotaGB ? formatBytes(item.quotaGB * 1e9) : t('不限', 'Unlimited')}`;
-    return `<span title="${esc(trafficPeriodHint(traffic, trafficPeriod))}">${trafficPeriod === 'total' ? quota : `${formatBytes(bytes)} · ${trafficPeriodLabel(trafficPeriod)}`}</span>${trafficPeriod !== 'total' ? `<small class="table-secondary">${t('累计', 'Lifetime')} ${quota}</small>` : ''}${item.quotaGB && bytes !== null ? `<div class="mini-meter" aria-hidden="true"><span style="width:${percent}%"></span></div>` : ''}${speed}`;
+    return `<span title="${esc(trafficPeriodHint(traffic, trafficPeriod))}">${trafficPeriod === 'total' ? quota : `${formatBytes(bytes)} · ${trafficPeriodLabel(trafficPeriod)}`}</span>${trafficPeriod !== 'total' ? `<small class="table-secondary">${t('累计', 'Lifetime')} ${quota}</small>` : ''}${item.quotaGB && bytes !== null ? `<div class="mini-meter" aria-hidden="true"><span style="width:${percent}%"></span></div>` : ''}`;
   };
+  // 实时速度只在在线时跟在“在线”标记下面，流量列只放用量与额度，行高更整齐。
   const lastOnlineCell = (item: Client) => {
     const at = traffic?.lastOnline?.[item.id];
-    if (isOnline(item)) return `<span class="status-badge is-online"><b></b>${t('在线', 'Online')}</span>`;
+    const rate = persistent && traffic?.collecting && !trafficError && traffic.sampledAt && Date.now() - Date.parse(traffic.sampledAt) <= 10_000 ? speeds[item.id] : undefined;
+    if (isOnline(item)) return `<span class="status-badge is-online"><b></b>${t('在线', 'Online')}</span>${trafficSpeedVisible(true, rate) ? `<small class="table-secondary speed-pair"><span class="speed-up" title="${t('上传', 'Upload')}">↑ ${formatBytes(rate!.up)}/s</span><span class="speed-down" title="${t('下载', 'Download')}">↓ ${formatBytes(rate!.down)}/s</span></small>` : ''}`;
     return at ? `<span class="date-value" title="${esc(new Date(at).toLocaleString(locale))}">${t(`${relativeTime(Date.parse(at))}上线过`, `Last online ${relativeTime(Date.parse(at))}`)}</span>` : `<span class="date-value muted-text">${persistent ? t('从未上线', 'Never online') : '—'}</span>`;
   };
   const inboundTraffic = (id: string) => {
@@ -678,6 +687,7 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
     if (button.hasAttribute('data-reload')) { void load(true); return; }
     if (button.dataset.firewallRetry) { void retryFirewall(button.dataset.firewallRetry); return; }
     if (button.dataset.firewallCleanup) { void cleanupFirewall(button.dataset.firewallCleanup); return; }
+    if (button.dataset.toggleNotify !== undefined) { void toggleNotify(button); return; }
     if (!loaded || loading || submitting || orderSaving || reloadRequired) return;
     if (button.hasAttribute('data-create')) { if (page === 'inbounds') quickCreate(); else clientEditor(); }
     if (button.hasAttribute('data-quick-toggle')) { quickMenu(root.querySelector<HTMLElement>('.quick-menu')!.hidden === true); return; }
@@ -692,7 +702,6 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
     if (target.hasAttribute('data-select-all')) { root.querySelectorAll<HTMLInputElement>('[data-select]').forEach(box => { box.checked = target.checked; if (target.checked) selected.add(box.dataset.select!); else selected.delete(box.dataset.select!); }); updateSelection(); }
     // 开关先复原，确认弹窗保存成功后列表按新状态重绘。
     if (target.dataset.toggleClient !== undefined) { target.checked = !target.checked; if (loaded && !loading && !submitting && !reloadRequired) operate('toggle-client', target.dataset.toggleClient); }
-    if (target.dataset.toggleNotify !== undefined) void toggleNotify(target);
   });
   async function load(force = false): Promise<void> {
     if ((!force && loaded) || loading || submitting || orderSaving) return;
@@ -817,6 +826,7 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
         const notifyTarget = row.querySelector<HTMLElement>('[data-client-notify]');
         if (notifyTarget && !notifyTarget.contains(document.activeElement)) notifyTarget.innerHTML = notifyCell(item);
       });
+      refreshIcons();
       root.querySelectorAll<HTMLElement>('[data-inbound-traffic]').forEach(cell => { cell.innerHTML = inboundTraffic(cell.dataset.inboundTraffic!); });
     }
   }

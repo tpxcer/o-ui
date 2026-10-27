@@ -56,14 +56,15 @@ export function trafficStatus(snapshot: TrafficSnapshot | null, error = '', now 
   return `${state} · ${Number.isFinite(sampled) ? `${t('最后采样', 'Last sample')} ${new Date(sampled).toLocaleString(locale)}` : t('尚无采样', 'No samples yet')}${snapshot.issue ? ` · ${snapshot.issue}` : ''}${snapshot.incomplete ? t(' · 历史存在未知尾流，累计可能不完整', ' · history has unmeasured traffic, totals may be incomplete') : ''}`;
 }
 
-// 流量按大小自动选单位（十进制，与流量上限的GB一致）：B、KB、MB、GB、TB。
-export function formatBytes(bytes: bigint | number | null): string {
+// 全站字节统一标B、KB、MB、GB、TB等并按大小自动选单位：流量与速率按十进制（与流量上限的GB、服务商计费一致）；
+// 内存、交换与磁盘容量传base=1024（与套餐标称的“2 GB内存”一致）。
+export function formatBytes(bytes: bigint | number | null, base: 1000 | 1024 = 1000): string {
   if (bytes === null) return t('未采集', 'Not collected');
   const n = Number(bytes);
   if (!Number.isFinite(n) || n < 0) return '—';
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB'];
   let value = n, unit = 0;
-  while (value >= 1000 && unit < units.length - 1) { value /= 1000; unit++; }
+  while (value >= base && unit < units.length - 1) { value /= base; unit++; }
   const fixed = unit === 0 ? String(Math.round(value)) : value < 10 ? value.toFixed(2) : value < 100 ? value.toFixed(1) : value.toFixed(0);
   const text = fixed.includes('.') ? fixed.replace(/\.?0+$/, '') : fixed;
   return `${text} ${units[unit]}`;

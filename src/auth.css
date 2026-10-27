@@ -6,11 +6,11 @@
 .auth-heading .lang-toggle { position: absolute; top: -12px; right: -12px; }
 .auth-heading > span { display: inline-flex; align-items: center; gap: 9px; color: var(--text); font-size: 16px; font-weight: 650; letter-spacing: -.02em; }
 .auth-heading > span::before { content: ""; width: 26px; height: 26px; background: url(./logo.png) center / contain no-repeat; }
-.auth-heading .slogan { font-size: 13px; margin-top: 10px; }
+.auth-heading .slogan { font-size: 14px; margin-top: 10px; }
 .auth-heading h1 { font-size: 22px; font-weight: 650; letter-spacing: -.02em; margin: 20px 0 6px; }
-.auth-heading p, .auth-boundary { color: var(--muted); font-size: 13px; }
+.auth-heading p, .auth-boundary { color: var(--muted); font-size: 14px; }
 .auth-card form { display: grid; gap: 16px; }
 .auth-card .form-field { margin-bottom: 0; }
 .auth-card .primary-button { width: 100%; min-height: 40px; margin-top: 4px; }
-.auth-boundary { border-top: 1px solid var(--border); padding-top: 16px; margin-top: 22px; font-size: 12px; }
+.auth-boundary { border-top: 1px solid var(--border); padding-top: 16px; margin-top: 22px; font-size: 13px; }
 @media (max-width: 420px) { .auth-card { padding: 24px 20px 20px; } }
