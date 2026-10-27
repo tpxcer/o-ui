@@ -34,6 +34,18 @@ func TestPanelServedOnlyUnderAccessPath(t *testing.T) {
 	if w := get("/secret-9/"); w.Code != 200 || !strings.Contains(w.Body.String(), `<base data-panel-base href="/secret-9/">`) {
 		t.Fatal("panel page not served under the path", w.Code, w.Body.String())
 	}
+	// 页面、接口与订阅都带CSP：脚本只许同源，禁止被嵌入、插件和外部表单提交。
+	for _, path := range []string{"/secret-9/", "/secret-9/api/auth/status", "/sub/missing"} {
+		csp := get(path).Header().Get("Content-Security-Policy")
+		for _, directive := range []string{"default-src 'self'", "script-src 'self';", "object-src 'none'", "base-uri 'self'", "frame-ancestors 'none'"} {
+			if !strings.Contains(csp, directive) {
+				t.Fatal("missing CSP directive", path, directive, csp)
+			}
+		}
+		if strings.Contains(csp, "unsafe-eval") || strings.Contains(strings.SplitN(strings.SplitN(csp, "script-src", 2)[1], ";", 2)[0], "unsafe-inline") {
+			t.Fatal("scripts must not allow eval or inline code", csp)
+		}
+	}
 	if w := get("/secret-9/api/auth/status"); w.Code != 200 {
 		t.Fatal("API not served under the path", w.Code)
 	}

@@ -1,0 +1,48 @@
+# 每次推送main或提交PR时自动跑与本机相同的检查（用户2026-10-27要求）。
+# 只读权限；需要真实Xray、浏览器、VPS或外网的验收测试默认按环境变量跳过，不在这里运行。
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: Go 格式、vet 与测试
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l cmd internal)
+          if [ -n "$unformatted" ]; then echo "$unformatted"; exit 1; fi
+      - run: go vet ./...
+      - run: go test -race -count=1 ./...
+
+  web:
+    name: 前端测试、类型检查与构建
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: 安装脚本语法
+        run: bash -n install.sh
+      - run: npm test
+      - run: npm run build

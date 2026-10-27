@@ -33,6 +33,10 @@ func Handler(manager *core.Manager, state *store.Store, dist string, hosts []str
 	return handler(manager, state, dist, hosts, rt, &PanelAccess{Data: PanelAccessDraft{Listen: listen}})
 }
 
+// 页面只加载同源打包脚本与样式，无内联脚本、eval或外部资源；模板里有少量style属性（进度条宽度等），样式保留'unsafe-inline'。
+// 二维码与下载用data:/blob:。用作innerHTML拼接之外的第二道防线（用户2026-10-27要求）。
+const contentSecurityPolicy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+
 func PanelHandler(manager *core.Manager, state *store.Store, dist string, access *PanelAccess, rt *Runtime) http.Handler {
 	return handler(manager, state, dist, access.hosts(), rt, access)
 }
@@ -354,6 +358,7 @@ func handler(manager *core.Manager, state *store.Store, dist string, hosts []str
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Content-Security-Policy", contentSecurityPolicy)
 		subscription := r.URL.Path == "/sub" || strings.HasPrefix(r.URL.Path, "/sub/")
 		if strings.HasPrefix(r.URL.Path, "/api/") || subscription {
 			w.Header().Set("Cache-Control", "no-store")
