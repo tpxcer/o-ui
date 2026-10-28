@@ -30,7 +30,8 @@ export function initMonitor(root: HTMLElement, runtime: () => RuntimeStatus | nu
   const coreStatus = document.createElement('p');
   coreStatus.className = 'monitor-status core-metrics-status info-tip-host';
   coreStatus.innerHTML = `<span></span>${infoTip(t('仅本面板自有 Xray：内存为 RSS，线程不含监督进程；TCP 不含监听，UDP 含监听、不是 QUIC 会话或设备数。', 'o-ui\'s own Xray only: memory is RSS, threads exclude the supervisor; TCP excludes listeners, UDP includes listeners and is not QUIC sessions or devices.'))}`;
-  $('.statistics').after(coreStatus);
+  // 放进统计卡的“Xray 使用情况”一栏，不再悬在卡片外面。
+  groups[1].append(coreStatus);
   const coreStatusText = coreStatus.querySelector('span')!;
   const dd = [...root.querySelectorAll<HTMLElement>('.statistics dd')];
   let last: SystemSnapshot | null = null, disposed = false, busy = false, error = '';

@@ -90,6 +90,7 @@ app.innerHTML = `
   <main id="main" tabindex="-1">
     <div class="demo-notice">${icon('info')}<span>${t('资源、入站与客户端仍为演示 · 登录、Xray 版本与设置草稿已接入本机服务；不连接 VPS', 'Resources, inbounds and clients are demo data · sign-in, Xray versions and settings drafts use the local service')}</span></div>
     <div id="home-view">
+    <header class="page-heading"><div><h1 class="page-title" tabindex="-1">${t('系统状态', 'Dashboard')}</h1><p>${t('服务器资源、网速与 Xray 运行概况。', 'Server resources, network speed and Xray at a glance.')}</p></div></header>
     <section class="card status-card" aria-label="${t('资源状态（演示）', 'Resource status (demo)')}">
       <div class="network-panel"><div class="section-label">${t('整体速度', 'Overall speed')}</div>
         <div class="speed-readings"><div class="speed upload"><span class="speed-label"><b></b>${t('上传', 'Upload')}</span><strong>${icon('arrow-up')}268.00 <small>KB/s</small></strong></div>
@@ -103,7 +104,7 @@ app.innerHTML = `
         ${resource(t('存储', 'Storage'), '15.60 GB / 40.00 GB', 39, 'var(--blue)', [38, 38, 39, 39, 39, 39, 39])}
       </div>
     </section>
-    <div class="two-columns server-row">
+    <div class="home-grid">
       <section class="card server-card" aria-labelledby="server-title"><header class="card-header"><h2 id="server-title">${demo.hostname}</h2><div class="card-header-actions"><button class="icon-button" id="privacy-toggle" aria-label="${t('显示 IP 地址', 'Show IP address')}" aria-pressed="false">${icon('eye-off')}</button><button class="icon-button card-collapse" aria-expanded="true" aria-controls="server-body" aria-label="${t('服务器信息', 'Server info')}">${icon('chevron-down')}</button></div></header>
         <div class="card-body" id="server-body"><p class="server-description">${demo.provider} · ${demo.system} · KVM</p><dl>
           ${field('IPv4', demo.ipv4, true)}${field('IPv6', demo.ipv6, true)}${field(t('归属地', 'Location'), demo.location)}${field(t('运营商', 'ISP'), demo.network)}${field(t('系统负载', 'System load'), demo.load)}
@@ -116,9 +117,7 @@ app.innerHTML = `
           <dl>${field(t('节点', 'Node'), 'demo-01 / US, California')}${field(t('套餐', 'Plan'), `<span class="package-plan-name">${t('演示套餐 · 2核 / 2GB / 40GB', 'Demo plan · 2 cores / 2GB / 40GB')}</span><div class="package-resources" aria-label="${t('套餐资源', 'Plan resources')}"><span class="tag">RAM 2.00 GB</span><span class="tag">Disk 40.00 GB</span></div>`)}</dl><dl class="package-network">${field(t('服务商 IP', 'Provider IP'), demo.ipv4, true)}${field('PTR', 'demo.example', true)}</dl>
         </div>
       </section>
-    </div>
-    <div class="two-columns service-row">
-      <section class="card" aria-labelledby="xray-title"><header class="card-header"><h2 id="xray-title"><button class="core-title-trigger" data-action="core-open" aria-label="${t('Xray版本管理', 'Xray version management')}">Xray</button></h2><span class="core-stopped" id="core-home-status">${t('核心管理待连接 · 代理未启动', 'Core management not connected · proxy not started')}</span></header><div class="actions four-actions">
+      <section class="card xray-card" aria-labelledby="xray-title"><header class="card-header"><h2 id="xray-title"><button class="core-title-trigger" data-action="core-open" aria-label="${t('Xray版本管理', 'Xray version management')}">Xray</button></h2><span class="core-stopped" id="core-home-status">${t('核心管理待连接 · 代理未启动', 'Core management not connected · proxy not started')}</span></header><div class="actions four-actions">
         ${action(t('日志', 'Logs'), 'list', 'xray-log')}${action(t('停止', 'Stop'), 'power', 'stop')}${action(t('重启', 'Restart'), 'rotate-cw', 'restart')}${action(t('切换版本', 'Switch version'), 'wrench', 'core-version')}
       </div></section>
       <section class="card panel-card" aria-labelledby="panel-title"><header class="card-header"><h2 id="panel-title">o-ui <span class="version-tag">${t('原型', 'prototype')}</span></h2></header><div class="actions six-actions">

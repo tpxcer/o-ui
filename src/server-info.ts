@@ -29,17 +29,24 @@ export function initServerInfo(root: HTMLElement, reveal: () => boolean): { refr
     const first = publicInfo?.ipv4 ?? publicInfo?.ipv6;
     if (location) location.textContent = first?.location || (publicInfo ? '—' : failed);
     if (network) network.textContent = first?.org || (publicInfo ? '—' : failed);
-    const providerValues = [...body.querySelectorAll<HTMLElement>('[data-public]')];
-    setPrivate(providerValues[0], publicInfo?.ipv4?.ip ?? '', publicInfo ? t('查询失败', 'Lookup failed') : failed);
-    setPrivate(providerValues[1], publicInfo?.ipv4?.hostname ?? '', publicInfo ? t('无', 'None') : failed);
-    if (providerValues[1]) providerValues[1].closest<HTMLElement>('.field')!.hidden = !publicInfo?.ipv4?.hostname;
+    const ptr = body.querySelector<HTMLElement>('[data-public]') ?? undefined;
+    setPrivate(ptr, publicInfo?.ipv4?.hostname ?? '', publicInfo ? t('无', 'None') : failed);
+    if (ptr) ptr.closest<HTMLElement>('.field')!.hidden = !publicInfo?.ipv4?.hostname;
+    markCompact();
+  }
+  // 套餐卡没有节点或套餐明细（只剩流量概况，最多一行IP/PTR）时标为紧凑，首页网格据此把它和Xray叠在右侧，不被拉高留白。
+  function markCompact(): void {
+    body.closest<HTMLElement>('.package-card')!.classList.toggle('is-compact', !body.querySelector('dl:not(.package-network) > .field'));
   }
   function field(label: string, value: string, attribute = ''): string {
     return `<div class="field"><dt>${label}</dt><dd${attribute}>${value}</dd></div>`;
   }
+  // 没填的节点、套餐不显示“—”占位；手动模式的公网IP与服务器卡重复，只保留有值的PTR。
   function planDetails(node: string, name: string, tags: string, source: 'provider' | 'public'): string {
-    const description = `<span class="package-plan-name">${esc(name || '—')}</span>${tags ? `<div class="package-resources" aria-label="${t('套餐资源', 'Plan resources')}">${tags}</div>` : ''}`;
-    return `<dl>${field(t('节点', 'Node'), esc(node || '—'))}${field(t('套餐', 'Plan'), description)}</dl><dl class="package-network">${field(t('服务商 IP', 'Provider IP'), '—', ` data-${source}`)}${field('PTR', '—', ` data-${source}`)}</dl>`;
+    const description = `${name ? `<span class="package-plan-name">${esc(name)}</span>` : ''}${tags ? `<div class="package-resources" aria-label="${t('套餐资源', 'Plan resources')}">${tags}</div>` : ''}`;
+    const details = `${node ? field(t('节点', 'Node'), esc(node)) : ''}${description ? field(t('套餐', 'Plan'), description) : ''}`;
+    const network = source === 'provider' ? `${field(t('服务商 IP', 'Provider IP'), '—', ' data-provider')}${field('PTR', '—', ' data-provider')}` : field('PTR', '—', ' data-public');
+    return `${details ? `<dl>${details}</dl>` : ''}<dl class="package-network">${network}</dl>`;
   }
   // 服务商拉取：本月流量、节点、套餐与IP/PTR都来自服务商接口（参照OUI）。
   function paintProvider(): void {
@@ -59,6 +66,7 @@ export function initServerInfo(root: HTMLElement, reveal: () => boolean): { refr
     const hostname = p ? Object.values(p.ptr).filter(Boolean).join(', ') : '';
     setPrivate(ptr, hostname, '—');
     ptr.closest<HTMLElement>('.field')!.hidden = !hostname;
+    markCompact();
   }
   function paintPlan(): void {
     const mode = planMode(plan);

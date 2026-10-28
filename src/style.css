@@ -126,6 +126,8 @@ nav { padding: 6px 10px; }
 .collapse-button { border: 0; background: transparent; color: var(--muted); width: 100%; min-height: var(--control); display: grid; place-items: center; border-radius: var(--radius-sm); margin-top: 2px; }
 .collapse-button:hover { background: var(--raised); color: var(--text); }
 main { margin-left: var(--sidebar-width); padding: 20px 28px 40px; outline: none; }
+/* 宽屏时内容居中限宽，避免每行信息拉得过长。 */
+main > * { max-width: 1440px; margin-left: auto; margin-right: auto; }
 .demo-notice { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); min-height: 26px; margin-bottom: 10px; }
 .demo-notice svg { width: 14px; height: 14px; }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow); min-width: 0; }
@@ -156,10 +158,23 @@ main { margin-left: var(--sidebar-width); padding: 20px 28px 40px; outline: none
 .resource-percent { color: var(--text); font-size: 18px; font-weight: 600; letter-spacing: -.01em; text-align: right; min-width: 52px; line-height: 1.2; font-variant-numeric: tabular-nums; }
 .meter { background: var(--track); border-radius: 999px; overflow: hidden; height: 6px; }
 .meter > span { display: block; border-radius: inherit; height: 100%; background: var(--resource-color, var(--blue)); transition: width .4s ease; }
-.two-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; margin-top: 16px; }
-.two-columns:has(> .package-card[hidden]) { grid-template-columns: minmax(0, 1fr); }
-/* 服务器信息与套餐卡按各自内容高度，不再被拉成一样高留出空白。 */
-.server-row { align-items: start; }
+/* 首页四张卡同一网格并随套餐状态换排法（用户2026-10-28要求）：有套餐明细时两行两列；关闭或未配置时服务器卡占左侧两行，
+   Xray与o-ui叠在右侧；套餐只有流量时与Xray叠在右侧、o-ui占满底行。同行卡片等高，被拉高的卡把行与按钮均匀铺开，不在底部留白。 */
+.home-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; margin-top: 16px; }
+@media (min-width: 701px) {
+  .home-grid { grid-template-areas: "server plan" "xray panel"; }
+  .home-grid:has(> .package-card[hidden]) { grid-template-areas: "server xray" "server panel"; }
+  .home-grid:has(> .package-card.is-compact:not([hidden])) { grid-template-areas: "server plan" "server xray" "panel panel"; }
+  .home-grid > .server-card { grid-area: server; }
+  .home-grid > .package-card { grid-area: plan; }
+  .home-grid > .xray-card { grid-area: xray; }
+  .home-grid > .panel-card { grid-area: panel; }
+}
+.home-grid > .card { display: flex; flex-direction: column; }
+.home-grid .card-body { flex: 1; display: flex; flex-direction: column; }
+.home-grid .card-body > dl:not(.package-network) { flex: 1; display: flex; flex-direction: column; }
+.home-grid .card-body > dl:not(.package-network) > .field { flex: 1; align-content: center; }
+.home-grid .actions { flex: 1; align-content: center; }
 .card-header-actions { display: flex; align-items: center; gap: 4px; }
 .card-collapse { display: none; }
 .card-header { min-height: 54px; padding: 8px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 12px; }
@@ -178,10 +193,13 @@ main { margin-left: var(--sidebar-width); padding: 20px 28px 40px; outline: none
 .package-plan-name { display: block; }
 .package-resources { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
 .package-resources .tag { margin: 0; }
+.package-card { container-type: inline-size; }
 .package-network { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 20px; border-top: 1px solid var(--border); }
 .package-network:has(> [hidden]) { grid-template-columns: minmax(0, 1fr); }
+.package-network:not(:has(> .field:not([hidden]))) { display: none; }
 .package-network > .field { min-width: 0; border: 0; }
-@media (max-width: 600px) { .package-network { grid-template-columns: minmax(0, 1fr); } }
+/* 按卡片自身宽度而不是窗口宽度决定服务商 IP 与 PTR 是否并排。 */
+@container (max-width: 520px) { .package-network { grid-template-columns: minmax(0, 1fr); } }
 .allowance-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
 .allowance-heading > span, .traffic-allowance p { color: var(--muted); font-size: 13px; }
 .allowance-heading strong { font-size: 15px; font-variant-numeric: tabular-nums; }
@@ -201,7 +219,8 @@ main { margin-left: var(--sidebar-width); padding: 20px 28px 40px; outline: none
 .action:hover { color: var(--text); background: var(--raised); }
 .action:hover svg { color: var(--blue); }
 .action svg { width: 16px; height: 16px; }
-.panel-card .action { flex-direction: column; gap: 6px; font-size: 13px; }
+/* Xray与o-ui两张卡的按钮统一为图标在上、文字在下。 */
+.xray-card .action, .panel-card .action { flex-direction: column; gap: 6px; font-size: 13px; }
 /* 发现新版本时“检测更新”变为橙色“立即升级”（参照OUI） */
 .action.is-update, .action.is-update:hover { color: var(--orange); font-weight: 600; }
 .action.is-update:disabled { cursor: wait; opacity: .8; }
@@ -255,11 +274,12 @@ dialog footer { padding: 12px 22px 18px; display: flex; justify-content: flex-en
   .card-body { padding: 20px; }
   .card-header { padding-left: 20px; padding-right: 16px; }
   .panel-card .six-actions { grid-template-columns: repeat(3, minmax(0, 1fr)); row-gap: 8px; }
+  .xray-card .four-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 8px; }
   .panel-card .action:nth-child(3) { border-right: 0; }
 }
 @media (min-width: 701px) and (max-width: 900px) {
   main { padding-left: 16px; padding-right: 16px; }
-  .two-columns { gap: 12px; }
+  .home-grid { gap: 12px; }
   .field { grid-template-columns: 1fr; gap: 4px; padding: 8px 0; }
   .sparkline { display: none; }
   .resource-percent { margin-left: auto; }
@@ -300,11 +320,11 @@ dialog footer { padding: 12px 22px 18px; display: flex; justify-content: flex-en
   .axis-labels { flex-basis: 58px; font-size: 11px; padding-bottom: 28px; }
   .resources { grid-template-columns: 1fr; padding: 16px; gap: 16px; }
   .resource-copy span { font-size: 13px; }
-  .two-columns { grid-template-columns: 1fr; gap: 12px; }
+  .home-grid { grid-template-columns: minmax(0, 1fr); gap: 12px; }
   .card-body { padding: 16px; }
   .card-header { min-height: 50px; padding-left: 16px; padding-right: 10px; }
   .field { grid-template-columns: 76px minmax(0, 1fr); gap: 10px; font-size: 14px; }
-  .four-actions { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .four-actions, .xray-card .four-actions { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .action { gap: 5px; font-size: 13px; }
   .four-actions .action { flex-direction: column; }
   .six-actions { grid-template-columns: repeat(3, minmax(0, 1fr)); row-gap: 8px; }
