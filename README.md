@@ -11,10 +11,11 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPL--3.0-blue" alt="GPL-3.0 许可证"></a>
   <img src="https://img.shields.io/badge/Linux-amd64%20%7C%20arm64-64748b" alt="Linux amd64 与 arm64">
   <img src="https://img.shields.io/badge/语言-简体中文%20%7C%20English-10b981" alt="简体中文与英文">
+  <a href="https://t.me/tpxcer"><img src="https://img.shields.io/badge/Telegram-讨论群-26A5E4?logo=telegram&logoColor=white" alt="Telegram 讨论群"></a>
 </p>
 
 <p align="center">
-  <a href="#界面预览">界面预览</a> · <a href="#项目特点">项目特点</a> · <a href="#快速安装">快速安装</a> · <a href="docs/guide.md">使用指南</a> · <a href="https://github.com/tpxcer/o-ui/releases">版本记录</a>
+  <a href="#界面预览">界面预览</a> · <a href="#项目特点">项目特点</a> · <a href="#快速安装">快速安装</a> · <a href="docs/guide.md">使用指南</a> · <a href="https://github.com/tpxcer/o-ui/releases">版本记录</a> · <a href="https://t.me/tpxcer">讨论群</a>
 </p>
 
 ## 界面预览
@@ -164,6 +165,10 @@ go test ./...
 go test -race ./...
 go vet ./...
 ```
+
+## 交流与反馈
+
+使用问题、建议和功能讨论欢迎加入 [Telegram 讨论群](https://t.me/tpxcer)；可复现的缺陷请在 [GitHub Issues](https://github.com/tpxcer/o-ui/issues) 提交。请勿在群里或 Issue 中贴出节点链接、订阅地址、面板访问路径等凭据。
 
 ## 许可与来源
 

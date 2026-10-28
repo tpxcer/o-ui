@@ -117,7 +117,13 @@ nav { padding: 6px 10px; }
 .nav-item:hover { background: var(--raised); color: var(--text); }
 .nav-item.active { background: var(--active); color: var(--text); }
 .nav-item.active svg.lucide { color: var(--blue); }
-.repo-link { margin: auto 10px 6px; width: auto; text-decoration: none; }
+/* 侧栏底部：GitHub 项目主页（含版本号）与 Telegram 讨论群图标并排；收起侧栏时上下排。 */
+.repo-row { display: flex; align-items: center; gap: 2px; margin: auto 10px 6px; }
+.repo-link { flex: 1; min-width: 0; width: auto; text-decoration: none; }
+.tg-link { flex: none; color: var(--muted); }
+.tg-link svg { width: 18px; height: 18px; fill: currentColor; }
+.tg-link:hover { color: #26a5e4; }
+.sidebar-collapsed .repo-row { flex-direction: column; }
 .repo-link svg { width: 18px; height: 18px; fill: currentColor; flex: none; }
 .repo-link:hover svg { color: var(--text); }
 .sidebar-bottom { padding: 8px 10px 10px; border-top: 1px solid var(--border); }
@@ -303,6 +309,7 @@ dialog footer { padding: 12px 22px 18px; display: flex; justify-content: flex-en
   .collapse-button { display: none; }
   .sidebar-collapsed .brand { padding: 8px 8px 8px 18px; justify-content: space-between; }
   .sidebar-collapsed .nav-item span, .sidebar-collapsed .prototype-version { display: block; }
+  .sidebar-collapsed .repo-row { flex-direction: row; }
   /* 手机侧栏有三个44px按钮：标语换到品牌行下面单独一行 */
   .sidebar .brand { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
   .brand-title, .sidebar-collapsed .brand-title { display: contents; }
