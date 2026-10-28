@@ -132,8 +132,6 @@ nav { padding: 6px 10px; }
 .collapse-button { border: 0; background: transparent; color: var(--muted); width: 100%; min-height: var(--control); display: grid; place-items: center; border-radius: var(--radius-sm); margin-top: 2px; }
 .collapse-button:hover { background: var(--raised); color: var(--text); }
 main { margin-left: var(--sidebar-width); padding: 20px 28px 40px; outline: none; }
-/* 宽屏时内容居中限宽，避免每行信息拉得过长。 */
-main > * { max-width: 1440px; margin-left: auto; margin-right: auto; }
 .demo-notice { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); min-height: 26px; margin-bottom: 10px; }
 .demo-notice svg { width: 14px; height: 14px; }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow); min-width: 0; }
