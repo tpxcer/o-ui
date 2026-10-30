@@ -74,6 +74,12 @@ func mergePeriods(old, next Ledger, now time.Time) map[string]Period {
 
 // ValidPeriods兼容无周期字段的旧账本；拒绝超过累计的周期数据。
 func ValidPeriods(ledger Ledger) bool {
+	if ledger.Inbounds != nil {
+		in := ledger.Inbounds
+		if in.Inbounds != nil || in.Totals == nil || in.Last == nil || !ValidPeriods(*in) || (in.Active && (in.Epoch == "" || in.SampledAt == nil)) {
+			return false
+		}
+	}
 	if len(ledger.Periods) > len(periodKinds) {
 		return false
 	}

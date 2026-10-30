@@ -72,12 +72,20 @@ func (b *boundedOutput) Write(p []byte) (int, error) {
 }
 
 func queryTraffic(ctx context.Context, c engine.Candidate) (map[string]traffic.Count, error) {
+	data, err := queryTrafficData(ctx, c)
+	if err != nil {
+		return nil, err
+	}
+	return traffic.Parse(data)
+}
+
+func queryTrafficData(ctx context.Context, c engine.Candidate) ([]byte, error) {
 	if !strings.HasPrefix(c.StatsAddress, "unix:///") {
 		return nil, i18n.New("统计接口未配置为受限本机套接字", "Statistics API is not configured as a restricted local socket")
 	}
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	command := exec.CommandContext(ctx, c.Binary, "api", "statsquery", "--server="+c.StatsAddress, "-timeout=2", "-pattern=user>>>")
+	command := exec.CommandContext(ctx, c.Binary, "api", "statsquery", "--server="+c.StatsAddress, "-timeout=2", "-pattern=>>>")
 	command.Dir = filepath.Dir(c.Binary)
 	command.Env = []string{"PATH=/usr/bin:/bin"}
 	var output boundedOutput
@@ -85,18 +93,22 @@ func queryTraffic(ctx context.Context, c engine.Candidate) (map[string]traffic.C
 	if command.Run() != nil {
 		return nil, i18n.New("无法采集官方核心流量，未把失败当作零用量", "Cannot sample core traffic; the failure is not counted as zero usage")
 	}
-	counts, err := traffic.Parse(output.Bytes())
-	if err != nil {
-		return nil, err
-	}
-	return counts, nil
+	return output.Bytes(), nil
 }
 
 func (rt *Runtime) checkpoint(ctx context.Context, c engine.Candidate, started time.Time) error {
 	if c.StatsAddress == "" {
 		return nil
 	}
-	counts, err := queryTraffic(ctx, c)
+	data, err := queryTrafficData(ctx, c)
+	if err != nil {
+		return err
+	}
+	counts, err := traffic.Parse(data)
+	if err != nil {
+		return err
+	}
+	inboundCounts, err := traffic.ParseInbounds(data)
 	if err != nil {
 		return err
 	}
@@ -110,7 +122,16 @@ func (rt *Runtime) checkpoint(ctx context.Context, c engine.Candidate, started t
 	if err != nil {
 		return err
 	}
-	data, err := json.Marshal(ledger)
+	inboundLedger := traffic.Empty()
+	if ledger.Inbounds != nil {
+		inboundLedger = *ledger.Inbounds
+	}
+	inboundLedger, err = traffic.Merge(inboundLedger, epoch, inboundCounts, now)
+	if err != nil {
+		return err
+	}
+	ledger.Inbounds = &inboundLedger
+	data, err = json.Marshal(ledger)
 	if err != nil {
 		return err
 	}
@@ -155,6 +176,10 @@ func (rt *Runtime) markStopped(ctx context.Context, incomplete bool) error {
 	ledger, revision, err := rt.ledger(ctx)
 	if err != nil {
 		return err
+	}
+	if ledger.Inbounds != nil {
+		ledger.Inbounds.Active = false
+		ledger.Inbounds.Incomplete = ledger.Inbounds.Incomplete || incomplete
 	}
 	ledger.Active = false
 	ledger.Incomplete = ledger.Incomplete || incomplete
@@ -392,6 +417,10 @@ func registerTraffic(mux *http.ServeMux, rt *Runtime) {
 			return
 		}
 		c, running := rt.engine.Current()
-		respond(w, 200, map[string]any{"periods": traffic.CurrentPeriods(ledger, time.Now()), "totals": ledger.Totals, "lastOnline": ledger.LastOnline, "sampledAt": ledger.SampledAt, "collecting": running && c.StatsAddress != "", "intervalSeconds": int(trafficInterval.Seconds()), "issue": rt.issue, "incomplete": ledger.Incomplete})
+		var inbounds any
+		if in := ledger.Inbounds; in != nil {
+			inbounds = map[string]any{"totals": in.Totals, "periods": traffic.CurrentPeriods(*in, time.Now()), "sampledAt": in.SampledAt}
+		}
+		respond(w, 200, map[string]any{"inbounds": inbounds, "periods": traffic.CurrentPeriods(ledger, time.Now()), "totals": ledger.Totals, "lastOnline": ledger.LastOnline, "sampledAt": ledger.SampledAt, "collecting": running && c.StatsAddress != "", "intervalSeconds": int(trafficInterval.Seconds()), "issue": rt.issue, "incomplete": ledger.Incomplete})
 	})
 }

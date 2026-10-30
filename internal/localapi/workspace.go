@@ -48,20 +48,32 @@ type connectionDraft struct {
 	NoVision            bool   `json:"noVision,omitempty"`
 }
 type clientDraft struct {
-	ID           string  `json:"id"`
-	InboundID    string  `json:"inboundId"`
-	Name         string  `json:"name"`
-	Enabled      bool    `json:"enabled"`
-	QuotaGB      float64 `json:"quotaGB"`
-	UsedGB       float64 `json:"usedGB"`
-	ExpiresAt    *int64  `json:"expiresAt"`
-	IPLimit      int     `json:"ipLimit"`
-	Subscription bool    `json:"subscription"`
-	ReverseTag   string  `json:"reverseTag,omitempty"`
+	ID           string   `json:"id"`
+	InboundID    string   `json:"inboundId"`
+	InboundIDs   []string `json:"inboundIds,omitempty"`
+	Name         string   `json:"name"`
+	Enabled      bool     `json:"enabled"`
+	QuotaGB      float64  `json:"quotaGB"`
+	UsedGB       float64  `json:"usedGB"`
+	ExpiresAt    *int64   `json:"expiresAt"`
+	IPLimit      int      `json:"ipLimit"`
+	Subscription bool     `json:"subscription"`
+	ReverseTag   string   `json:"reverseTag,omitempty"`
 }
 type workspaceDraft struct {
 	Inbounds []inboundDraft `json:"inbounds"`
 	Clients  []clientDraft  `json:"clients"`
+}
+
+func (c clientDraft) inboundIDs() []string { return config.LinkedInbounds(c.InboundID, c.InboundIDs) }
+
+func (c clientDraft) linkedTo(id string) bool {
+	for _, linked := range c.inboundIDs() {
+		if linked == id {
+			return true
+		}
+	}
+	return false
 }
 
 var draftID = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
@@ -156,8 +168,19 @@ func validateWorkspaceDraft(data, previous json.RawMessage) error {
 		presets[in.ID] = in.Preset
 	}
 	for _, client := range draft.Clients {
-		if !draftID.MatchString(client.ID) || clientIDs[client.ID] || !ids[client.InboundID] || strings.TrimSpace(client.Name) == "" || len([]rune(client.Name)) > 64 || names[client.Name] {
+		if !draftID.MatchString(client.ID) || clientIDs[client.ID] || strings.TrimSpace(client.Name) == "" || len([]rune(client.Name)) > 64 || names[client.Name] {
 			return i18n.New("客户端标识、名称或关联入站无效", "Invalid client ID, name or linked inbound")
+		}
+		linked := client.inboundIDs()
+		seen := map[string]bool{}
+		if len(linked) == 0 || (client.InboundID != "" && client.InboundID != linked[0]) {
+			return i18n.New("请选择至少一个关联入站，且主入站须与列表一致", "Select at least one inbound; the primary inbound must match the list")
+		}
+		for _, id := range linked {
+			if !ids[id] || seen[id] {
+				return i18n.New("关联入站不存在或重复", "Linked inbound is missing or duplicated")
+			}
+			seen[id] = true
 		}
 		if math.IsNaN(client.QuotaGB) || math.IsInf(client.QuotaGB, 0) || client.QuotaGB < 0 || client.QuotaGB > 1_000_000 || (client.QuotaGB > 0 && client.QuotaGB*1e9 < 1) || client.UsedGB != 0 || client.IPLimit < 0 || client.IPLimit > 10000 {
 			return i18n.New("流量草稿无效、IP上限超出0至10000，或设置了用量", "Invalid traffic draft, an IP limit outside 0–10000, or a usage value was set")
@@ -166,18 +189,27 @@ func validateWorkspaceDraft(data, previous json.RawMessage) error {
 			return i18n.New("客户端到期时间无效", "Invalid client expiry time")
 		}
 		if client.ReverseTag != "" {
-			if !config.ReverseTagPattern.MatchString(client.ReverseTag) || presets[client.InboundID] == "hy2" || reverseTags[client.ReverseTag] {
-				return i18n.New("反向代理标签只用于VLESS入站，须唯一，且只能含字母、数字、点、下划线和连字符", "Reverse tags apply only to VLESS inbounds, must be unique and may contain only letters, digits, dots, underscores and hyphens")
+			if !config.ReverseTagPattern.MatchString(client.ReverseTag) || len(linked) != 1 || presets[linked[0]] == "hy2" || reverseTags[client.ReverseTag] {
+				return i18n.New("反向代理客户端只能关联一个VLESS入站，标签须唯一，且只能含字母、数字、点、下划线和连字符", "Reverse proxy clients may link only one VLESS inbound; tags must be unique and may contain only letters, digits, dots, underscores and hyphens")
 			}
 			reverseTags[client.ReverseTag] = true
 		}
 		clientIDs[client.ID] = true
 		names[client.Name] = true
 	}
-	// 允许批量删除，删除入站时其客户端一并删除（用户2026-10-22决定，页面先列出将删除的项目并确认）；
-	// 剩余客户端不能指向已删除的入站，已由上面的关联检查保证。已有草稿损坏时仍拒绝覆盖。
+	// 删除前由页面确认范围；剩余客户端必须仍有有效关联。
 	if len(previous) > 0 && string(previous) != "null" && json.Unmarshal(previous, &old) != nil {
 		return i18n.New("已有草稿损坏，拒绝覆盖", "Existing draft is corrupted; refusing to overwrite")
+	}
+	for _, before := range old.Clients {
+		if len(before.inboundIDs()) <= 1 {
+			continue
+		}
+		for _, after := range draft.Clients {
+			if after.ID == before.ID && after.InboundIDs == nil {
+				return i18n.New("客户端含多个入站，请刷新页面后再保存", "This client has multiple inbounds; refresh the page before saving")
+			}
+		}
 	}
 	return nil
 }

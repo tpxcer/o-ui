@@ -193,9 +193,45 @@ func readIPLimit(ctx context.Context, s *store.Store) (ipLimitRecord, int64, err
 	return record, doc.Revision, nil
 }
 
+type ipEndpoint struct {
+	port     int
+	protocol string
+}
+
 type ipLimitTarget struct {
-	name, protocol string
-	limit, port    int
+	endpoints []ipEndpoint
+	name      string
+	limit     int
+}
+
+func (target ipLimitTarget) matches(ban ipBan) bool {
+	for _, endpoint := range target.endpoints {
+		if endpoint.port == ban.Port && endpoint.protocol == ban.Protocol {
+			return true
+		}
+	}
+	return false
+}
+
+func uniqueOnlineIPs(ips []onlineIP) []onlineIP {
+	result := []onlineIP{}
+	positions := map[string]int{}
+	for _, item := range ips {
+		ip := net.ParseIP(item.IP)
+		if ip == nil {
+			continue
+		}
+		item.IP = ip.String()
+		if i, ok := positions[item.IP]; ok {
+			if item.LastSeen.After(result[i].LastSeen) {
+				result[i] = item
+			}
+			continue
+		}
+		positions[item.IP] = len(result)
+		result = append(result, item)
+	}
+	return result
 }
 
 // 手动封禁也适用于没有设置IP上限的客户端；自动限制在判定时检查limit。
@@ -210,15 +246,24 @@ func ipLimitTargets(data json.RawMessage) map[string]ipLimitTarget {
 		inbounds[in.ID] = in
 	}
 	for _, client := range draft.Clients {
-		in, ok := inbounds[client.InboundID]
-		if !ok || !client.Enabled || !in.Enabled {
+		if !client.Enabled {
 			continue
 		}
-		protocol := "tcp"
-		if in.Preset == "hy2" {
-			protocol = "udp"
+		target := ipLimitTarget{name: client.Name, limit: client.IPLimit}
+		for _, id := range client.inboundIDs() {
+			in, ok := inbounds[id]
+			if !ok || !in.Enabled {
+				continue
+			}
+			protocol := "tcp"
+			if in.Preset == "hy2" {
+				protocol = "udp"
+			}
+			target.endpoints = append(target.endpoints, ipEndpoint{port: in.Port, protocol: protocol})
 		}
-		targets[client.ID] = ipLimitTarget{name: client.Name, protocol: protocol, limit: client.IPLimit, port: in.Port}
+		if len(target.endpoints) > 0 {
+			targets[client.ID] = target
+		}
 	}
 	return targets
 }
@@ -267,7 +312,7 @@ func (rt *Runtime) ipLimitTick(ctx context.Context, now time.Time) {
 	targets := ipLimitTargets(workspace.Data)
 	valid := func(ban ipBan) bool {
 		target, ok := targets[ban.ClientID]
-		return ok && target.port == ban.Port && target.protocol == ban.Protocol && (ban.Manual || target.limit > 0) && ban.active(now)
+		return ok && target.matches(ban) && (ban.Manual || target.limit > 0) && ban.active(now)
 	}
 	// 启动重建与定期重申只处理仍有效的记录，失败留待下次重试。
 	reassert := !l.synced || now.Sub(l.reasserted) >= ipReassertEvery
@@ -319,6 +364,7 @@ func (rt *Runtime) ipLimitTick(ctx context.Context, now time.Time) {
 			}
 		}
 		for email, ips := range online {
+			ips = uniqueOnlineIPs(ips)
 			clientID, ok := strings.CutPrefix(email, "client-")
 			if !ok {
 				continue
@@ -353,7 +399,24 @@ func (rt *Runtime) ipLimitTick(ctx context.Context, now time.Time) {
 			}
 			skip, first := map[string]bool{}, map[string]time.Time{}
 			for _, ban := range bans {
-				if ban.Port == target.port && ban.Protocol == target.protocol {
+				if !ban.active(now) {
+					continue
+				}
+				all := true
+				for _, endpoint := range target.endpoints {
+					covered := false
+					for _, other := range bans {
+						if other.active(now) && other.IP == ban.IP && other.Port == endpoint.port && other.Protocol == endpoint.protocol {
+							covered = true
+							break
+						}
+					}
+					if !covered {
+						all = false
+						break
+					}
+				}
+				if all {
 					skip[ban.IP] = true
 				}
 			}
@@ -363,12 +426,37 @@ func (rt *Runtime) ipLimitTick(ctx context.Context, now time.Time) {
 			keep, excess := decideIPLimit(target.limit, ips, first, skip, now)
 			added := []string{}
 			for _, ip := range excess {
-				ban := ipBan{ClientID: clientID, IP: ip, Port: target.port, Protocol: target.protocol, Until: now.Add(ipBanDuration)}
-				if err := rt.ipBan(ctx, "ban", ban); err != nil {
-					note(err)
+				pending := []ipBan{}
+				failed := false
+				for _, endpoint := range target.endpoints {
+					ban := ipBan{ClientID: clientID, IP: ip, Port: endpoint.port, Protocol: endpoint.protocol, Until: now.Add(ipBanDuration)}
+					if err := rt.ipBan(ctx, "ban", ban); err != nil {
+						note(err)
+						failed = true
+						break
+					}
+					pending = append(pending, ban)
+				}
+				if failed {
+					// 多端口封禁未完成时撤回本次新增规则，保留其他客户端仍需要的共享规则。
+					for _, ban := range pending {
+						shared := false
+						for _, other := range bans {
+							if sameIPBanRule(ban, other) {
+								shared = true
+								break
+							}
+						}
+						if !shared {
+							if err := rt.ipBan(context.WithoutCancel(ctx), "unban", ban); err != nil {
+								note(err)
+								l.synced = false
+							}
+						}
+					}
 					continue
 				}
-				bans = append(bans, ban)
+				bans = append(bans, pending...)
 				added = append(added, ip)
 				changed = true
 			}
@@ -400,8 +488,12 @@ func notifyIPLimit(state *store.Store, rt *Runtime, target ipLimitTarget, keep, 
 			return
 		}
 		lang := telegramLang()
-		text := fmt.Sprintf(i18n.Pick(lang, "🚫 <b>o-ui IP 上限</b>\n👤 客户端：<code>%s</code>（上限 %d）\n🔌 端口：%d/%s\n⛔ 已封禁 10 分钟：%s\n✅ 保留：%s", "🚫 <b>o-ui IP limit</b>\n👤 Client: <code>%s</code> (limit %d)\n🔌 Port: %d/%s\n⛔ Banned for 10 minutes: %s\n✅ Kept: %s"),
-			html.EscapeString(target.name), target.limit, target.port, target.protocol, html.EscapeString(strings.Join(banned, ", ")), html.EscapeString(strings.Join(keep, ", ")))
+		ports := []string{}
+		for _, endpoint := range target.endpoints {
+			ports = append(ports, fmt.Sprintf("%d/%s", endpoint.port, endpoint.protocol))
+		}
+		text := fmt.Sprintf(i18n.Pick(lang, "🚫 <b>o-ui IP 上限</b>\n👤 客户端：<code>%s</code>（上限 %d）\n🔌 端口：%s\n⛔ 已封禁 10 分钟：%s\n✅ 保留：%s", "🚫 <b>o-ui IP limit</b>\n👤 Client: <code>%s</code> (limit %d)\n🔌 Ports: %s\n⛔ Banned for 10 minutes: %s\n✅ Kept: %s"),
+			html.EscapeString(target.name), target.limit, strings.Join(ports, ", "), html.EscapeString(strings.Join(banned, ", ")), html.EscapeString(strings.Join(keep, ", ")))
 		_, _ = telegramBroadcast(ctx, rt.telegramIdentity(s), text)
 	}()
 }
@@ -454,7 +546,7 @@ func registerIPLimit(mux *http.ServeMux, rt *Runtime) {
 		for _, ban := range record.Bans {
 			get(ban.ClientID).Banned = append(get(ban.ClientID).Banned, ban)
 			for id, target := range targets {
-				if id != ban.ClientID && target.port == ban.Port && target.protocol == ban.Protocol {
+				if id != ban.ClientID && target.matches(ban) {
 					get(id).Banned = append(get(id).Banned, ban)
 				}
 			}
@@ -546,15 +638,24 @@ func (rt *Runtime) changeIPBan(ctx context.Context, action string, request ipBan
 		return 422, i18n.New("客户端或入站未启用，请刷新列表", "The client or inbound is not enabled; refresh the list")
 	}
 	now := time.Now()
-	ban := ipBan{ClientID: request.ClientID, IP: request.IP, Port: target.port, Protocol: target.protocol, Manual: true, Permanent: request.Minutes == 0}
-	if !ban.Permanent {
-		ban.Until = now.Add(time.Duration(request.Minutes) * time.Minute)
+	relevant := func(item ipBan) bool {
+		return item.IP == request.IP && (target.matches(item) || item.ClientID == request.ClientID)
 	}
 	known, wasBanned := false, false
-	bans := make([]ipBan, 0, len(record.Bans)+1)
+	bans := make([]ipBan, 0, len(record.Bans)+len(target.endpoints))
+	rules := []ipBan{}
+	addRule := func(ban ipBan) {
+		for _, item := range rules {
+			if sameIPBanRule(item, ban) {
+				return
+			}
+		}
+		rules = append(rules, ban)
+	}
 	for _, item := range record.Bans {
-		if sameIPBanRule(ban, item) {
+		if relevant(item) {
 			known, wasBanned = true, true
+			addRule(item)
 		} else {
 			bans = append(bans, item)
 		}
@@ -571,24 +672,58 @@ func (rt *Runtime) changeIPBan(ctx context.Context, action string, request ipBan
 		return 422, i18n.New("此IP不在当前客户端的在线或封禁列表中，请刷新", "This IP is not in this client's online or banned list; refresh")
 	}
 	if action == "ban" {
-		bans = append(bans, ban)
+		// 旧关联的残留规则先保留，交由采样清理；新封禁只写当前目标。
+		rules = nil
+		for _, endpoint := range target.endpoints {
+			ban := ipBan{ClientID: request.ClientID, IP: request.IP, Port: endpoint.port, Protocol: endpoint.protocol, Manual: true, Permanent: request.Minutes == 0}
+			if !ban.Permanent {
+				ban.Until = now.Add(time.Duration(request.Minutes) * time.Minute)
+			}
+			bans = append(bans, ban)
+			addRule(ban)
+		}
+		for _, item := range record.Bans {
+			if relevant(item) && !target.matches(item) {
+				bans = append(bans, item)
+			}
+		}
 	}
-	if err := rt.ipBan(ctx, action, ban); err != nil {
-		l.issue = err.Error()
-		return 502, err
+	applied := []ipBan{}
+	rollback := func() bool {
+		recoverCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		ok := true
+		for _, rule := range applied {
+			restore := "unban"
+			for _, old := range record.Bans {
+				if sameIPBanRule(old, rule) {
+					restore = "ban"
+					break
+				}
+			}
+			if rt.ipBan(recoverCtx, restore, rule) != nil {
+				ok = false
+			}
+		}
+		if !ok {
+			l.synced = false
+			l.issue = i18n.T("IP操作保存与回退失败，正在重新同步防火墙，请刷新检查", "Saving and rollback failed; the firewall is being resynchronized, refresh to check")
+		}
+		return ok
+	}
+	for _, rule := range rules {
+		if err := rt.ipBan(ctx, action, rule); err != nil {
+			l.issue = err.Error()
+			if !rollback() {
+				return 500, errors.New(l.issue)
+			}
+			return 502, err
+		}
+		applied = append(applied, rule)
 	}
 	data, _ := json.Marshal(ipLimitRecord{Bans: bans})
 	if _, err := rt.state.SaveDocument(ctx, ipLimitDocument, revision, data); err != nil {
-		// 持久化失败时恢复原规则；使用独立期限，不受浏览器断开影响。
-		recoverCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		restore := "unban"
-		if wasBanned {
-			restore = "ban"
-		}
-		if rollback := rt.ipBan(recoverCtx, restore, ban); rollback != nil {
-			l.synced = false
-			l.issue = i18n.T("IP操作保存与回退失败，正在重新同步防火墙，请刷新检查", "Saving and rollback failed; the firewall is being resynchronized, refresh to check")
+		if !rollback() {
 			return 500, errors.New(l.issue)
 		}
 		return 500, i18n.New("IP操作未保存，已恢复原规则，请刷新后重试", "IP change was not saved; the previous rule was restored, refresh and retry")

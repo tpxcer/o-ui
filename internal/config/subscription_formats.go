@@ -113,11 +113,16 @@ func ClashProxy(outbound map[string]any, name string) ([]YAMLField, error) {
 }
 
 // ClashConfig输出只含代理、选择组与兜底规则的YAML，其余由客户端自身配置决定。
-func ClashConfig(proxy []YAMLField) string {
-	name, _ := proxy[0].Value.(string)
+func ClashConfig(proxies ...[]YAMLField) string {
+	names := []string{}
+	for _, proxy := range proxies {
+		name, _ := proxy[0].Value.(string)
+		names = append(names, name)
+	}
+	names = append(names, "DIRECT")
 	config := []YAMLField{
-		{"proxies", [][]YAMLField{proxy}},
-		{"proxy-groups", [][]YAMLField{{{"name", "PROXY"}, {"type", "select"}, {"proxies", []string{name, "DIRECT"}}}}},
+		{"proxies", proxies},
+		{"proxy-groups", [][]YAMLField{{{"name", "PROXY"}, {"type", "select"}, {"proxies", names}}}},
 		{"rules", []string{"MATCH,PROXY"}},
 	}
 	var b strings.Builder

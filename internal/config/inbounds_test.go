@@ -257,3 +257,39 @@ func TestReverseTagCompile(t *testing.T) {
 		}
 	}
 }
+
+func TestMultiInboundClientSharesIdentityAndQuota(t *testing.T) {
+	first, client := fixture("reality")
+	second, _ := fixture("hy2")
+	second.ID = "two"
+	client.InboundIDs = []string{"one", "two"}
+	compiled, err := CompileInbounds([]Inbound{first, second}, []Client{client}, fixtureNow)
+	if err != nil || len(compiled) != 2 {
+		t.Fatal("multi compile", err)
+	}
+	if compiled[0].Settings.Clients[0].Email != compiled[1].Settings.Clients[0].Email || compiled[0].Settings.Clients[0].ID != client.UUID || compiled[1].Settings.Clients[0].Auth != client.Auth {
+		t.Fatal("shared identity lost")
+	}
+	client.QuotaBytes, client.UsedBytes = 100, 100
+	compiled, err = CompileInbounds([]Inbound{first, second}, []Client{client}, fixtureNow)
+	if err != nil || len(compiled) != 0 {
+		t.Fatal("quota did not block every inbound", err)
+	}
+	client.QuotaBytes, client.UsedBytes = 0, 0
+	past := fixtureNow.Add(-time.Second)
+	client.ExpiresAt = &past
+	compiled, err = CompileInbounds([]Inbound{first, second}, []Client{client}, fixtureNow)
+	if err != nil || len(compiled) != 0 {
+		t.Fatal("expiry did not block every inbound", err)
+	}
+	client.ExpiresAt = nil
+	client.Enabled = false
+	compiled, err = CompileInbounds([]Inbound{first, second}, []Client{client}, fixtureNow)
+	if err != nil || len(compiled) != 0 {
+		t.Fatal("disable did not block every inbound", err)
+	}
+	client.InboundIDs = []string{"one", "one"}
+	if _, err = CompileInbounds([]Inbound{first, second}, []Client{client}, fixtureNow); err == nil {
+		t.Fatal("duplicate association accepted")
+	}
+}

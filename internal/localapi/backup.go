@@ -92,6 +92,13 @@ func backupLedger(data json.RawMessage) (traffic.Ledger, error) {
 			return ledger, i18n.New("流量客户端标识无效", "Invalid traffic client ID")
 		}
 	}
+	if ledger.Inbounds != nil {
+		for id := range ledger.Inbounds.Totals {
+			if !draftID.MatchString(id) {
+				return ledger, i18n.New("流量入站标识无效", "Invalid traffic inbound ID")
+			}
+		}
+	}
 	return ledger, nil
 }
 
@@ -374,6 +381,21 @@ func (rt *Runtime) restore(ctx context.Context, b businessBackup, current busine
 		next := b.Traffic.Totals[id]
 		next.Uplink, next.Downlink = max(next.Uplink, count.Uplink), max(next.Downlink, count.Downlink)
 		b.Traffic.Totals[id] = next
+	}
+	if current.Traffic.Inbounds != nil || b.Traffic.Inbounds != nil {
+		in := traffic.Empty()
+		if b.Traffic.Inbounds != nil {
+			in = *b.Traffic.Inbounds
+		}
+		if current.Traffic.Inbounds != nil {
+			for id, count := range current.Traffic.Inbounds.Totals {
+				next := in.Totals[id]
+				next.Uplink, next.Downlink = max(next.Uplink, count.Uplink), max(next.Downlink, count.Downlink)
+				in.Totals[id] = next
+			}
+		}
+		in.Epoch, in.Last, in.Active, in.Incomplete, in.Periods = "", map[string]traffic.Count{}, false, true, nil
+		b.Traffic.Inbounds = &in
 	}
 	b.Traffic.Epoch, b.Traffic.Last, b.Traffic.Active, b.Traffic.Incomplete = "", map[string]traffic.Count{}, false, true
 	// 恢复后的周期从首个新样本起算，不能把合并的历史累计计入本周期。

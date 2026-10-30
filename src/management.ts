@@ -1,4 +1,4 @@
-import { addClient, chineseDate, clientStatus, createQuick, defaultConnection, defaultSniffing, deleteRecords, editClient,
+import { addClient, clientInboundIds, clientInbounds, chineseDate, clientStatus, createQuick, defaultConnection, defaultSniffing, deleteRecords, editClient,
   editInbound, escapeHtml as esc, inboundName, presets, quickInboundName, randomName, seedWorkspace } from './workspace.ts';
 import type { Client, ClientInput, Connection, Inbound, Preset, TrafficReset, Workspace } from './workspace.ts';
 import { api, APIError, confirmSaved, jsonBody, uncertainSave } from './api.ts';
@@ -142,7 +142,7 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
   });
   const clientFields = (client: ClientInput) => `<div class="form-grid">${input(t('客户端名称', 'Client name'), 'name', client.name, 'required maxlength="64" autocomplete="off"')}
     ${input(t('流量上限（GB）', 'Traffic quota (GB)'), 'quotaGB', client.quotaGB, 'type="number" min="0" max="1000000" step="any" required', persistent ? t('0 表示不限；按上传加下载的累计流量计算。', '0 means unlimited; counts total upload plus download.') : t('0 表示不限；用量为演示数值。', '0 means unlimited; usage is demo data.'))}
-    ${input(t('IP 上限', 'IP limit'), 'ipLimit', client.ipLimit, 'type="number" min="0" max="10000" step="1" required', persistent ? t('0 表示不限；同时在线的 IP 超过上限时，保留先连上的，新来的 IP 在该入站端口封禁 10 分钟（需要服务器上的防火墙助手）。', '0 means unlimited; when more IPs are online at once than allowed, the first ones are kept and newcomers are banned on that inbound port for 10 minutes (needs the firewall helper on the server).') : t('0 表示不限；演示数据不执行。', '0 means unlimited; not enforced for demo data.'))}</div>
+    ${input(t('IP 上限', 'IP limit'), 'ipLimit', client.ipLimit, 'type="number" min="0" max="10000" step="1" required', persistent ? t('0 表示不限；同时在线的 IP 超过上限时，保留先连上的，新来的 IP 在全部关联入站端口封禁 10 分钟（需要服务器上的防火墙助手）。', '0 means unlimited; when more IPs are online at once than allowed, the first ones are kept and newcomers are banned on all linked inbound ports for 10 minutes (needs the firewall helper on the server).') : t('0 表示不限；演示数据不执行。', '0 means unlimited; not enforced for demo data.'))}</div>
     <div class="form-field expiry-field"><span id="expiry-label">${t('到期时间', 'Expiry')}</span><div id="expiry-picker" role="group" aria-labelledby="expiry-label"></div></div>
     ${check(persistent ? t('允许订阅（保存后在连接信息中生成订阅链接）', 'Allow subscription (generate the link in connection info after saving)') : t('开启订阅（仅保存演示选项，不生成订阅地址）', 'Enable subscription (demo option only; no link is generated)'), 'subscription', client.subscription)}
     ${persistent ? input(t('反向代理标签（可选，仅 VLESS）', 'Reverse tag (optional, VLESS only)'), 'reverseTag', client.reverseTag ?? '', 'maxlength="64" autocomplete="off" placeholder="r-home"', t('填写后，使用此客户端连接的桥接端（如家里运行 Xray 的设备）可建立反向隧道；在 Xray 设置 → 路由规则里把目标选为“反向代理 · 该标签”，匹配的流量就经桥接端访问其所在网络。', 'With a tag, a bridge using this client (such as a home device running Xray) can open a reverse tunnel; in Xray settings → Routing rules, choose "Reverse · this tag" as the target to send matching traffic through the bridge into its network.')) : ''}`;
@@ -299,10 +299,10 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
     const value = client ?? { name: randomName(), quotaGB: persistent ? 0 : 100, ipLimit: persistent ? 0 : 2, expiresAt: null, subscription: false };
     let date: { value: () => number | null };
     const form = openModal(client ? t('编辑客户端', 'Edit client') : t('添加客户端', 'Add client'), `<p class="form-intro">${persistent ? t('保存后立即生效。', 'Changes apply as soon as you save.') : t('仅修改本页演示数据，流量、到期和 IP 限制尚未由核心执行。', 'Changes only demo data on this page; traffic, expiry and IP limits are not enforced by the core.')}</p>
-      ${client ? `<div class="association">${t('关联入站：', 'Linked inbound: ')}${esc(state.inbounds.find(item => item.id === client.inboundId)!.name)}</div>` : `<label class="form-field">${t('关联入站', 'Linked inbound')}<select name="inboundId">${state.inbounds.map(item => `<option value="${esc(item.id)}"${item.id === inboundFilter ? ' selected' : ''}>${esc(item.name)}</option>`).join('')}</select></label>`}
+      <fieldset class="client-inbound-options"><legend>${t('关联入站（可多选）', 'Linked inbounds (select one or more)')}</legend>${state.inbounds.map(item => check(`${esc(item.name)} · ${presets[item.preset].label} / ${item.port}`, 'inboundIds', client ? clientInboundIds(client).includes(item.id) : item.id === (inboundFilter || state.inbounds[0].id)).replace('name="inboundIds"', `name="inboundIds" value="${esc(item.id)}"`)).join('')}<p class="form-hint">${t('所有关联节点共用启停、到期、总流量额度和 IP 上限。反向代理客户端仅可关联一个 VLESS 入站。', 'All linked nodes share enablement, expiry, lifetime quota and IP limit. Reverse proxy clients may link only one VLESS inbound.')}</p></fieldset>
       ${clientFields(value)}${client ? check(t('启用客户端', 'Enable client'), 'enabled', client.enabled) : ''}`, persistent ? t('保存', 'Save') : client ? t('保存演示更改', 'Save demo changes') : t('添加演示客户端', 'Add demo client'), form => {
       const data = new FormData(form), input = readClient(form, date.value());
-      state = client ? editClient(state, client.id, { ...input, enabled: data.has('enabled') }) : addClient(state, String(data.get('inboundId')), input, crypto.randomUUID());
+      state = client ? editClient(state, client.id, { ...input, enabled: data.has('enabled'), inboundIds: data.getAll('inboundIds').map(String) }) : addClient(state, data.getAll('inboundIds').map(String), input, crypto.randomUUID());
       if (!client) { search = ''; filter = 'all'; }
       announce(t('已保存演示客户端 · 未应用 Xray', 'Demo client saved · Xray not applied'));
     });
@@ -340,16 +340,20 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
       return t('剩余 ', 'Remaining ') + (days ? `${days}${t('天 ', 'd ')}` : '') + (hours ? `${hours}${t('小时 ', 'h ')}` : '') + `${mins}${t('分 ', 'm ')}${secs}${t('秒', 's')}`;
     };
     const durations = [[10, t('10 分钟', '10 minutes')], [30, t('30 分钟', '30 minutes')], [60, t('1 小时', '1 hour')], [1440, t('24 小时', '24 hours')], [10080, t('7 天', '7 days')], [0, t('永久，手动解封', 'Permanent, until manually unbanned')]] as const;
-    const inbound = state.inbounds.find(item => item.id === client.inboundId);
-    const endpoint = inbound ? `${inbound.port}/${inbound.preset === 'hy2' ? 'UDP' : 'TCP'}` : '';
-    const scope = t(`作用范围：该 IP → 入站 ${endpoint}。同一入站的其他客户端从这个 IP 连接也会受影响。`, `Scope: this IP → inbound ${endpoint}. Other clients sharing this inbound are also affected when connecting from this IP.`);
+    const endpoint = clientInbounds(state, client).filter(item => item.enabled).map(item => `${item.port}/${item.preset === 'hy2' ? 'UDP' : 'TCP'}`).join(', ');
+    const scope = t(`作用范围：该 IP → 全部关联端口 ${endpoint}。共享这些入站的其他客户端从这个 IP 连接也会受影响。`, `Scope: this IP → all linked ports ${endpoint}. Other clients sharing these inbounds are also affected when connecting from this IP.`);
     const clock = () => {
       if (!current()) return;
       modal.querySelectorAll<HTMLElement>('[data-ip-until]').forEach(item => { item.textContent = remaining(item.dataset.ipUntil!); });
     };
     const render = () => {
       const view = ipView?.clients[client.id] ?? { online: [], banned: [], exempt: [] };
-      const banned = [...new Map(view.banned.map(item => [item.ip, item])).values()];
+      const banned = [...new Set(view.banned.map(item => item.ip))].map(ip => {
+        const group = view.banned.filter(item => item.ip === ip);
+        const latest = group.reduce((a, b) => a.permanent || !b.permanent && Date.parse(a.until) >= Date.parse(b.until) ? a : b);
+        const ports = [...new Set(group.map(item => `${item.port ?? '—'}/${(item.protocol ?? 'tcp').toUpperCase()}`))].join(', ');
+        return { ...latest, ports };
+      });
       const bannedIPs = new Set(banned.map(item => item.ip));
       const online = view.online.filter(item => !bannedIPs.has(item.ip));
       const list = (items: string[], empty: string) => items.length ? `<ul class="ip-list">${items.join('')}</ul>` : `<p class="form-hint ip-empty">${empty}</p>`;
@@ -366,7 +370,7 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
         ${changedWorkspace ? `<p class="form-error">${t('客户端配置已变化，请关闭弹窗并重新读取列表后操作。', 'Client settings changed; close this dialog and reload the list before acting.')}</p>` : ''}
         ${ipView?.issue ? `<p class="form-error">${esc(ipView.issue)}</p>` : ipView && !ipView.enforced ? `<p class="form-error">${t('防火墙助手不可用，请更新安装后重试。', 'The firewall helper is unavailable; update the installation and retry.')}</p>` : ''}
         <h3>${t('在线', 'Online')} <small>${online.length}</small></h3>${list(online.map(item => row(item.ip, 'online', t('在线', 'Online'), `<span>${t('最近新连接 ', 'Last new connection ')}${time(item.lastSeen)}</span>`)), t('当前没有未封禁的在线 IP。', 'No unblocked IP is online.'))}
-        <h3>${t('已封禁', 'Banned')} <small>${banned.length}</small></h3>${list(banned.map(item => row(item.ip, item.permanent || Date.parse(item.until) > now() ? 'banned' : 'pending', item.permanent || Date.parse(item.until) > now() ? t('已封禁', 'Banned') : t('待解封', 'Unban pending'), `<span>${item.manual ? t('手动封禁', 'Manual ban') : t('超限自动封禁', 'Automatic limit ban')} · ${item.port ?? inbound?.port}/${(item.protocol ?? 'tcp').toUpperCase()}</span>${deadline(item, t('解封时间 ', 'Unban at '))}`)), t('没有被封禁的 IP。', 'No IP is banned.'))}
+        <h3>${t('已封禁', 'Banned')} <small>${banned.length}</small></h3>${list(banned.map(item => row(item.ip, item.permanent || Date.parse(item.until) > now() ? 'banned' : 'pending', item.permanent || Date.parse(item.until) > now() ? t('已封禁', 'Banned') : t('待解封', 'Unban pending'), `<span>${item.manual ? t('手动封禁', 'Manual ban') : t('超限自动封禁', 'Automatic limit ban')} · ${esc(item.ports)}</span>${deadline(item, t('解封时间 ', 'Unban at '))}`)), t('没有被封禁的 IP。', 'No IP is banned.'))}
         ${selected ? `<section id="ip-action-panel" class="ip-action-panel" aria-label="${t('IP 操作', 'IP actions')}"><div class="ip-action-heading"><strong><code>${esc(selected)}</code></strong></div><p class="form-hint">${esc(scope)}</p><label class="form-field">${t('封禁时长（从确认时开始）', 'Ban duration (from confirmation)')}<select data-ip-duration ${disabled ? 'disabled' : ''}>${durations.map(([value, label]) => `<option value="${value}" ${String(value) === minutes ? 'selected' : ''}>${label}</option>`).join('')}</select></label><div class="ip-action-buttons"><button type="button" class="secondary-button" data-ip-cancel ${busy ? 'disabled' : ''}>${t('取消选择', 'Cancel selection')}</button><button type="button" class="danger-button" data-ip-ban ${disabled ? 'disabled' : ''}>${selectedBan ? t('更新封禁时长', 'Update ban duration') : t('确认封禁', 'Confirm ban')}</button>${selectedBan ? `<button type="button" class="primary-button" data-ip-unban ${disabled ? 'disabled' : ''}>${t('确认解封', 'Confirm unban')}</button>` : ''}</div>${selectedBan ? `<p class="form-hint">${t('手动解封会取消封禁，恢复正常状态；仍超过 IP 上限时会再次自动封禁。', 'Manual unban removes the ban and restores normal status; exceeding the IP limit may trigger another automatic ban.')}</p>` : ''}</section>` : ''}
         <p class="${failed ? 'form-error' : 'form-hint'}" role="status">${esc(message)}</p></div><footer><button type="button" class="secondary-button" data-ip-refresh ${busy ? 'disabled' : ''}>${t('刷新状态', 'Refresh status')}</button><button type="button" class="secondary-button" data-close>${t('关闭', 'Close')}</button><button type="button" class="primary-button" data-ip-save ${busy || !ready || changedWorkspace ? 'disabled' : ''}>${t('保存上限', 'Save limit')}</button></footer></form>`;
       modal.querySelector('form')!.addEventListener('submit', event => { event.preventDefault(); void saveLimit(); });
@@ -465,6 +469,14 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
   function confirm(title: string, text: string, label: string, apply: () => void): void {
     openModal(persistent ? title.replaceAll(t('演示', 'demo '), '') : title, `<p class="confirm-copy">${esc(persistent ? text.replaceAll(t('演示', 'demo '), '') : text)}</p><p class="form-hint">${persistent ? t('确认后立即保存并生效。', 'Saved and applied right after you confirm.') : t('仅影响当前内存中的演示数据，刷新恢复。不会操作 VPS。', 'Affects only in-memory demo data; refreshing restores it.')}</p>`, label, () => { apply(); announce(t('演示数据已更改 · 未应用 Xray', 'Demo data changed · Xray not applied')); });
   }
+  function confirmDeleteInbounds(ids: string[], title: string): void {
+    const next = deleteRecords(state, ids);
+    const removed = state.clients.filter(item => !next.clients.some(after => after.id === item.id));
+    const kept = state.clients.filter(item => clientInboundIds(item).some(id => ids.includes(id)) && next.clients.some(after => after.id === item.id));
+    const names = state.inbounds.filter(item => ids.includes(item.id)).map(item => item.name).join(t('、', ', '));
+    const detail = `${t('删除入站：', 'Delete inbounds: ')}${names}${t('。', '. ')}${removed.length ? `${t('同时删除无其他关联的客户端：', 'Also delete clients with no other association: ')}${removed.map(item => item.name).join(t('、', ', '))}${t('。其连接与订阅失效。', '. Their connections and subscriptions stop working. ')}` : ''}${kept.length ? `${t('保留仍有其他关联的客户端：', 'Keep clients with other associations: ')}${kept.map(item => item.name).join(t('、', ', '))}${t('。', '.')}` : ''}`;
+    confirm(title, detail, t('确认删除', 'Confirm delete'), () => { state = next; selected.clear(); });
+  }
   function confirmDeleteClients(ids: string[], title: string): void {
     const names = state.clients.filter(item => ids.includes(item.id)).map(item => item.name);
     if (!names.length) return;
@@ -485,15 +497,14 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
     if (action === 'edit-inbound' && inbound) inboundEditor(inbound);
     if (action === 'edit-client' && client) clientEditor(client);
     if (action === 'clients' && inbound) { inboundFilter = id; search = ''; filter = 'all'; navigate('clients'); }
-    if (action === 'toggle-inbound' && inbound) confirm(inbound.enabled ? t('停用演示入站', 'Disable demo inbound') : t('启用演示入站', 'Enable demo inbound'), `${t('入站：', 'Inbound: ')}${inbound.name}${t('。', '. ')}${inbound.enabled ? `${t('停用后，其', 'After disabling, its')} ${state.clients.filter(item => item.inboundId === id).length} ${t('个关联客户端会显示“入站已停用”。', 'linked clients will show “Inbound disabled”.')}` : t('启用后仍按客户端各自的启用、到期和流量条件显示演示状态。', 'After enabling, each client\'s demo status still follows its own enablement, expiry and traffic.')}`, inbound.enabled ? t('确认停用', 'Confirm disable') : t('确认启用', 'Confirm enable'), () => {
+    if (action === 'toggle-inbound' && inbound) confirm(inbound.enabled ? t('停用演示入站', 'Disable demo inbound') : t('启用演示入站', 'Enable demo inbound'), `${t('入站：', 'Inbound: ')}${inbound.name}${t('。', '. ')}${inbound.enabled ? `${t('停用后，其', 'After disabling, its')} ${state.clients.filter(item => clientInboundIds(item).includes(id)).length} ${t('个客户端的此节点不可用，其他关联节点仍按各自状态运行。', 'clients lose this node; their other linked nodes follow their own states.')}` : t('启用后仍按客户端各自的启用、到期和流量条件显示演示状态。', 'After enabling, each client\'s demo status still follows its own enablement, expiry and traffic.')}`, inbound.enabled ? t('确认停用', 'Confirm disable') : t('确认启用', 'Confirm enable'), () => {
       state = editInbound(state, id, { ...inbound, enabled: !inbound.enabled });
     });
     if (action === 'toggle-client' && client) confirm(client.enabled ? t('停用演示客户端', 'Disable demo client') : t('启用演示客户端', 'Enable demo client'), `${t('客户端：', 'Client: ')}${client.name}${t('。只切换手动启用状态，不会重置用量、到期时间或流量上限。', '. Only the manual enable state changes; usage, expiry and quota are not reset.')}`, client.enabled ? t('确认停用', 'Confirm disable') : t('确认启用', 'Confirm enable'), () => {
       state = editClient(state, id, { ...client, enabled: !client.enabled });
     });
     if (action === 'delete-inbound' && inbound) {
-      const linked = state.clients.filter(item => item.inboundId === id).length;
-      confirm(t('删除一个演示入站', 'Delete a demo inbound'), `${t('删除“', 'Deletes “')}${inbound.name}${t('”', '”')}${linked ? `${t('及其 ', ' and its ')}${linked}${t(' 个客户端，客户端的连接与订阅随之失效。', ' clients; their connections and subscriptions stop working.')}` : t('。', '.')}`, t('确认删除', 'Confirm delete'), () => { state = deleteRecords(state, [id]); });
+      confirmDeleteInbounds([id], t('删除入站', 'Delete inbound'));
     }
     if (action === 'delete-client' && client) confirmDeleteClients([id], t('删除一个演示客户端', 'Delete a demo client'));
   }
@@ -525,17 +536,17 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
   }
   const ipCell = (item: Client) => {
     if (!persistent) return item.ipLimit ? `${item.ipLimit} ${t('个 IP', 'IPs')}` : t('IP 不限', 'Unlimited IPs');
-    const view = ipView?.clients[item.id], online = view?.online.length ?? 0, banned = view?.banned.length ?? 0;
+    const view = ipView?.clients[item.id], online = view?.online.length ?? 0, banned = new Set(view?.banned.map(item => item.ip) ?? []).size;
     return `<button class="text-button" data-op="iplimit" data-id="${esc(item.id)}">${online} / ${item.ipLimit || '∞'} ${t('在线 IP', 'online IPs')}</button>${banned ? `<small class="table-secondary danger-text">${t('已封禁 ', 'Banned ')}${banned}</small>` : ''}`;
   };
   const rowActions = (item: Client | Inbound, type: 'inbound' | 'client') => `<div class="row-actions">${type === 'client' && persistent ? `<button class="icon-button" data-op="connection" data-id="${esc(item.id)}" aria-label="${t('连接信息', 'Connection info')} ${esc(item.name)}" title="${t('连接信息', 'Connection info')}" ${loading || reloadRequired ? 'disabled' : ''}>${icon('qr-code')}</button>` : ''}<button class="icon-button" data-op="edit-${type}" data-id="${esc(item.id)}" aria-label="${type === 'inbound' ? t('编辑入站', 'Edit inbound') : t('编辑客户端', 'Edit client')} ${esc(item.name)}" title="${t('编辑', 'Edit')}" ${loading || reloadRequired ? 'disabled' : ''}>${icon('pencil')}</button>${type === 'inbound' ? `<button class="icon-button" data-op="toggle-${type}" data-id="${esc(item.id)}" aria-label="${item.enabled ? t('停用', 'Disable') : t('启用', 'Enable')} ${esc(item.name)}" title="${item.enabled ? t('停用', 'Disable') : t('启用', 'Enable')}" ${loading || reloadRequired ? 'disabled' : ''}>${icon('power')}</button>` : ''}<button class="icon-button danger-icon" data-op="delete-${type}" data-id="${esc(item.id)}" aria-label="${type === 'inbound' ? t('删除入站', 'Delete inbound') : t('删除客户端', 'Delete client')} ${esc(item.name)}" title="${t('删除', 'Delete')}" ${loading || reloadRequired ? 'disabled' : ''}>${icon('trash-2')}</button></div>`;
   // OUI的在线判定：启用且最近2分钟内有流量；核心未采集时一律离线。
   const isOnline = (item: Client) => {
     const at = traffic?.lastOnline?.[item.id];
-    return clientStatus(viewClient(item), state.inbounds.find(inbound => inbound.id === item.inboundId)) === t('可用', 'Available') && persistent && !!at && !!traffic?.collecting && !trafficError && !!traffic.sampledAt && Date.now() - Date.parse(traffic.sampledAt) <= 10_000 && Date.now() - Date.parse(at) <= onlineWindowMs;
+    return clientStatus(viewClient(item), clientInbounds(state, item)) === t('可用', 'Available') && persistent && !!at && !!traffic?.collecting && !trafficError && !!traffic.sampledAt && Date.now() - Date.parse(traffic.sampledAt) <= 10_000 && Date.now() - Date.parse(at) <= onlineWindowMs;
   };
   const trafficCell = (item: Client) => {
-    const trafficPeriod = inboundTrafficPeriod(state.inbounds.find(inbound => inbound.id === item.inboundId));
+    const trafficPeriod = clientInboundIds(item).length === 1 ? inboundTrafficPeriod(clientInbounds(state, item)[0]) : 'total';
     const bytes = persistent ? usedBytes(traffic, item.id, trafficPeriod) : BigInt(Math.round(item.usedGB * 1e9));
     const percent = item.quotaGB > 0 ? Math.min(100, viewClient(item).usedGB / item.quotaGB * 100) : 0;
     const quota = `${formatBytes(persistent ? usedBytes(traffic, item.id) : bytes)} / ${item.quotaGB ? formatBytes(item.quotaGB * 1e9) : t('不限', 'Unlimited')}`;
@@ -550,13 +561,10 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
   };
   const inboundTraffic = (id: string) => {
     const trafficPeriod = inboundTrafficPeriod(state.inbounds.find(inbound => inbound.id === id));
-    let total = 0n;
-    for (const client of state.clients.filter(item => item.inboundId === id)) {
-      const bytes = persistent ? usedBytes(traffic, client.id, trafficPeriod) : BigInt(Math.round(client.usedGB * 1e9));
-      if (bytes === null) return t('未采集', 'Not collected');
-      total += bytes;
-    }
-    return `<span title="${esc(trafficPeriodHint(traffic, trafficPeriod))}">${formatBytes(total)}</span><small class="table-secondary">${trafficPeriodLabel(trafficPeriod)}</small>`;
+    const snapshot = traffic?.inbounds ? { ...traffic, ...traffic.inbounds } : null;
+    const bytes = persistent ? usedBytes(snapshot, id, trafficPeriod) : null;
+    const hint = `${trafficPeriodHint(snapshot, trafficPeriod)} ${t('入站独立统计从升级后首个采样起算，含协议开销；历史账户累计保留在客户端。', 'Independent inbound statistics start at the first sample after upgrading and include protocol overhead; historical account totals remain with each client.')}`;
+    return `<span title="${esc(hint)}">${formatBytes(bytes)}</span><small class="table-secondary">${trafficPeriodLabel(trafficPeriod)}</small>`;
   };
   const selectCell = (item: Client | Inbound) => `<td class="select-cell"><div class="record-controls"><button type="button" class="icon-button row-drag-handle" data-reorder="${esc(item.id)}" title="${t('拖动排序；聚焦后按上下方向键调整', 'Drag to reorder; use arrow keys when focused')}" aria-label="${t('调整顺序', 'Reorder')} ${esc(item.name)}" ${!orderReady[page] || orderSaving || loading || submitting || reloadRequired ? 'disabled' : ''}>${icon('grip-vertical')}</button><input type="checkbox" data-select="${esc(item.id)}" ${selected.has(item.id) ? 'checked' : ''} aria-label="${t('选择', 'Select')} ${esc(item.name)}"></div></td>`;
   function updateSelection(): void {
@@ -568,8 +576,7 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
   function deleteSelected(): void {
     const ids = [...selected];
     if (page === 'inbounds') {
-      const names = state.inbounds.filter(item => selected.has(item.id)).map(item => item.name), linked = state.clients.filter(item => selected.has(item.inboundId)).length;
-      confirm(t('删除所选入站', 'Delete selected inbounds'), `${t('将删除 ', 'Deletes ')}${names.length}${t(' 个入站', ' inbounds')}${linked ? `${t('及其 ', ' and their ')}${linked}${t(' 个客户端', ' clients')}` : ''}${t('：', ': ')}${names.join(t('、', ', '))}${t('。', '.')}`, t('确认删除', 'Confirm delete'), () => { state = deleteRecords(state, ids); selected.clear(); });
+      confirmDeleteInbounds(ids, t('删除所选入站', 'Delete selected inbounds'));
     } else {
       confirmDeleteClients(ids, t('删除所选客户端', 'Delete selected clients'));
     }
@@ -581,8 +588,8 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
     const inboundRows = orderedRecords(state.inbounds, orders.inbounds.data).filter(item => contains(`${item.name} ${presets[item.preset].label} ${item.port}`) && (filter === 'all' || item.enabled === (filter === 'enabled')));
     const now = Date.now();
     const clientRows = orderedRecords(state.clients, orders.clients.data).filter(item => {
-      const inbound = state.inbounds.find(record => record.id === item.inboundId);
-      return contains(`${item.name} ${inbound?.name ?? ''}`) && (!inboundFilter || item.inboundId === inboundFilter) && (filter === 'all' || (filter === 'available' ? clientStatus(viewClient(item), inbound, now) === t('可用', 'Available') : clientStatus(viewClient(item), inbound, now) !== t('可用', 'Available')));
+      const inbound = clientInbounds(state, item);
+      return contains(`${item.name} ${inbound.map(item => item.name).join(' ')}`) && (!inboundFilter || clientInboundIds(item).includes(inboundFilter)) && (filter === 'all' || (filter === 'available' ? clientStatus(viewClient(item), inbound, now) === t('可用', 'Available') : clientStatus(viewClient(item), inbound, now) !== t('可用', 'Available')));
     });
     const visible = new Set((page === 'inbounds' ? inboundRows : clientRows).map(item => item.id));
     for (const id of [...selected]) if (!visible.has(id)) selected.delete(id);
@@ -594,10 +601,11 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
       <td data-label="${t('入站名称', 'Inbound name')}"><strong class="record-name">${esc(item.name)}</strong><small class="table-secondary">${presets[item.preset].protocol} · ${presets[item.preset].security}</small></td>
       <td data-label="${t('类型 / 端口', 'Type / port')}"><span class="tag preset-${item.preset}">${presets[item.preset].label}</span><small class="table-secondary">${presets[item.preset].transport} / ${item.port}${item.portHopping ? ` · ${t('跳跃', 'hop')} ${item.portHopping}` : ''}</small></td>
       <td data-label="${t('状态', 'Status')}">${badge(item.enabled ? t('已启用', 'Enabled') : t('已停用', 'Disabled'), item.enabled)}${persistent ? `<div data-inbound-firewall="${esc(item.id)}">${firewallCell(item)}</div>` : ''}</td>
-      <td data-label="${t('客户端', 'Clients')}"><button class="text-button" data-op="clients" data-id="${esc(item.id)}">${state.clients.filter(client => client.inboundId === item.id).length} ${t('个客户端', 'clients')}</button></td>
+      <td data-label="${t('客户端', 'Clients')}"><button class="text-button" data-op="clients" data-id="${esc(item.id)}">${state.clients.filter(client => clientInboundIds(client).includes(item.id)).length} ${t('个客户端', 'clients')}</button></td>
       <td data-label="${t('总流量', 'Total traffic')}" data-inbound-traffic="${esc(item.id)}">${inboundTraffic(item.id)}</td><td data-label="${t('操作', 'Actions')}">${rowActions(item, 'inbound')}</td></tr>`).join('') : clientRows.map(item => {
-        const inbound = state.inbounds.find(record => record.id === item.inboundId)!;
-        return `<tr data-client-row="${esc(item.id)}">${selectCell(item)}<td data-label="${t('客户端 / 入站', 'Client / inbound')}"><div class="client-identity"><label class="switch" title="${item.enabled ? t('停用', 'Disable') : t('启用', 'Enable')}"><input type="checkbox" data-toggle-client="${esc(item.id)}" ${item.enabled ? 'checked' : ''} ${loading || submitting || reloadRequired ? 'disabled' : ''} aria-label="${t('启用客户端', 'Enable client')} ${esc(item.name)}"><span aria-hidden="true"></span></label><div class="client-identity-text"><strong class="record-name">${esc(item.name)}</strong><small class="table-secondary" title="${esc(inbound.name)}">${esc(inbound.name)}</small></div></div></td>
+        const inbound = clientInbounds(state, item).map(item => item.name).join(t('、', ', '));
+        const linkedLabel = clientInboundIds(item).length > 1 ? `${clientInboundIds(item).length} ${t('个入站', 'inbounds')} · ${inbound}` : inbound;
+        return `<tr data-client-row="${esc(item.id)}">${selectCell(item)}<td data-label="${t('客户端 / 入站', 'Client / inbound')}"><div class="client-identity"><label class="switch" title="${item.enabled ? t('停用', 'Disable') : t('启用', 'Enable')}"><input type="checkbox" data-toggle-client="${esc(item.id)}" ${item.enabled ? 'checked' : ''} ${loading || submitting || reloadRequired ? 'disabled' : ''} aria-label="${t('启用客户端', 'Enable client')} ${esc(item.name)}"><span aria-hidden="true"></span></label><div class="client-identity-text"><strong class="record-name">${esc(item.name)}</strong><small class="table-secondary" title="${esc(inbound)}">${esc(linkedLabel)}</small></div></div></td>
           <td data-label="${t('流量', 'Traffic')}" data-client-traffic>${trafficCell(item)}</td>
           <td data-label="${t('到期', 'Expiry')}">${item.expiresAt === null ? `<span class="date-value">${t('永不过期', 'Never expires')}</span>` : `<span class="date-value">${expiryLeft(item.expiresAt, now)}</span><small class="table-secondary">${chineseDate(item.expiresAt)}</small>`}</td>
           <td data-label="${t('最近上线', 'Last online')}" data-client-last>${lastOnlineCell(item)}</td>
@@ -657,7 +665,7 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
     void saveOrder(page, ids, button.dataset.reorder!);
   });
   function renderList(): void {
-    const available = state.clients.filter(item => clientStatus(viewClient(item), state.inbounds.find(record => record.id === item.inboundId)) === t('可用', 'Available')).length;
+    const available = state.clients.filter(item => clientStatus(viewClient(item), clientInbounds(state, item)) === t('可用', 'Available')).length;
     root.innerHTML = `<header class="page-heading"><div><h1 class="page-title" tabindex="-1">${page === 'inbounds' ? t('入站列表', 'Inbounds') : t('客户端', 'Clients')}</h1><p>${page === 'inbounds' ? t('创建和管理入站，保存后立即生效。', 'Create and manage inbounds; changes apply as soon as you save.') : persistent ? t('管理客户端，查看累计流量与到期时间。', 'Manage clients and view traffic totals and expiry.') : t('管理客户端演示数据与到期时间。', 'Manage demo client data and expiry.')}</p></div>${page === 'inbounds' && persistent ? `<div class="create-actions"><button class="primary-button create-button" data-create ${!loaded || loading || reloadRequired ? 'disabled' : ''}>${icon('plus')}${t('添加入站', 'Add inbound')}</button><div class="quick-create"><button class="secondary-button" data-quick-toggle aria-haspopup="menu" aria-expanded="false" ${!loaded || loading || submitting || reloadRequired ? 'disabled' : ''}>${icon('zap')}${t('一键创建', 'Quick create')}</button><div class="quick-menu" role="menu" hidden>${(Object.keys(quickLabels) as Preset[]).map(key => `<button type="button" role="menuitem" data-quick-preset="${key}">${quickLabels[key]}</button>`).join('')}</div></div></div>` : `<button class="primary-button create-button" data-create ${!loaded || loading || reloadRequired ? 'disabled' : ''}>${icon('plus')}${page === 'inbounds' ? t('一键创建', 'Quick create') : t('添加客户端', 'Add client')}</button>`}</header>
       ${loading ? t('<p class="core-message" role="status">正在读取独立数据库…</p>', '<p class="core-message" role="status">Reading the database…</p>') : loadError ? `<p class="form-error" role="alert">${esc(loadError)}</p>` : ''}
       <p class="form-error" role="alert" id="firewall-read-error" ${firewallError ? '' : 'hidden'}>${esc(firewallError)}</p>

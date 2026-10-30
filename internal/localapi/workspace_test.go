@@ -129,3 +129,30 @@ func TestReverseTagDraftValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestMultiInboundWorkspaceValidation(t *testing.T) {
+	var draft workspaceDraft
+	_ = json.Unmarshal(validWorkspace(), &draft)
+	other := draft.Inbounds[0]
+	other.ID = "second"
+	other.Port++
+	draft.Inbounds = append(draft.Inbounds, other)
+	for _, ids := range [][]string{nil, {"in-one", "second"}, {}, {"second"}, {"in-one", "in-one"}, {"in-one", "missing"}} {
+		draft.Clients[0].InboundIDs = ids
+		data, _ := json.Marshal(draft)
+		if ids != nil && len(ids) == 0 {
+			data = []byte(strings.Replace(string(data), `"inboundId":"in-one"`, `"inboundId":"in-one","inboundIds":[]`, 1))
+		}
+		valid := ids == nil || len(ids) == 2 && ids[1] == "second"
+		if (validateWorkspaceDraft(data, nil) == nil) != valid {
+			t.Fatalf("association validation: %v", ids)
+		}
+	}
+	draft.Clients[0].InboundIDs = []string{"in-one", "second"}
+	previous, _ := json.Marshal(draft)
+	draft.Clients[0].InboundIDs = nil
+	data, _ := json.Marshal(draft)
+	if validateWorkspaceDraft(data, previous) == nil {
+		t.Fatal("legacy writer silently dropped associations")
+	}
+}

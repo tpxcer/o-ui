@@ -9,9 +9,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"independent-panel/internal/i18n"
 	"math"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -300,22 +302,58 @@ func registerSubscriptions(mux *http.ServeMux, rt *Runtime) {
 			respond(w, 404, map[string]string{"error": i18n.T("订阅不存在或已失效", "Subscription does not exist or has expired")})
 			return
 		}
-		var body []byte
-		contentType, name := "text/plain; charset=utf-8", subscriptionNodeName(settings.RemarkClientName, workspace, client)
-		switch format {
-		case "clash":
-			proxy, err := config.ClashProxy(result.Outbound, name)
-			if err == nil {
-				contentType, body = "text/yaml; charset=utf-8", []byte(config.ClashConfig(proxy))
+		nodes := result.nodes()
+		names := map[string]bool{}
+		proxies := [][]config.YAMLField{}
+		configs := []map[string]any{}
+		links := []string{}
+		for _, node := range nodes {
+			linked := client
+			linked.InboundID = node.InboundID
+			name := subscriptionNodeName(settings.RemarkClientName, workspace, linked)
+			base := name
+			for n := 2; names[name] || name == "DIRECT" || name == "PROXY"; n++ {
+				name = fmt.Sprintf("%s #%d", base, n)
 			}
-		case "json":
-			if cfg, err := config.XrayClientConfig(result.Outbound, name, settings.jsonOptions()); err == nil {
-				if data, err := json.MarshalIndent(cfg, "", "  "); err == nil {
-					contentType, body = "application/json; charset=utf-8", data
+			names[name] = true
+			switch format {
+			case "clash":
+				proxy, err := config.ClashProxy(node.Outbound, name)
+				if err == nil {
+					proxies = append(proxies, proxy)
+				}
+			case "json":
+				cfg, err := config.XrayClientConfig(node.Outbound, name, settings.jsonOptions())
+				if err == nil {
+					configs = append(configs, cfg)
+				}
+			default:
+				parsed, err := url.Parse(node.Link)
+				if err == nil {
+					parsed.Fragment = name
+					links = append(links, parsed.String())
 				}
 			}
+		}
+		contentType, body := "text/plain; charset=utf-8", []byte(nil)
+		switch format {
+		case "clash":
+			if len(proxies) == len(nodes) {
+				contentType, body = "text/yaml; charset=utf-8", []byte(config.ClashConfig(proxies...))
+			}
+		case "json":
+			if len(configs) == len(nodes) {
+				var payload any = configs
+				if len(configs) == 1 {
+					payload = configs[0]
+				}
+				body, _ = json.MarshalIndent(payload, "", "  ")
+				contentType = "application/json; charset=utf-8"
+			}
 		default:
-			body = []byte(base64.StdEncoding.EncodeToString([]byte(subscriptionLinkName(result.Link, settings.RemarkClientName, workspace, client) + "\n")))
+			if len(links) == len(nodes) {
+				body = []byte(base64.StdEncoding.EncodeToString([]byte(strings.Join(links, "\n") + "\n")))
+			}
 		}
 		if len(body) == 0 {
 			respond(w, 503, map[string]string{"error": i18n.T("订阅暂不可用", "Subscription temporarily unavailable")})

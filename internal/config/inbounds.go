@@ -82,6 +82,7 @@ type Inbound struct {
 type Client struct {
 	ID         string
 	InboundID  string
+	InboundIDs []string
 	Enabled    bool
 	ExpiresAt  *time.Time
 	QuotaBytes uint64
@@ -90,6 +91,17 @@ type Client struct {
 	UUID       string
 	Auth       string
 	ReverseTag string
+}
+
+// LinkedInbounds兼容旧版单入站；显式空列表不会退回旧字段。
+func LinkedInbounds(primary string, ids []string) []string {
+	if ids != nil {
+		return ids
+	}
+	if primary == "" {
+		return nil
+	}
+	return []string{primary}
 }
 
 type User struct {
@@ -300,41 +312,56 @@ func CompileInbounds(inbounds []Inbound, clients []Client, now time.Time) ([]Com
 			return nil, i18n.New("客户端标识无效或重复", "Invalid or duplicate client ID")
 		}
 		seenClients[client.ID] = true
-		in, exists := byID[client.InboundID]
-		if !exists {
-			return nil, i18n.New("客户端关联了不存在的入站", "Client is linked to a missing inbound")
+		linked := LinkedInbounds(client.InboundID, client.InboundIDs)
+		if len(linked) == 0 || (client.InboundID != "" && client.InboundID != linked[0]) {
+			return nil, i18n.New("客户端关联入站无效", "Invalid client inbound association")
 		}
-		if !client.Enabled || !in.Enabled || (client.ExpiresAt != nil && !client.ExpiresAt.After(now)) || (client.QuotaBytes > 0 && client.UsedBytes >= client.QuotaBytes) {
-			continue
+		if client.ReverseTag != "" && len(linked) != 1 {
+			return nil, i18n.New("反向代理客户端只能关联一个入站", "Reverse proxy clients may link only one inbound")
 		}
-		user := User{Email: "client-" + client.ID}
-		if in.Preset == "hy2" {
-			if !ValidHY2Auth(client.Auth) {
-				return nil, i18n.New("HY2客户端需要16至256字节无空白/控制符的认证值", "HY2 clients need a 16–256 byte auth value without spaces or control characters")
+		seen := map[string]bool{}
+		for _, inboundID := range linked {
+			if seen[inboundID] {
+				return nil, i18n.New("客户端关联入站重复", "Duplicate client inbound association")
 			}
-			user.Auth = client.Auth
-		} else {
-			if !ValidUUID(client.UUID) {
-				return nil, i18n.New("VLESS客户端UUID格式无效", "Invalid VLESS client UUID")
+			seen[inboundID] = true
+			in, exists := byID[inboundID]
+			if !exists {
+				return nil, i18n.New("客户端关联了不存在的入站", "Client is linked to a missing inbound")
 			}
-			user.ID = strings.ToLower(client.UUID)
-			if in.Preset == "reality" && !in.NoVision {
-				user.Flow = "xtls-rprx-vision"
+			if !client.Enabled || !in.Enabled || (client.ExpiresAt != nil && !client.ExpiresAt.After(now)) || (client.QuotaBytes > 0 && client.UsedBytes >= client.QuotaBytes) {
+				continue
 			}
-		}
-		if client.ReverseTag != "" {
-			if in.Preset == "hy2" || !ReverseTagPattern.MatchString(client.ReverseTag) {
-				return nil, i18n.New("反向代理标签只用于VLESS入站，且只能含字母、数字、点、下划线和连字符", "Reverse tags apply only to VLESS inbounds and may contain only letters, digits, dots, underscores and hyphens")
+			user := User{Email: "client-" + client.ID}
+			if in.Preset == "hy2" {
+				if !ValidHY2Auth(client.Auth) {
+					return nil, i18n.New("HY2客户端需要16至256字节无空白/控制符的认证值", "HY2 clients need a 16–256 byte auth value without spaces or control characters")
+				}
+				user.Auth = client.Auth
+			} else {
+				if !ValidUUID(client.UUID) {
+					return nil, i18n.New("VLESS客户端UUID格式无效", "Invalid VLESS client UUID")
+				}
+				user.ID = strings.ToLower(client.UUID)
+				if in.Preset == "reality" && !in.NoVision {
+					user.Flow = "xtls-rprx-vision"
+				}
 			}
-			user.Reverse = &UserReverse{Tag: client.ReverseTag}
+			if client.ReverseTag != "" {
+				if in.Preset == "hy2" || !ReverseTagPattern.MatchString(client.ReverseTag) {
+					return nil, i18n.New("反向代理标签只用于VLESS入站，且只能含字母、数字、点、下划线和连字符", "Reverse tags apply only to VLESS inbounds and may contain only letters, digits, dots, underscores and hyphens")
+				}
+				user.Reverse = &UserReverse{Tag: client.ReverseTag}
+			}
+			identity := in.ID + ":" + user.ID + user.Auth
+			if seenCredentials[identity] {
+				return nil, i18n.New("同入站存在重复客户端认证值", "Duplicate client credentials in the same inbound")
+			}
+			seenCredentials[identity] = true
+			users[in.ID] = append(users[in.ID], user)
 		}
-		identity := in.ID + ":" + user.ID + user.Auth
-		if seenCredentials[identity] {
-			return nil, i18n.New("同入站存在重复客户端认证值", "Duplicate client credentials in the same inbound")
-		}
-		seenCredentials[identity] = true
-		users[in.ID] = append(users[in.ID], user)
 	}
+
 	result := []CompiledInbound{}
 	for _, in := range inbounds {
 		if !in.Enabled || len(users[in.ID]) == 0 {

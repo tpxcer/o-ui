@@ -293,6 +293,13 @@ func (rt *Runtime) telegramAction(ctx context.Context, s telegramSettings, chat,
 	for _, in := range draft.Inbounds {
 		inboundName[in.ID] = in.Name
 	}
+	linkedNames := func(client clientDraft) string {
+		names := []string{}
+		for _, id := range client.inboundIDs() {
+			names = append(names, inboundName[id])
+		}
+		return strings.Join(names, ", ")
+	}
 	switch action {
 	case "rk":
 		clients := append([]clientDraft{}, draft.Clients...)
@@ -320,7 +327,7 @@ func (rt *Runtime) telegramAction(ctx context.Context, s telegramSettings, chat,
 		lines := []string{say("🟢 <b>在线客户端</b>（最近 2 分钟有流量）", "🟢 <b>Online clients</b> (traffic in the last 2 minutes)")}
 		for _, client := range draft.Clients {
 			if traffic[client.ID].online {
-				lines = append(lines, fmt.Sprintf("👤 <b>%s</b> · 📍 %s", html.EscapeString(client.Name), html.EscapeString(inboundName[client.InboundID])))
+				lines = append(lines, fmt.Sprintf("👤 <b>%s</b> · 📍 %s", html.EscapeString(client.Name), html.EscapeString(linkedNames(client))))
 			}
 		}
 		if len(lines) == 1 {
@@ -350,15 +357,22 @@ func (rt *Runtime) telegramAction(ctx context.Context, s telegramSettings, chat,
 		}
 		reply(strings.Join(lines, "\n"), backButton(lang))
 	case "ib":
+		ledger, _, ledgerErr := rt.ledger(ctx)
+		if ledgerErr != nil {
+			failed(say("读取数据失败：", "Failed to read data: "), ledgerErr)
+			return
+		}
 		lines := []string{say("📋 <b>入站列表</b>（🟢 启用 · ⛔ 停用）", "📋 <b>Inbounds</b> (🟢 on · ⛔ off)")}
 		for _, in := range draft.Inbounds {
 			var total uint64
 			count := 0
 			for _, client := range draft.Clients {
-				if client.InboundID == in.ID {
-					total += traffic[client.ID].up + traffic[client.ID].down
+				if client.linkedTo(in.ID) {
 					count++
 				}
+			}
+			if ledger.Inbounds != nil {
+				total = ledger.Inbounds.Totals[in.ID].Total()
 			}
 			state := "🟢"
 			if !in.Enabled {
@@ -372,7 +386,11 @@ func (rt *Runtime) telegramAction(ctx context.Context, s telegramSettings, chat,
 			if in.PortHopping != "" {
 				port += say(" · 🔀 跳跃 ", " · 🔀 hopping ") + in.PortHopping
 			}
-			lines = append(lines, fmt.Sprintf(say("%s <b>%s</b>\n      🧩 %s · %s\n      👥 %d 个客户端 · 🚦 %s", "%s <b>%s</b>\n      🧩 %s · %s\n      👥 %d clients · 🚦 %s"), state, html.EscapeString(in.Name), presetLabel(in.Preset), port, count, humanBytes(total)))
+			usage := say("未采集", "Not collected")
+			if ledger.Inbounds != nil && ledger.Inbounds.SampledAt != nil {
+				usage = humanBytes(total)
+			}
+			lines = append(lines, fmt.Sprintf(say("%s <b>%s</b>\n      🧩 %s · %s\n      👥 %d 个客户端 · 🚦 %s", "%s <b>%s</b>\n      🧩 %s · %s\n      👥 %d clients · 🚦 %s"), state, html.EscapeString(in.Name), presetLabel(in.Preset), port, count, usage))
 		}
 		if len(draft.Inbounds) == 0 {
 			lines = append(lines, say("📭 还没有入站，可用“一键创建入站”", "📭 No inbounds yet; use Quick create inbound"))
@@ -417,7 +435,7 @@ func (rt *Runtime) telegramAction(ctx context.Context, s telegramSettings, chat,
 			reply(say("❌ 客户端不存在或已删除", "❌ The client does not exist or was deleted"), backButton(lang))
 			return
 		}
-		reply(clientDetail(client, inboundName[client.InboundID], traffic[client.ID], lang), clientButtons(client, lang))
+		reply(clientDetail(client, linkedNames(client), traffic[client.ID], lang), clientButtons(client, lang))
 	case "ct":
 		client, ok := findClient(draft, argument)
 		if !ok {

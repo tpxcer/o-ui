@@ -11,7 +11,7 @@ export type Connection = { certificateFile: string; keyFile: string; target: str
 export const defaultConnection = (): Connection => ({ certificateFile: '', keyFile: '', target: '', serverName: '', path: '/', mode: 'auto' });
 export type TrafficReset = 'never' | 'daily' | 'weekly' | 'monthly';
 export type Inbound = { id: string; name: string; preset: Preset; port: number; enabled: boolean; sniffing: Sniffing; connection?: Connection; listen?: string; shareHost?: string; portHopping?: string; trafficReset?: TrafficReset };
-export type Client = { id: string; inboundId: string; name: string; enabled: boolean; quotaGB: number; usedGB: number; expiresAt: number | null; ipLimit: number; subscription: boolean; reverseTag?: string };
+export type Client = { id: string; inboundId: string; inboundIds?: string[]; name: string; enabled: boolean; quotaGB: number; usedGB: number; expiresAt: number | null; ipLimit: number; subscription: boolean; reverseTag?: string };
 export type Workspace = { inbounds: Inbound[]; clients: Client[] };
 export type ClientInput = Pick<Client, 'name' | 'quotaGB' | 'expiresAt' | 'ipLimit' | 'subscription' | 'reverseTag'>;
 
@@ -36,11 +36,23 @@ export function validateClient(input: ClientInput): void {
   if (input.reverseTag?.trim() && !/^[A-Za-z0-9_.-]{1,64}$/.test(input.reverseTag.trim())) throw new Error(t('反向代理标签只能含字母、数字、点、下划线和连字符（最多64个）。', 'Reverse tags may contain only letters, digits, dots, underscores and hyphens (up to 64).'));
 }
 
+export function clientInboundIds(client: Pick<Client, 'inboundId' | 'inboundIds'>): string[] {
+  return client.inboundIds ?? [client.inboundId];
+}
+
+export function clientInbounds(state: Workspace, client: Client): Inbound[] {
+  return clientInboundIds(client).map(id => state.inbounds.find(item => item.id === id)).filter((item): item is Inbound => !!item);
+}
+
+function validateAssociations(state: Workspace, ids: string[]): void {
+  if (!ids.length || new Set(ids).size !== ids.length || ids.some(id => !state.inbounds.some(item => item.id === id))) throw new Error(t('请选择至少一个有效入站，不能重复。', 'Select at least one valid inbound without duplicates.'));
+}
+
 // 反向代理标签只用于VLESS入站，且全局唯一（核心按标签生成同名出站）。
-function validateReverse(state: Workspace, inboundId: string, input: ClientInput, exceptId?: string): Pick<Client, 'reverseTag'> {
+function validateReverse(state: Workspace, inboundIds: string[], input: ClientInput, exceptId?: string): Pick<Client, 'reverseTag'> {
   const tag = input.reverseTag?.trim() ?? '';
   if (!tag) return { reverseTag: undefined };
-  if (state.inbounds.find(item => item.id === inboundId)?.preset === 'hy2') throw new Error(t('HY2 入站不支持反向代理，请选择 VLESS 入站。', 'HY2 inbounds do not support reverse proxy; choose a VLESS inbound.'));
+  if (inboundIds.length !== 1 || state.inbounds.find(item => item.id === inboundIds[0])?.preset === 'hy2') throw new Error(t('反向代理客户端只能关联一个 VLESS 入站。', 'Reverse proxy clients may link only one VLESS inbound.'));
   if (state.clients.some(item => item.id !== exceptId && item.reverseTag === tag)) throw new Error(t('反向代理标签已被其他客户端使用。', 'This reverse tag is already used by another client.'));
   return { reverseTag: tag };
 }
@@ -75,29 +87,36 @@ export function editInbound(state: Workspace, id: string, input: Pick<Inbound, '
   return { ...state, inbounds: state.inbounds.map(record => record.id === id ? { ...record, ...input, name: input.name.trim(), sniffing: structuredClone(input.sniffing) } : record) };
 }
 
-export function editClient(state: Workspace, id: string, input: ClientInput & { enabled: boolean }): Workspace {
+export function editClient(state: Workspace, id: string, input: ClientInput & { enabled: boolean; inboundIds?: string[] }): Workspace {
   if (!state.clients.some(item => item.id === id)) throw new Error(t('客户端不存在，请刷新列表。', 'The client does not exist; refresh the list.'));
   validateClient(input);
   if (state.clients.some(item => item.id !== id && item.name === input.name.trim())) throw new Error(t('客户端名称已存在。', 'This client name already exists.'));
-  const reverse = validateReverse(state, state.clients.find(item => item.id === id)!.inboundId, input, id);
-  return { ...state, clients: state.clients.map(item => item.id === id ? { ...item, ...input, name: input.name.trim(), ...reverse } : item) };
+  const inboundIds = input.inboundIds ?? clientInboundIds(state.clients.find(item => item.id === id)!);
+  validateAssociations(state, inboundIds);
+  const reverse = validateReverse(state, inboundIds, input, id);
+  return { ...state, clients: state.clients.map(item => item.id === id ? { ...item, ...input, inboundId: inboundIds[0], inboundIds, name: input.name.trim(), ...reverse } : item) };
 }
 
-export function addClient(state: Workspace, inboundId: string, input: ClientInput, id: string): Workspace {
-  if (!state.inbounds.some(item => item.id === inboundId)) throw new Error(t('请选择有效的关联入站。', 'Choose a valid linked inbound.'));
+export function addClient(state: Workspace, linked: string | string[], input: ClientInput, id: string): Workspace {
+  const inboundIds = typeof linked === 'string' ? [linked] : linked;
+  validateAssociations(state, inboundIds);
   validateClient(input);
   if (state.clients.some(item => item.name === input.name.trim())) throw new Error(t('客户端名称已存在。', 'This client name already exists.'));
   if (!id || state.clients.some(item => item.id === id)) throw new Error(t('演示记录标识重复。', 'Duplicate demo record ID.'));
-  const reverse = validateReverse(state, inboundId, input);
-  return { ...state, clients: [...state.clients, { ...input, name: input.name.trim(), id, inboundId, enabled: true, usedGB: 0, ...reverse }] };
+  const reverse = validateReverse(state, inboundIds, input);
+  return { ...state, clients: [...state.clients, { ...input, name: input.name.trim(), id, inboundId: inboundIds[0], inboundIds, enabled: true, usedGB: 0, ...reverse }] };
 }
 
-// 删除入站时其客户端一并删除；删掉最后一个客户端时同步删除所属入站，不清理无关空入站。
+// 删除入站只解除关联；客户端没有其他关联时才删除。删客户端只清理本次影响的空入站。
 export function deleteRecords(state: Workspace, inboundIds: string[], clientIds: string[] = []): Workspace {
   const inbounds = new Set(inboundIds), clients = new Set(clientIds);
-  const affected = new Set(state.clients.filter(item => clients.has(item.id)).map(item => item.inboundId));
-  const remaining = state.clients.filter(item => !clients.has(item.id) && !inbounds.has(item.inboundId));
-  for (const client of remaining) affected.delete(client.inboundId);
+  const affected = new Set(state.clients.filter(item => clients.has(item.id)).flatMap(clientInboundIds));
+  const remaining = state.clients.filter(item => !clients.has(item.id)).flatMap(item => {
+    const linked = clientInboundIds(item).filter(id => !inbounds.has(id));
+    if (!linked.length) return [];
+    return [linked.length === clientInboundIds(item).length ? item : { ...item, inboundId: linked[0], inboundIds: linked }];
+  });
+  for (const client of remaining) for (const id of clientInboundIds(client)) affected.delete(id);
   for (const id of affected) inbounds.add(id);
   return { inbounds: state.inbounds.filter(item => !inbounds.has(item.id)), clients: remaining };
 }
@@ -118,9 +137,9 @@ export function quickInboundName(label: string, date: Date, names: string[]): st
 
 // 状态文字随界面语言变化，比较时须用同一t()对照。
 export type ClientStatus = string;
-export function clientStatus(client: Client, inbound: Inbound | undefined, now = Date.now()): ClientStatus {
+export function clientStatus(client: Client, inbound: Inbound | Inbound[] | undefined, now = Date.now()): ClientStatus {
   if (!client.enabled) return t('已停用', 'Disabled');
-  if (!inbound?.enabled) return t('入站已停用', 'Inbound disabled');
+  if (!(Array.isArray(inbound) ? inbound.some(item => item.enabled) : inbound?.enabled)) return t('入站已停用', 'Inbound disabled');
   if (client.expiresAt !== null && client.expiresAt <= now) return t('已到期', 'Expired');
   if (client.quotaGB > 0 && client.usedGB >= client.quotaGB) return t('流量已用尽', 'Quota used up');
   return t('可用', 'Available');

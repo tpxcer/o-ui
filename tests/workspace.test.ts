@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createQuick, defaultSniffing, deleteInbound, deleteRecords, quickInboundName, editClient, editInbound, addClient,
-  seedWorkspace, clientStatus, randomName, inboundName, presets, escapeHtml, calendarDays, chineseDate } from '../src/workspace.ts';
+  seedWorkspace, clientStatus, clientInboundIds, clientInbounds, randomName, inboundName, presets, escapeHtml, calendarDays, chineseDate } from '../src/workspace.ts';
 import type { Preset, Workspace } from '../src/workspace.ts';
 
 const now = new Date(2026, 9, 18, 12).getTime();
@@ -61,7 +61,7 @@ test('删除入站一并删除其客户端，可批量删除；新增需有入�
   assert.equal(cascaded.clients.length, state.clients.filter(item => item.inboundId !== 'demo-1').length);
   const bulk = deleteRecords(state, ['demo-1'], [state.clients.find(item => item.inboundId !== 'demo-1')!.id]);
   assert.equal(bulk.clients.length, cascaded.clients.length - 1);
-  assert.throws(() => addClient(state, 'missing', client, 'new'), /关联入站/);
+  assert.throws(() => addClient(state, 'missing', client, 'new'), /入站/);
   const result = addClient(state, 'demo-1', client, 'new');
   assert.equal(result.clients.length, 5);
   assert.equal(state.clients.length, 4);
@@ -133,7 +133,7 @@ test('反向代理标签只用于VLESS入站且唯一，留空时不写入', () 
   state = editClient(state, 'vless-client', { ...client, enabled: true, reverseTag: ' r-home ' });
   assert.equal(state.clients[0].reverseTag, 'r-home');
   assert.throws(() => addClient(state, 'vless', { ...client, name: 'other', reverseTag: 'r-home' }, 'dup'), /已被|already/);
-  assert.throws(() => editClient(state, 'hy-client', { ...client, name: 'hy2one', enabled: true, reverseTag: 'r-hy' }), /HY2/);
+  assert.throws(() => editClient(state, 'hy-client', { ...client, name: 'hy2one', enabled: true, reverseTag: 'r-hy' }), /VLESS/);
   assert.throws(() => editClient(state, 'vless-client', { ...client, enabled: true, reverseTag: 'r home' }), /反向|Reverse/);
   state = editClient(state, 'vless-client', { ...client, enabled: true, reverseTag: undefined });
   assert.equal('reverseTag' in JSON.parse(JSON.stringify(state.clients[0])), false);
@@ -161,4 +161,33 @@ test('流量自动单位：字节取整，去掉多余的0', async () => {
   assert.equal(formatBytes(10e6), '10 MB');
   assert.equal(formatBytes(1_500_000_000n), '1.5 GB');
   assert.equal(formatBytes(null), '未采集');
+});
+
+
+test('多入站新建、编辑保留身份和用量，任一入站启用即可用', () => {
+  const state = seedWorkspace(now), before = structuredClone(state);
+  const added = addClient(state, ['demo-1', 'demo-2'], { ...client, name: 'multi' }, 'multi');
+  assert.deepEqual(clientInboundIds(added.clients.at(-1)!), ['demo-1', 'demo-2']);
+  const edited = editClient(state, 'demo-1-client', { ...client, enabled: true, inboundIds: ['demo-1', 'demo-2'] });
+  assert.equal(edited.clients[0].usedGB, state.clients[0].usedGB);
+  assert.equal(edited.clients[0].id, state.clients[0].id);
+  assert.equal(clientStatus(edited.clients[0], [{ ...edited.inbounds[0], enabled: false }, edited.inbounds[1]], now), '可用');
+  assert.equal(clientInbounds(edited, edited.clients[0]).length, 2);
+  assert.throws(() => addClient(state, [], client, 'new'));
+  assert.throws(() => addClient(state, ['demo-1', 'demo-1'], client, 'new'));
+  assert.throws(() => editClient(state, state.clients[0].id, { ...client, enabled: true, inboundIds: ['missing'] }));
+  assert.deepEqual(state, before);
+});
+
+test('删除一个入站保留多关联账户，删除账户清理全部受影响的空入站', () => {
+  const seeded = seedWorkspace(now);
+  const state = { ...seeded, clients: [{ ...seeded.clients[0], inboundId: 'demo-1', inboundIds: ['demo-1', 'demo-2'] }] };
+  const removedInbound = deleteRecords(state, ['demo-1']);
+  assert.equal(removedInbound.clients.length, 1);
+  assert.deepEqual(clientInboundIds(removedInbound.clients[0]), ['demo-2']);
+  assert.equal(removedInbound.clients[0].inboundId, 'demo-2');
+  assert.equal(deleteRecords(state, ['demo-1', 'demo-2']).clients.length, 0);
+  const removedClient = deleteRecords(state, [], [state.clients[0].id]);
+  assert.deepEqual(removedClient.inbounds.map(item => item.id), ['demo-3', 'demo-4']);
+  assert.equal(state.inbounds.length, 4);
 });

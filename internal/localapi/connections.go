@@ -23,15 +23,24 @@ type connectionRequest struct {
 var errConnectionNotApplied = i18n.New("已保存的入站或设置尚未应用，请先预检并应用配置，再读取连接信息", "Saved inbounds or settings are not applied yet; run preflight and apply before reading connection info")
 
 type connectionResult struct {
-	Name              string         `json:"name"`
-	Preset            string         `json:"preset"`
-	Version           string         `json:"version"`
-	WorkspaceRevision int64          `json:"workspaceRevision"`
-	SettingsRevision  int64          `json:"settingsRevision"`
-	Link              string         `json:"link"`
-	Outbound          map[string]any `json:"outbound"`
+	InboundID         string             `json:"inboundId"`
+	Nodes             []connectionResult `json:"nodes,omitempty"`
+	Name              string             `json:"name"`
+	Preset            string             `json:"preset"`
+	Version           string             `json:"version"`
+	WorkspaceRevision int64              `json:"workspaceRevision"`
+	SettingsRevision  int64              `json:"settingsRevision"`
+	Link              string             `json:"link"`
+	Outbound          map[string]any     `json:"outbound"`
 	// 仅TLS预设：证书链能否被本机系统根信任；自签或私有CA为false，手机客户端默认会拒绝。
 	CertificateTrusted *bool `json:"certificateTrusted,omitempty"`
+}
+
+func (r connectionResult) nodes() []connectionResult {
+	if len(r.Nodes) > 0 {
+		return r.Nodes
+	}
+	return []connectionResult{r}
 }
 
 // publiclyTrusted用系统根（测试可传入roots）校验证书链与服务名，不改变导出链接的校验要求。
@@ -99,19 +108,22 @@ func (rt *Runtime) connection(ctx context.Context, request connectionRequest) (c
 	if err != nil || json.Unmarshal(data, &applied) != nil {
 		return result, i18n.New("无法读取已生效配置", "Cannot read the active configuration")
 	}
+	nodes := []connectionResult{}
 	for _, in := range applied.Inbounds {
-		if in.Tag != "in-"+client.InboundID {
+		inboundID := strings.TrimPrefix(in.Tag, "in-")
+		if !client.linkedTo(inboundID) {
 			continue
 		}
 		for _, user := range in.Settings.Clients {
 			if user.Email != "client-"+client.ID {
 				continue
 			}
+			result.CertificateTrusted = nil
 			serverName := ""
 			shareHost := ""
 			preset := ""
 			for _, entry := range draft.Inbounds {
-				if entry.ID == client.InboundID {
+				if entry.ID == inboundID {
 					shareHost = entry.ShareHost
 					preset = entry.Preset
 					in.PortHopping = entry.PortHopping
@@ -161,8 +173,13 @@ func (rt *Runtime) connection(ctx context.Context, request connectionRequest) (c
 			if err != nil {
 				return result, err
 			}
-			return connectionResult{Name: client.Name, Preset: preset, Version: c.Version, WorkspaceRevision: c.WorkspaceRevision, SettingsRevision: c.SettingsRevision, Link: link, Outbound: outbound, CertificateTrusted: result.CertificateTrusted}, nil
+			nodes = append(nodes, connectionResult{InboundID: inboundID, Name: client.Name, Preset: preset, Version: c.Version, WorkspaceRevision: c.WorkspaceRevision, SettingsRevision: c.SettingsRevision, Link: link, Outbound: outbound, CertificateTrusted: result.CertificateTrusted})
 		}
+	}
+	if len(nodes) > 0 {
+		result = nodes[0]
+		result.Nodes = nodes
+		return result, nil
 	}
 	return result, i18n.New("该客户端未在当前生效配置中启用，不提供连接凭据", "This client is not enabled in the active configuration; no credentials are provided")
 }

@@ -122,3 +122,15 @@ func TestMergeTracksLastOnline(t *testing.T) {
 		t.Fatal("idle sample must keep the previous time", second.LastOnline)
 	}
 }
+
+func TestInboundCountersSeparateFromAccountsAndOmittedZero(t *testing.T) {
+	data := []byte(`{"stat":[{"name":"user>>>client-a>>>traffic>>>uplink","value":"5"},{"name":"user>>>client-a>>>traffic>>>downlink","value":"8"},{"name":"inbound>>>in-one>>>traffic>>>uplink"},{"name":"inbound>>>in-one>>>traffic>>>downlink","value":"10"}]}`)
+	users, err := Parse(data)
+	if err != nil || len(users) != 1 || users["a"].Total() != 13 {
+		t.Fatal("account counters mixed", err)
+	}
+	nodes, err := ParseInbounds(data)
+	if err != nil || len(nodes) != 1 || nodes["one"].Total() != 10 {
+		t.Fatal("inbound counters or zero value", err)
+	}
+}

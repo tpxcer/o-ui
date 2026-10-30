@@ -18,6 +18,7 @@ export interface PeriodTraffic {
   totals: Record<string, { uplink: string; downlink: string }>;
 }
 export interface TrafficSnapshot {
+  inbounds?: Pick<TrafficSnapshot, 'totals' | 'periods' | 'sampledAt'> | null;
   totals: Record<string, { uplink: string; downlink: string }>;
   periods?: Partial<Record<Exclude<TrafficPeriod, 'total'>, PeriodTraffic>> | null;
   lastOnline?: Record<string, string> | null;

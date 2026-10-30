@@ -525,7 +525,7 @@ test('IP管理点击后再确认，携带显示时修订，失败禁重试并允
     modal.groups.set('[data-ip]', [button]); modal.querySelector('[data-ip-refresh]').fire(); await settle();
     assert.match(modal.innerHTML, /未设置 IP 上限，可点击/); assert.match(modal.innerHTML, /ip-online/);
     button.fire(); await settle(); assert.equal(writes, 0);
-    assert.match(modal.innerHTML, /同一入站的其他客户端/); assert.match(modal.innerHTML, /永久，手动解封/);
+    assert.match(modal.innerHTML, /共享这些入站的其他客户端/); assert.match(modal.innerHTML, /永久，手动解封/);
     const duration = modal.querySelector('[data-ip-duration]'); duration.value = '60'; duration.fire('change', { target: duration });
     modal.querySelector('[data-ip-ban]').fire(); await settle(); assert.equal(writes, 1);
     assert.match(modal.innerHTML, /IP状态已变化/); assert.match(modal.innerHTML, /请刷新状态后再操作/);

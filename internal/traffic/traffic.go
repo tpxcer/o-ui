@@ -24,8 +24,9 @@ func (c Count) Total() uint64 {
 }
 
 type Ledger struct {
-	Totals map[string]Count `json:"totals"`
-	Last   map[string]Count `json:"last"`
+	Inbounds *Ledger          `json:"inbounds,omitempty"`
+	Totals   map[string]Count `json:"totals"`
+	Last     map[string]Count `json:"last"`
 	// LastOnline记录各客户端最近一次有流量的时刻（参照OUI的“最近上线”与2分钟在线判定）。
 	LastOnline map[string]time.Time `json:"lastOnline,omitempty"`
 	Epoch      string               `json:"epoch"`
@@ -96,6 +97,7 @@ func Merge(old Ledger, epoch string, counts map[string]Count, now time.Time) (Le
 		return Ledger{}, i18n.New("流量账本或运行实例无效", "Invalid traffic ledger or run instance")
 	}
 	next := Empty()
+	next.Inbounds = old.Inbounds
 	next.Epoch = epoch
 	next.Active, next.Incomplete = true, old.Incomplete
 	sampled := now.UTC()
@@ -137,4 +139,30 @@ func Merge(old Ledger, epoch string, counts map[string]Count, now time.Time) (Le
 	}
 	next.Periods = mergePeriods(old, next, now)
 	return next, nil
+}
+
+// ParseInbounds读取核心入站计数，与账户累计分开，不能按关联关系重复分摊账户用量。
+func ParseInbounds(data []byte) (map[string]Count, error) {
+	var response struct {
+		Stat []struct {
+			Name  string          `json:"name"`
+			Value json.RawMessage `json:"value"`
+		} `json:"stat"`
+	}
+	if json.Unmarshal(data, &response) != nil {
+		return nil, i18n.New("统计响应格式无效", "Invalid statistics response format")
+	}
+	stats := []map[string]any{}
+	for _, stat := range response.Stat {
+		parts := strings.Split(stat.Name, ">>>")
+		if len(parts) == 4 && parts[0] == "inbound" && strings.HasPrefix(parts[1], "in-") && parts[2] == "traffic" {
+			item := map[string]any{"name": "user>>>client-" + strings.TrimPrefix(parts[1], "in-") + ">>>traffic>>>" + parts[3]}
+			if len(stat.Value) > 0 {
+				item["value"] = stat.Value
+			}
+			stats = append(stats, item)
+		}
+	}
+	converted, _ := json.Marshal(map[string]any{"stat": stats})
+	return Parse(converted)
 }

@@ -283,7 +283,7 @@ func buildInbounds(draft workspaceDraft, ids identities, used map[string]traffic
 	}
 	for _, c := range draft.Clients {
 		identity := ids.Clients[c.ID]
-		item := config.Client{ID: c.ID, InboundID: c.InboundID, Enabled: c.Enabled, QuotaBytes: quotaBytes(c.QuotaGB), UsedBytes: used[c.ID].Total(), IPLimit: uint32(c.IPLimit), UUID: identity.UUID, Auth: identity.Auth, ReverseTag: c.ReverseTag}
+		item := config.Client{ID: c.ID, InboundID: c.InboundID, InboundIDs: c.InboundIDs, Enabled: c.Enabled, QuotaBytes: quotaBytes(c.QuotaGB), UsedBytes: used[c.ID].Total(), IPLimit: uint32(c.IPLimit), UUID: identity.UUID, Auth: identity.Auth, ReverseTag: c.ReverseTag}
 		if c.ExpiresAt != nil {
 			date := time.UnixMilli(*c.ExpiresAt)
 			item.ExpiresAt = &date

@@ -351,3 +351,7 @@ dialog footer { padding: 12px 22px 18px; display: flex; justify-content: flex-en
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; scroll-behavior: auto !important; }
 }
+
+.client-inbound-options { min-width: 0; margin: 0 0 18px; padding: 14px; border: 1px solid var(--border); border-radius: 12px; }
+.client-inbound-options legend { padding: 0 5px; }
+.client-inbound-options .check-field { overflow-wrap: anywhere; }
