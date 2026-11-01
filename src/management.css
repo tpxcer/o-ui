@@ -66,6 +66,8 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent-bg); wi
 /* 流量和最近上线（含实时速度）加宽，让“累计 X / Y”和上下行速度各占一行；IP列放下英文“1 / 2 online IPs”即可。 */
 .clients-table th:nth-child(3), .clients-table th:nth-child(5) { width: 16%; }
 .clients-table th:nth-child(4) { width: auto; }
+/* 宽屏时到期列定宽，把空间让给“客户端 / 入站”，关联入站名不至于只剩两三个字。 */
+@media (min-width: 1281px) { .clients-table th:nth-child(4) { width: 10%; } }
 .clients-table th:nth-child(6) { width: 13%; }
 @media (min-width: 1101px) { .clients-table th:not(.select-cell), .clients-table td:not(.select-cell) { padding-left: 12px; padding-right: 12px; } }
 .clients-table th:last-child { width: 132px; }
@@ -75,6 +77,11 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent-bg); wi
 .client-identity-text { min-width: 0; overflow-wrap: anywhere; }
 /* 入站名过长时单行截断，悬停看全称，行高保持一致。 */
 .client-identity-text .table-secondary { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 关联入站显示为小标签：一个入站显示名称，多个显示“N 个入站”，圆点颜色对应各入站类型，悬停看全部。 */
+.data-table .client-identity-text .inbound-chips { display: flex; align-items: center; gap: 4px; min-width: 0; margin-top: 4px; text-align: left; }
+.inbound-chip { display: inline-flex; align-items: center; gap: 5px; min-width: 0; padding: 1px 8px; border: 1px solid var(--border); border-radius: 999px; background: var(--raised); color: var(--muted); font-size: 12px; line-height: 18px; }
+.inbound-chip > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.preset-dots { display: inline-flex; gap: 3px; flex: 0 0 auto; }
 .firewall-maintenance { margin-bottom: 16px; padding: 12px 16px; border: 1px solid color-mix(in srgb, var(--orange) 45%, var(--border)); border-radius: 8px; background: color-mix(in srgb, var(--orange) 6%, transparent); }
 .firewall-maintenance summary { cursor: pointer; font-size: 14px; font-weight: 600; }
 .firewall-maintenance p { color: var(--muted); font-size: 14px; line-height: 1.7; }
@@ -169,6 +176,27 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent-bg); wi
 .preset-options span { display: flex; align-items: center; min-height: 44px; width: 100%; padding: 8px 10px 8px 38px; border: 1px solid var(--border-strong); border-radius: var(--radius); font-size: 14px; font-weight: 500; cursor: pointer; transition: border-color .15s, background-color .15s; }
 .preset-options span:hover { background: var(--raised); }
 .preset-options input:checked + span { border-color: var(--blue); background: var(--active); color: var(--text); box-shadow: inset 0 0 0 1px var(--blue); }
+/* 客户端编辑：关联入站卡片，与入站类型选择同一套样式；入站多时限高约三行半、区域内滚动，露出半行提示可滚动。 */
+.inbound-picker { min-width: 0; margin: 0 0 18px; }
+.inbound-picker-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.inbound-picker-title { font-size: 14px; font-weight: 600; }
+.inbound-picker-count { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+.inbound-picker-tools { display: flex; gap: 2px; margin-left: auto; }
+.inbound-picker-tools .text-button { min-height: 28px; padding: 2px 8px; font-size: 13px; }
+.inbound-picker-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; max-height: 216px; overflow-y: auto; overscroll-behavior: contain; padding: 3px; margin: -3px; }
+.inbound-picker-search.search-box { max-width: none; margin-bottom: 10px; }
+.inbound-option { position: relative; display: flex; min-width: 0; }
+.inbound-option[hidden] { display: none; }
+.inbound-option input { position: absolute; top: 50%; left: 12px; margin: 0; transform: translateY(-50%); }
+.inbound-option-text { display: flex; flex-direction: column; justify-content: center; gap: 5px; width: 100%; min-width: 0; min-height: 58px; padding: 9px 12px 9px 38px; border: 1px solid var(--border-strong); border-radius: var(--radius); cursor: pointer; transition: border-color .15s, background-color .15s; }
+.inbound-option-text:hover { background: var(--raised); }
+.inbound-option input:checked + .inbound-option-text { border-color: var(--blue); background: var(--active); box-shadow: inset 0 0 0 1px var(--blue); }
+.inbound-option input:focus-visible + .inbound-option-text { outline: 2px solid var(--blue); outline-offset: 2px; }
+.inbound-option-text strong { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.inbound-option-text small { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.inbound-option-text .tag { margin: 0; padding: 0 6px; font-size: 11px; font-weight: 600; line-height: 18px; }
+.inbound-picker > .form-hint { margin-top: 10px; }
+@media (max-width: 560px) { .inbound-picker-grid { grid-template-columns: 1fr; } }
 .name-preview { display: grid; gap: 4px; border-radius: var(--radius); padding: 12px 14px; background: var(--raised); margin-bottom: 18px; overflow-wrap: anywhere; }
 .name-preview small { font-size: 13px; color: var(--muted); }
 .name-preview strong { font-size: 14px; font-weight: 600; }
@@ -217,6 +245,8 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent-bg); wi
   .data-table td.select-cell + td > :last-child { text-align: left; }
   .data-table td:first-child { display: block; border-bottom: 1px solid var(--border); padding-bottom: 13px; margin-bottom: 7px; }
   .data-table td:first-child::before { display: none; }
+  /* 勾选框浮在卡片右上角，不画首格分隔线，否则名称行变高时会露出一小段横线。 */
+  .data-table td.select-cell:first-child { border-bottom: 0; }
   .data-table td .table-secondary { flex-basis: 100%; text-align: right; margin-top: -3px; }
   .data-table td .speed-pair { justify-content: flex-end; margin-top: 4px; }
   .data-table td .mini-meter { flex-basis: 100%; }

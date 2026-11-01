@@ -352,6 +352,9 @@ dialog footer { padding: 12px 22px 18px; display: flex; justify-content: flex-en
   *, *::before, *::after { transition: none !important; scroll-behavior: auto !important; }
 }
 
-.client-inbound-options { min-width: 0; margin: 0 0 18px; padding: 14px; border: 1px solid var(--border); border-radius: 12px; }
-.client-inbound-options legend { padding: 0 5px; }
-.client-inbound-options .check-field { overflow-wrap: anywhere; }
+/* 入站类型小圆点：列表关联入站标签与连接信息标签页共用，颜色与类型标签一致。 */
+.preset-dot { display: inline-block; width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: var(--muted); }
+.preset-dot.preset-hy2 { background: var(--orange); }
+.preset-dot.preset-reality { background: var(--blue); }
+.preset-dot.preset-xhttp-tls { background: var(--purple); }
+.preset-dot.preset-xhttp-reality { background: var(--cyan); }

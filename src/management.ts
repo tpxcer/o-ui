@@ -299,7 +299,7 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
     const value = client ?? { name: randomName(), quotaGB: persistent ? 0 : 100, ipLimit: persistent ? 0 : 2, expiresAt: null, subscription: false };
     let date: { value: () => number | null };
     const form = openModal(client ? t('编辑客户端', 'Edit client') : t('添加客户端', 'Add client'), `<p class="form-intro">${persistent ? t('保存后立即生效。', 'Changes apply as soon as you save.') : t('仅修改本页演示数据，流量、到期和 IP 限制尚未由核心执行。', 'Changes only demo data on this page; traffic, expiry and IP limits are not enforced by the core.')}</p>
-      <fieldset class="client-inbound-options"><legend>${t('关联入站（可多选）', 'Linked inbounds (select one or more)')}</legend>${state.inbounds.map(item => check(`${esc(item.name)} · ${presets[item.preset].label} / ${item.port}`, 'inboundIds', client ? clientInboundIds(client).includes(item.id) : item.id === (inboundFilter || state.inbounds[0].id)).replace('name="inboundIds"', `name="inboundIds" value="${esc(item.id)}"`)).join('')}<p class="form-hint">${t('所有关联节点共用启停、到期、总流量额度和 IP 上限。反向代理客户端仅可关联一个 VLESS 入站。', 'All linked nodes share enablement, expiry, lifetime quota and IP limit. Reverse proxy clients may link only one VLESS inbound.')}</p></fieldset>
+      ${inboundPicker(client ? clientInboundIds(client) : [inboundFilter || state.inbounds[0].id])}
       ${clientFields(value)}${client ? check(t('启用客户端', 'Enable client'), 'enabled', client.enabled) : ''}`, persistent ? t('保存', 'Save') : client ? t('保存演示更改', 'Save demo changes') : t('添加演示客户端', 'Add demo client'), form => {
       const data = new FormData(form), input = readClient(form, date.value());
       state = client ? editClient(state, client.id, { ...input, enabled: data.has('enabled'), inboundIds: data.getAll('inboundIds').map(String) }) : addClient(state, data.getAll('inboundIds').map(String), input, crypto.randomUUID());
@@ -307,6 +307,29 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
       announce(t('已保存演示客户端 · 未应用 Xray', 'Demo client saved · Xray not applied'));
     });
     date = initCalendar(form.querySelector('#expiry-picker')!, value.expiresAt, refreshIcons);
+    const boxes = [...form.querySelectorAll<HTMLInputElement>('[name="inboundIds"]')], count = form.querySelector<HTMLElement>('[data-inbound-count]')!;
+    const counted = () => { count.textContent = `${t('已选', 'Selected')} ${boxes.filter(box => box.checked).length} / ${boxes.length}`; };
+    const visible = () => boxes.filter(box => !box.closest('label')!.hidden);
+    // 全选/清空只作用于当前筛选出的入站；被筛掉的已选项仍随表单保存。
+    const setAll = (checked: boolean) => () => { visible().forEach(box => { box.checked = checked; }); counted(); };
+    boxes.forEach(box => box.addEventListener('change', counted));
+    form.querySelector('[data-inbound-all]')?.addEventListener('click', setAll(true));
+    form.querySelector('[data-inbound-none]')?.addEventListener('click', setAll(false));
+    const filterInput = form.querySelector<HTMLInputElement>('[data-inbound-search]');
+    filterInput?.addEventListener('keydown', event => { if (event.key === 'Enter') event.preventDefault(); });
+    filterInput?.addEventListener('input', () => {
+      const words = filterInput.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+      boxes.forEach(box => { const label = box.closest('label')!; label.hidden = !words.every(word => label.dataset.search!.includes(word)); });
+      form.querySelector<HTMLElement>('[data-inbound-empty]')!.hidden = visible().length > 0;
+    });
+    counted();
+  }
+  // 关联入站做成可点选的卡片：名称、类型颜色与端口一目了然；多于一个入站时可全选或清空，多于6个时可筛选。
+  function inboundPicker(linked: string[]): string {
+    const tools = state.inbounds.length > 1 ? `<span class="inbound-picker-tools"><button type="button" class="text-button" data-inbound-all>${t('全选', 'All')}</button><button type="button" class="text-button" data-inbound-none>${t('清空', 'None')}</button></span>` : '';
+    const options = state.inbounds.map(item => `<label class="inbound-option" data-search="${esc(`${item.name} ${presets[item.preset].label} ${presets[item.preset].transport} ${item.port}`.toLowerCase())}"><input type="checkbox" name="inboundIds" value="${esc(item.id)}"${linked.includes(item.id) ? ' checked' : ''}><span class="inbound-option-text"><strong>${esc(item.name)}</strong><small><span class="tag preset-${item.preset}">${presets[item.preset].label}</span>${presets[item.preset].transport} / ${item.port}${item.enabled ? '' : ` · ${t('已停用', 'Disabled')}`}</small></span></label>`).join('');
+    const filter = state.inbounds.length > 6 ? `<label class="search-box inbound-picker-search">${icon('search')}<span class="sr-only">${t('筛选入站', 'Filter inbounds')}</span><input type="search" data-inbound-search placeholder="${t('筛选名称、类型或端口', 'Filter by name, type or port')}" autocomplete="off"></label>` : '';
+    return `<div class="inbound-picker" role="group" aria-labelledby="inbound-picker-label"><div class="inbound-picker-head"><span id="inbound-picker-label" class="inbound-picker-title">${t('关联入站', 'Linked inbounds')}</span><span class="inbound-picker-count" data-inbound-count aria-live="polite"></span>${tools}</div>${filter}<div class="inbound-picker-grid">${options}</div><p class="form-hint" data-inbound-empty hidden>${t('没有匹配的入站。', 'No matching inbound.')}</p><p class="form-hint">${t('可关联多个入站，共用启停、到期、总流量额度和 IP 上限。反向代理客户端仅可关联一个 VLESS 入站。', 'Link one or more inbounds; they share enablement, expiry, lifetime quota and IP limit. Reverse proxy clients may link only one VLESS inbound.')}</p></div>`;
   }
   function inboundEditor(inbound: Inbound): void {
     const form = openModal(t('编辑入站', 'Edit inbound'), `<p class="form-intro">${presets[inbound.preset].label} · ${presets[inbound.preset].protocol} · ${presets[inbound.preset].transport} · ${presets[inbound.preset].security}${t('，', ', ')}${persistent ? t('保存后立即生效', 'applies on save') : t('仅修改演示数据', 'demo data only')}${t('。', '. ')}</p>
@@ -492,7 +515,7 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
   }
   function operate(action: string, id: string): void {
     const inbound = state.inbounds.find(item => item.id === id), client = state.clients.find(item => item.id === id);
-    if (action === 'connection' && client) showConnection?.(client.id, client.name, revision);
+    if (action === 'connection' && client) showConnection?.(client.id, client.name, revision, clientInbounds(state, client));
     if (action === 'iplimit' && client) void ipDialog(client);
     if (action === 'edit-inbound' && inbound) inboundEditor(inbound);
     if (action === 'edit-client' && client) clientEditor(client);
@@ -603,9 +626,10 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
       <td data-label="${t('状态', 'Status')}">${badge(item.enabled ? t('已启用', 'Enabled') : t('已停用', 'Disabled'), item.enabled)}${persistent ? `<div data-inbound-firewall="${esc(item.id)}">${firewallCell(item)}</div>` : ''}</td>
       <td data-label="${t('客户端', 'Clients')}"><button class="text-button" data-op="clients" data-id="${esc(item.id)}">${state.clients.filter(client => clientInboundIds(client).includes(item.id)).length} ${t('个客户端', 'clients')}</button></td>
       <td data-label="${t('总流量', 'Total traffic')}" data-inbound-traffic="${esc(item.id)}">${inboundTraffic(item.id)}</td><td data-label="${t('操作', 'Actions')}">${rowActions(item, 'inbound')}</td></tr>`).join('') : clientRows.map(item => {
-        const inbound = clientInbounds(state, item).map(item => item.name).join(t('、', ', '));
-        const linkedLabel = clientInboundIds(item).length > 1 ? `${clientInboundIds(item).length} ${t('个入站', 'inbounds')} · ${inbound}` : inbound;
-        return `<tr data-client-row="${esc(item.id)}">${selectCell(item)}<td data-label="${t('客户端 / 入站', 'Client / inbound')}"><div class="client-identity"><label class="switch" title="${item.enabled ? t('停用', 'Disable') : t('启用', 'Enable')}"><input type="checkbox" data-toggle-client="${esc(item.id)}" ${item.enabled ? 'checked' : ''} ${loading || submitting || reloadRequired ? 'disabled' : ''} aria-label="${t('启用客户端', 'Enable client')} ${esc(item.name)}"><span aria-hidden="true"></span></label><div class="client-identity-text"><strong class="record-name">${esc(item.name)}</strong><small class="table-secondary" title="${esc(inbound)}">${esc(linkedLabel)}</small></div></div></td>
+        const linked = clientInbounds(state, item);
+        const inbound = linked.map(item => `${item.name} · ${presets[item.preset].label} / ${item.port}`).join('\n');
+        const chips = linked.length ? `<span class="table-secondary inbound-chips" title="${esc(inbound)}"><span class="inbound-chip" aria-hidden="true"><span class="preset-dots">${linked.slice(0, 4).map(item => `<i class="preset-dot preset-${item.preset}"></i>`).join('')}</span><span>${linked.length > 1 ? `${linked.length} ${t('个入站', 'inbounds')}` : esc(linked[0].name)}</span></span><span class="sr-only">${esc(linked.map(item => item.name).join(t('、', ', ')))}</span></span>` : '';
+        return `<tr data-client-row="${esc(item.id)}">${selectCell(item)}<td data-label="${t('客户端 / 入站', 'Client / inbound')}"><div class="client-identity"><label class="switch" title="${item.enabled ? t('停用', 'Disable') : t('启用', 'Enable')}"><input type="checkbox" data-toggle-client="${esc(item.id)}" ${item.enabled ? 'checked' : ''} ${loading || submitting || reloadRequired ? 'disabled' : ''} aria-label="${t('启用客户端', 'Enable client')} ${esc(item.name)}"><span aria-hidden="true"></span></label><div class="client-identity-text"><strong class="record-name">${esc(item.name)}</strong>${chips}</div></div></td>
           <td data-label="${t('流量', 'Traffic')}" data-client-traffic>${trafficCell(item)}</td>
           <td data-label="${t('到期', 'Expiry')}">${item.expiresAt === null ? `<span class="date-value">${t('永不过期', 'Never expires')}</span>` : `<span class="date-value">${expiryLeft(item.expiresAt, now)}</span><small class="table-secondary">${chineseDate(item.expiresAt)}</small>`}</td>
           <td data-label="${t('最近上线', 'Last online')}" data-client-last>${lastOnlineCell(item)}</td>

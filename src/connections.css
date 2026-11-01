@@ -10,6 +10,18 @@
 .connection-section > summary { padding: 13px 16px; cursor: pointer; font-size: 14px; font-weight: 600; }
 .connection-section[open] > summary { border-bottom: 1px solid var(--border); }
 .connection-section-body { padding: 16px; }
+.connection-section > summary .node-count { margin-left: 8px; color: var(--muted); font-size: 12px; font-weight: 500; }
+/* 多个关联入站：标签页自动换行排成网格，每次只显示一个二维码。 */
+.node-tabs { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; margin-bottom: 14px; }
+.node-tab { position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 0; min-height: 48px; padding: 7px 14px 7px 28px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: transparent; color: var(--muted); font-size: 12px; text-align: left; transition: border-color .15s, background-color .15s; }
+.node-tab .preset-dot { position: absolute; top: 15px; left: 12px; }
+.node-tab-name, .node-tab small { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.node-tab-name { color: var(--text); font-size: 13px; font-weight: 600; }
+.node-tab:hover { background: var(--raised); }
+.node-tab[aria-selected="true"] { border-color: var(--blue); background: var(--active); box-shadow: inset 0 0 0 1px var(--blue); }
+.node-tab:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.node-picker { display: flex; align-items: center; gap: 6px; margin-bottom: 14px; }
+.node-picker select { flex: 1; }
 .connection-card { min-width: 0; }
 .connection-card-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
 .connection-card-heading h3 { margin: 0; min-width: 0; font-size: 14px; font-weight: 600; color: var(--green); overflow-wrap: anywhere; }
