@@ -2,14 +2,19 @@ package localapi
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"html"
 	"independent-panel/internal/i18n"
 	"independent-panel/internal/store"
+	"maps"
+	"net"
 	"net/http"
+	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -25,7 +30,8 @@ type onlineSession struct {
 	start     time.Time
 	up, down  uint64
 	announced bool
-	ips       []string // 会话期间出现过的在线IP；离线时连接已断开，IP采样里已经没有它们
+	ips       []string            // 会话期间出现过的在线IP；离线时连接已断开，IP采样里已经没有它们
+	inbounds  map[string][]string // 多入站客户端：每个IP会话期间实际连过的入站ID（按连接表判断）
 }
 
 type onlineEvent struct {
@@ -102,35 +108,28 @@ func ouiTraffic(n uint64) string {
 }
 
 // onlineMessages的字段、顺序与写法照OUI的上线/下线通知（用户2026-10-22提供截图）：每个IP一条，其余内容相同；没有采到IP时发一条不含IP。
-// 不含“节点名称”行（用户2026-10-22要求去掉）；2026-11-02起按用户要求加一行“入站”，只写类型与端口。
-func onlineMessages(event onlineEvent, inbounds, ips []string, lang string) []string {
+// 不含“节点名称”行（用户2026-10-22要求去掉）；2026-11-02起按用户要求加一行“入站”，只写类型与端口，由inboundsFor按IP给出实际连的入站。
+func onlineMessages(event onlineEvent, ips []string, inboundsFor func(ip string) []string, lang string) []string {
 	if len(ips) == 0 {
-		return []string{onlineMessage(event, inbounds, "", lang)}
+		return []string{onlineMessage(event, inboundsFor(""), "", lang)}
 	}
 	messages := []string{}
 	for _, ip := range ips {
-		messages = append(messages, onlineMessage(event, inbounds, ip, lang))
+		messages = append(messages, onlineMessage(event, inboundsFor(ip), ip, lang))
 	}
 	return messages
 }
 
-// clientEndpoints把客户端关联的入站写成“类型 · 传输/端口”，如“Reality · TCP/54716”。多入站客户端的流量与在线IP按账户合计，
-// 分不出走的是哪个入站，所以列出全部已启用的关联入站；都已停用时列出全部关联入站。
-func clientEndpoints(draft workspaceDraft, client clientDraft) []string {
-	enabled, all := []string{}, []string{}
+// linkedInbounds返回客户端关联的已启用入站（都已停用时返回全部关联入站），按关联顺序。
+func linkedInbounds(draft workspaceDraft, client clientDraft) []inboundDraft {
+	enabled, all := []inboundDraft{}, []inboundDraft{}
 	for _, id := range client.inboundIDs() {
 		for _, in := range draft.Inbounds {
-			if in.ID != id {
-				continue
-			}
-			transport := "TCP"
-			if in.Preset == "hy2" {
-				transport = "UDP"
-			}
-			endpoint := fmt.Sprintf("%s · %s/%d", presetLabel(in.Preset), transport, in.Port)
-			all = append(all, endpoint)
-			if in.Enabled {
-				enabled = append(enabled, endpoint)
+			if in.ID == id {
+				all = append(all, in)
+				if in.Enabled {
+					enabled = append(enabled, in)
+				}
 			}
 		}
 	}
@@ -138,6 +137,110 @@ func clientEndpoints(draft workspaceDraft, client clientDraft) []string {
 		return enabled
 	}
 	return all
+}
+
+// endpointLabel把入站写成“类型 · 传输/端口”，如“Reality · TCP/54716”。
+func endpointLabel(in inboundDraft) string {
+	transport := "TCP"
+	if in.Preset == "hy2" {
+		transport = "UDP"
+	}
+	return fmt.Sprintf("%s · %s/%d", presetLabel(in.Preset), transport, in.Port)
+}
+
+// procNetTCP是内核TCP连接表；测试时换成夹具文件。
+var procNetTCP = []string{"/proc/net/tcp", "/proc/net/tcp6"}
+
+// tcpPeers读取内核TCP连接表，返回每个对端IP已建立连接的本地端口；一个表都读不到时返回nil，不做入站判断。
+func tcpPeers() map[string]map[int]bool {
+	peers, read := map[string]map[int]bool{}, false
+	for _, path := range procNetTCP {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		read = true
+		for _, line := range strings.Split(string(data), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) < 4 || fields[3] != "01" { // 01即ESTABLISHED；表头与监听等状态跳过
+				continue
+			}
+			_, localPort, ok := strings.Cut(fields[1], ":")
+			remoteIP, _, ok2 := strings.Cut(fields[2], ":")
+			port, err := strconv.ParseUint(localPort, 16, 16)
+			ip := procIP(remoteIP)
+			if !ok || !ok2 || err != nil || ip == "" {
+				continue
+			}
+			if peers[ip] == nil {
+				peers[ip] = map[int]bool{}
+			}
+			peers[ip][int(port)] = true
+		}
+	}
+	if !read {
+		return nil
+	}
+	return peers
+}
+
+// procIP把连接表里的十六进制地址（按32位分组、小端，发布平台amd64/arm64均为小端）还原成IP；IPv4映射的IPv6地址还原为IPv4。
+func procIP(text string) string {
+	raw, err := hex.DecodeString(text)
+	if err != nil || (len(raw) != 4 && len(raw) != 16) {
+		return ""
+	}
+	for i := 0; i < len(raw); i += 4 {
+		raw[i], raw[i+1], raw[i+2], raw[i+3] = raw[i+3], raw[i+2], raw[i+1], raw[i]
+	}
+	return net.IP(raw).String()
+}
+
+// ipInbounds按连接表判断某个在线IP实际连的是哪个关联入站：TCP入站（Reality/XHTTP）看与该IP已建立连接的本地端口；
+// HY2走UDP，连接表里看不到对端，该IP没连任何TCP入站时归到HY2入站（关联多个HY2时无法再细分）。连接表读不到时不判断。
+func ipInbounds(linked []inboundDraft, ip string, peers map[string]map[int]bool) []string {
+	parsed := net.ParseIP(ip)
+	if peers == nil || parsed == nil {
+		return nil
+	}
+	ports := peers[parsed.String()]
+	tcp, udp := []string{}, []string{}
+	for _, in := range linked {
+		switch {
+		case in.Preset == "hy2":
+			udp = append(udp, in.ID)
+		case ports[in.Port]:
+			tcp = append(tcp, in.ID)
+		}
+	}
+	if len(tcp) > 0 {
+		return tcp
+	}
+	return udp
+}
+
+// messageInbounds给出通知里“入站”行的内容：单入站客户端直接写该入站；多入站写该IP会话期间实际连过的入站（没有IP时合并全部IP），
+// 判断不出时返回空切片（显示“未能识别”），不再列出全部关联入站；没有关联入站时返回nil（不写这一行）。
+func messageInbounds(linked []inboundDraft, seen map[string][]string, ip string) []string {
+	if len(linked) == 0 {
+		return nil
+	}
+	if len(linked) == 1 {
+		return []string{endpointLabel(linked[0])}
+	}
+	ids := seen[ip]
+	if ip == "" {
+		for _, list := range seen {
+			ids = mergeIPs(ids, list)
+		}
+	}
+	labels := []string{}
+	for _, in := range linked {
+		if slices.Contains(ids, in.ID) {
+			labels = append(labels, endpointLabel(in))
+		}
+	}
+	return labels
 }
 
 func onlineMessage(event onlineEvent, inbounds []string, ip, lang string) string {
@@ -148,10 +251,13 @@ func onlineMessage(event onlineEvent, inbounds []string, ip, lang string) string
 		lines[1] = say("🚀 <b>客户端上线</b>", "🚀 <b>Client online</b>")
 	}
 	lines = append(lines, say("📧 用户/节点：", "📧 Client: ")+code(event.client.Name))
-	if len(inbounds) > 0 {
+	if inbounds != nil {
 		endpoints := []string{}
 		for _, endpoint := range inbounds {
 			endpoints = append(endpoints, code(endpoint))
+		}
+		if len(endpoints) == 0 {
+			endpoints = append(endpoints, say("未能识别", "unknown"))
 		}
 		lines = append(lines, say("🔌 入站：", "🔌 Inbound: ")+strings.Join(endpoints, say("、", ", ")))
 	}
@@ -316,16 +422,45 @@ func (rt *Runtime) notifyOnline(ctx context.Context, s telegramSettings, session
 	}
 	lang := telegramLang()
 	events := onlineChanges(sessions, clients, traffic, now)
+	// 多入站客户端每轮按连接表记下各在线IP实际连的入站；离线时连接已断开，只能用会话期间记下的结果。连接表每轮最多读一次。
+	var peers map[string]map[int]bool
+	loaded := false
+	attribute := func(client clientDraft, seen map[string][]string, ips []string) map[string][]string {
+		linked := linkedInbounds(draft, client)
+		if len(linked) < 2 || len(ips) == 0 {
+			return seen
+		}
+		if !loaded {
+			peers, loaded = tcpPeers(), true
+		}
+		if seen == nil {
+			seen = map[string][]string{}
+		}
+		for _, ip := range ips {
+			seen[ip] = mergeIPs(seen[ip], ipInbounds(linked, ip, peers))
+		}
+		return seen
+	}
+	byID := map[string]clientDraft{}
+	for _, client := range clients {
+		byID[client.ID] = client
+	}
 	for id, session := range sessions {
-		session.ips = mergeIPs(session.ips, rt.onlineIPs(id))
+		current := rt.onlineIPs(id)
+		session.ips = mergeIPs(session.ips, current)
+		session.inbounds = attribute(byID[id], session.inbounds, current)
 		sessions[id] = session
 	}
 	for _, event := range events {
-		ips := event.session.ips
+		ips, seen := event.session.ips, event.session.inbounds
 		if event.online {
-			ips = mergeIPs(slices.Clone(ips), rt.onlineIPs(event.client.ID))
+			current := rt.onlineIPs(event.client.ID)
+			ips = mergeIPs(slices.Clone(ips), current)
+			seen = attribute(event.client, maps.Clone(seen), current)
 		}
-		for _, text := range onlineMessages(event, clientEndpoints(draft, event.client), ips, lang) {
+		linked := linkedInbounds(draft, event.client)
+		inboundsFor := func(ip string) []string { return messageInbounds(linked, seen, ip) }
+		for _, text := range onlineMessages(event, ips, inboundsFor, lang) {
 			_, _ = telegramBroadcast(ctx, rt.telegramIdentity(s), text)
 		}
 	}

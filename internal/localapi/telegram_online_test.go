@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -55,18 +57,25 @@ func TestOnlineChangesAnnouncesOnceAndOffline(t *testing.T) {
 	if offline.online || len(sessions) != 0 {
 		t.Fatal("10 minutes without traffic should announce offline and end the session", offline, sessions)
 	}
-	messages := onlineMessages(offline, []string{"HY2 · UDP/443", "Reality · TCP/54716"}, []string{"203.0.113.9", "198.51.100.7"}, "zh")
+	perIP := map[string][]string{"203.0.113.9": {"Reality · TCP/54716"}, "198.51.100.7": {"HY2 · UDP/443"}}
+	messages := onlineMessages(offline, []string{"203.0.113.9", "198.51.100.7"}, func(ip string) []string { return perIP[ip] }, "zh")
 	if len(messages) != 2 || !strings.Contains(messages[0], "🌐 离线 IP 地址：<code>203.0.113.9</code>") || !strings.Contains(messages[1], "🌐 离线 IP 地址：<code>198.51.100.7</code>") {
 		t.Fatal("like OUI, one message per IP", messages)
 	}
+	if !strings.Contains(messages[0], "🔌 入站：<code>Reality · TCP/54716</code>\n") || strings.Contains(messages[0], "HY2") || !strings.Contains(messages[1], "🔌 入站：<code>HY2 · UDP/443</code>\n") {
+		t.Fatal("each IP's alert names only the inbound that IP actually used", messages)
+	}
 	for _, text := range messages {
-		for _, part := range []string{"💎 <b>o-ui 用户通知</b>\n📴 <b>客户端下线</b>", "📧 用户/节点：<code>a&lt;b</code>\n🔌 入站：<code>HY2 · UDP/443</code>、<code>Reality · TCP/54716</code>", "⏱ 在线时长：<code>1分钟30秒</code>", "⏰ 下线时间：<code>", "📊 流量：<code>↑683.59KB / ↓878.91KB / 合计1.53MB</code>"} {
+		for _, part := range []string{"💎 <b>o-ui 用户通知</b>\n📴 <b>客户端下线</b>", "📧 用户/节点：<code>a&lt;b</code>\n🔌 入站：", "⏱ 在线时长：<code>1分钟30秒</code>", "⏰ 下线时间：<code>", "📊 流量：<code>↑683.59KB / ↓878.91KB / 合计1.53MB</code>"} {
 			if !strings.Contains(text, part) {
 				t.Fatalf("offline message missing %q:\n%s", part, text)
 			}
 		}
 	}
-	if only := onlineMessages(offline, nil, nil, "zh"); len(only) != 1 || strings.Contains(only[0], "IP") || strings.Contains(only[0], "入站") {
+	if unknown := onlineMessages(offline, nil, func(string) []string { return []string{} }, "zh"); !strings.Contains(unknown[0], "🔌 入站：未能识别") {
+		t.Fatal("an undetermined inbound is shown as unknown, not as every linked inbound", unknown)
+	}
+	if only := onlineMessages(offline, nil, func(string) []string { return nil }, "zh"); len(only) != 1 || strings.Contains(only[0], "IP") || strings.Contains(only[0], "入站") {
 		t.Fatal("without sampled IPs send one message without the IP line", only)
 	}
 
@@ -166,8 +175,8 @@ func TestTelegramNotifyPerClient(t *testing.T) {
 	}
 }
 
-// 入站行只写“类型 · 传输/端口”：多入站列出已启用的关联入站，都停用时列出全部；已删除的入站不出现。
-func TestClientEndpoints(t *testing.T) {
+// 入站写成“类型 · 传输/端口”；关联入站取已启用的，都停用时取全部；已删除的入站不出现。
+func TestLinkedInbounds(t *testing.T) {
 	draft := workspaceDraft{Inbounds: []inboundDraft{
 		{ID: "r", Preset: "reality", Port: 54716, Enabled: true},
 		{ID: "h", Preset: "hy2", Port: 443, Enabled: true},
@@ -182,8 +191,76 @@ func TestClientEndpoints(t *testing.T) {
 		{clientDraft{InboundID: "x"}, "XHTTP-Reality · TCP/63094"},
 	}
 	for _, c := range cases {
-		if got := strings.Join(clientEndpoints(draft, c.client), "|"); got != c.want {
+		labels := []string{}
+		for _, in := range linkedInbounds(draft, c.client) {
+			labels = append(labels, endpointLabel(in))
+		}
+		if got := strings.Join(labels, "|"); got != c.want {
 			t.Fatalf("%+v: %q != %q", c.client, got, c.want)
 		}
+	}
+}
+
+// 连接表只取ESTABLISHED：IPv4、IPv4映射的IPv6与IPv6对端都还原成标准IP，监听行与表头跳过。
+func TestTCPPeers(t *testing.T) {
+	dir := t.TempDir()
+	tcp := "  sl  local_address rem_address   st\n" +
+		"   0: 00000000:D5BC 00000000:0000 0A 00000000:00000000\n" +
+		"   1: 0100007F:D5BC 097100CB:C350 01 00000000:00000000\n"
+	tcp6 := "  sl  local_address rem_address   st\n" +
+		"   0: 00000000000000000000000000000000:E694 0000000000000000FFFF0000076433C6:D431 01 00000000:00000000\n" +
+		"   1: 00000000000000000000000000000000:01BB B80D0120000000000000000001000000:D432 01 00000000:00000000\n" +
+		"   2: 00000000000000000000000000000000:E694 0000000000000000FFFF0000096433C6:D433 06 00000000:00000000\n"
+	_ = os.WriteFile(filepath.Join(dir, "tcp"), []byte(tcp), 0o600)
+	_ = os.WriteFile(filepath.Join(dir, "tcp6"), []byte(tcp6), 0o600)
+	previous := procNetTCP
+	t.Cleanup(func() { procNetTCP = previous })
+	procNetTCP = []string{filepath.Join(dir, "tcp"), filepath.Join(dir, "tcp6")}
+	peers := tcpPeers()
+	if len(peers) != 3 || !peers["203.0.113.9"][54716] || !peers["198.51.100.7"][59028] || !peers["2001:db8::1"][443] {
+		t.Fatal("unexpected peers", peers)
+	}
+	procNetTCP = []string{filepath.Join(dir, "missing")}
+	if tcpPeers() != nil {
+		t.Fatal("an unreadable connection table must not be treated as no connections")
+	}
+}
+
+// 多入站客户端只写该IP实际连的入站：有TCP连接的写对应TCP入站；在线却没连任何TCP入站的归到HY2；
+// 连接表读不到或判断不出时写“未能识别”，不再列出全部；单入站客户端直接写该入站。
+func TestIPInboundsAndMessageInbounds(t *testing.T) {
+	linked := []inboundDraft{
+		{ID: "x", Preset: "xhttp-reality", Port: 59028, Enabled: true},
+		{ID: "h", Preset: "hy2", Port: 62197, Enabled: true},
+		{ID: "r", Preset: "reality", Port: 54716, Enabled: true},
+	}
+	peers := map[string]map[int]bool{"203.0.113.9": {59028: true}, "2001:db8::1": {54716: true}}
+	if got := ipInbounds(linked, "203.0.113.9", peers); strings.Join(got, ",") != "x" {
+		t.Fatal("TCP connection to the XHTTP port", got)
+	}
+	if got := ipInbounds(linked, "2001:0db8::0001", peers); strings.Join(got, ",") != "r" {
+		t.Fatal("IPv6 addresses are compared in canonical form", got)
+	}
+	if got := ipInbounds(linked, "198.51.100.7", peers); strings.Join(got, ",") != "h" {
+		t.Fatal("online without TCP connections means the HY2 inbound", got)
+	}
+	if got := ipInbounds(linked, "198.51.100.7", nil); got != nil {
+		t.Fatal("no attribution without the connection table", got)
+	}
+	seen := map[string][]string{"203.0.113.9": {"x"}, "198.51.100.7": {"h"}}
+	if got := strings.Join(messageInbounds(linked, seen, "203.0.113.9"), "|"); got != "XHTTP-Reality · TCP/59028" {
+		t.Fatal(got)
+	}
+	if got := strings.Join(messageInbounds(linked, seen, ""), "|"); got != "XHTTP-Reality · TCP/59028|HY2 · UDP/62197" {
+		t.Fatal("without an IP, merge every IP's inbounds in link order", got)
+	}
+	if got := messageInbounds(linked, seen, "192.0.2.1"); got == nil || len(got) != 0 {
+		t.Fatal("undetermined inbound is an empty list, shown as unknown", got)
+	}
+	if got := strings.Join(messageInbounds(linked[2:], nil, "192.0.2.1"), "|"); got != "Reality · TCP/54716" {
+		t.Fatal("single-inbound clients always name their inbound", got)
+	}
+	if messageInbounds(nil, seen, "203.0.113.9") != nil {
+		t.Fatal("no linked inbound omits the line")
 	}
 }
