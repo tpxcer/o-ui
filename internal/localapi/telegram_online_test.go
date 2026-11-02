@@ -39,11 +39,11 @@ func TestOnlineChangesAnnouncesOnceAndOffline(t *testing.T) {
 	if !online.online || !online.session.start.Equal(start) {
 		t.Fatal("1 MB in this session should announce online once", online)
 	}
-	text := onlineMessage(online, "203.0.113.9", "zh")
+	text := onlineMessage(online, []string{"Reality · TCP/54716"}, "203.0.113.9", "zh")
 	if strings.Contains(text, "节点名称") {
 		t.Fatal("alerts no longer include the inbound name line", text)
 	}
-	for _, part := range []string{"💎 <b>o-ui 用户通知</b>\n🚀 <b>客户端上线</b>", "📧 用户/节点：<code>a&lt;b</code>", "🌐 IP 地址：<code>203.0.113.9</code>", "⏰ 上线时间：<code>"} {
+	for _, part := range []string{"💎 <b>o-ui 用户通知</b>\n🚀 <b>客户端上线</b>", "📧 用户/节点：<code>a&lt;b</code>\n🔌 入站：<code>Reality · TCP/54716</code>\n🌐 IP 地址：<code>203.0.113.9</code>", "⏰ 上线时间：<code>"} {
 		if !strings.Contains(text, part) {
 			t.Fatalf("online message missing %q:\n%s", part, text)
 		}
@@ -55,18 +55,18 @@ func TestOnlineChangesAnnouncesOnceAndOffline(t *testing.T) {
 	if offline.online || len(sessions) != 0 {
 		t.Fatal("10 minutes without traffic should announce offline and end the session", offline, sessions)
 	}
-	messages := onlineMessages(offline, []string{"203.0.113.9", "198.51.100.7"}, "zh")
+	messages := onlineMessages(offline, []string{"HY2 · UDP/443", "Reality · TCP/54716"}, []string{"203.0.113.9", "198.51.100.7"}, "zh")
 	if len(messages) != 2 || !strings.Contains(messages[0], "🌐 离线 IP 地址：<code>203.0.113.9</code>") || !strings.Contains(messages[1], "🌐 离线 IP 地址：<code>198.51.100.7</code>") {
 		t.Fatal("like OUI, one message per IP", messages)
 	}
 	for _, text := range messages {
-		for _, part := range []string{"💎 <b>o-ui 用户通知</b>\n📴 <b>客户端下线</b>", "📧 用户/节点：<code>a&lt;b</code>", "⏱ 在线时长：<code>1分钟30秒</code>", "⏰ 下线时间：<code>", "📊 流量：<code>↑683.59KB / ↓878.91KB / 合计1.53MB</code>"} {
+		for _, part := range []string{"💎 <b>o-ui 用户通知</b>\n📴 <b>客户端下线</b>", "📧 用户/节点：<code>a&lt;b</code>\n🔌 入站：<code>HY2 · UDP/443</code>、<code>Reality · TCP/54716</code>", "⏱ 在线时长：<code>1分钟30秒</code>", "⏰ 下线时间：<code>", "📊 流量：<code>↑683.59KB / ↓878.91KB / 合计1.53MB</code>"} {
 			if !strings.Contains(text, part) {
 				t.Fatalf("offline message missing %q:\n%s", part, text)
 			}
 		}
 	}
-	if only := onlineMessages(offline, nil, "zh"); len(only) != 1 || strings.Contains(only[0], "IP") {
+	if only := onlineMessages(offline, nil, nil, "zh"); len(only) != 1 || strings.Contains(only[0], "IP") || strings.Contains(only[0], "入站") {
 		t.Fatal("without sampled IPs send one message without the IP line", only)
 	}
 
@@ -163,5 +163,27 @@ func TestTelegramNotifyPerClient(t *testing.T) {
 	}
 	if set, _, _ := readTelegramNotify(ctx, s); len(set) != 0 {
 		t.Fatal("saving drops stale and disabled entries", set)
+	}
+}
+
+// 入站行只写“类型 · 传输/端口”：多入站列出已启用的关联入站，都停用时列出全部；已删除的入站不出现。
+func TestClientEndpoints(t *testing.T) {
+	draft := workspaceDraft{Inbounds: []inboundDraft{
+		{ID: "r", Preset: "reality", Port: 54716, Enabled: true},
+		{ID: "h", Preset: "hy2", Port: 443, Enabled: true},
+		{ID: "x", Preset: "xhttp-reality", Port: 63094, Enabled: false},
+	}}
+	cases := []struct {
+		client clientDraft
+		want   string
+	}{
+		{clientDraft{InboundID: "r"}, "Reality · TCP/54716"},
+		{clientDraft{InboundID: "h", InboundIDs: []string{"h", "x", "r", "gone"}}, "HY2 · UDP/443|Reality · TCP/54716"},
+		{clientDraft{InboundID: "x"}, "XHTTP-Reality · TCP/63094"},
+	}
+	for _, c := range cases {
+		if got := strings.Join(clientEndpoints(draft, c.client), "|"); got != c.want {
+			t.Fatalf("%+v: %q != %q", c.client, got, c.want)
+		}
 	}
 }

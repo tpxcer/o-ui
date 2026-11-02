@@ -101,19 +101,46 @@ func ouiTraffic(n uint64) string {
 	return fmt.Sprintf("%.2f%s", value, units[unit])
 }
 
-// onlineMessages的字段、顺序与写法照OUI的上线/下线通知（用户2026-10-22提供截图）：每个IP一条，其余内容相同；没有采到IP时发一条不含IP。不含“节点名称”行（用户2026-10-22要求去掉）。
-func onlineMessages(event onlineEvent, ips []string, lang string) []string {
+// onlineMessages的字段、顺序与写法照OUI的上线/下线通知（用户2026-10-22提供截图）：每个IP一条，其余内容相同；没有采到IP时发一条不含IP。
+// 不含“节点名称”行（用户2026-10-22要求去掉）；2026-11-02起按用户要求加一行“入站”，只写类型与端口。
+func onlineMessages(event onlineEvent, inbounds, ips []string, lang string) []string {
 	if len(ips) == 0 {
-		return []string{onlineMessage(event, "", lang)}
+		return []string{onlineMessage(event, inbounds, "", lang)}
 	}
 	messages := []string{}
 	for _, ip := range ips {
-		messages = append(messages, onlineMessage(event, ip, lang))
+		messages = append(messages, onlineMessage(event, inbounds, ip, lang))
 	}
 	return messages
 }
 
-func onlineMessage(event onlineEvent, ip, lang string) string {
+// clientEndpoints把客户端关联的入站写成“类型 · 传输/端口”，如“Reality · TCP/54716”。多入站客户端的流量与在线IP按账户合计，
+// 分不出走的是哪个入站，所以列出全部已启用的关联入站；都已停用时列出全部关联入站。
+func clientEndpoints(draft workspaceDraft, client clientDraft) []string {
+	enabled, all := []string{}, []string{}
+	for _, id := range client.inboundIDs() {
+		for _, in := range draft.Inbounds {
+			if in.ID != id {
+				continue
+			}
+			transport := "TCP"
+			if in.Preset == "hy2" {
+				transport = "UDP"
+			}
+			endpoint := fmt.Sprintf("%s · %s/%d", presetLabel(in.Preset), transport, in.Port)
+			all = append(all, endpoint)
+			if in.Enabled {
+				enabled = append(enabled, endpoint)
+			}
+		}
+	}
+	if len(enabled) > 0 {
+		return enabled
+	}
+	return all
+}
+
+func onlineMessage(event onlineEvent, inbounds []string, ip, lang string) string {
 	say := func(zh, en string) string { return i18n.Pick(lang, zh, en) }
 	code := func(value string) string { return "<code>" + html.EscapeString(value) + "</code>" }
 	lines := []string{say("💎 <b>o-ui 用户通知</b>", "💎 <b>o-ui client alert</b>"), say("📴 <b>客户端下线</b>", "📴 <b>Client offline</b>")}
@@ -121,6 +148,13 @@ func onlineMessage(event onlineEvent, ip, lang string) string {
 		lines[1] = say("🚀 <b>客户端上线</b>", "🚀 <b>Client online</b>")
 	}
 	lines = append(lines, say("📧 用户/节点：", "📧 Client: ")+code(event.client.Name))
+	if len(inbounds) > 0 {
+		endpoints := []string{}
+		for _, endpoint := range inbounds {
+			endpoints = append(endpoints, code(endpoint))
+		}
+		lines = append(lines, say("🔌 入站：", "🔌 Inbound: ")+strings.Join(endpoints, say("、", ", ")))
+	}
 	if ip != "" {
 		label := say("🌐 IP 地址：", "🌐 IP: ")
 		if !event.online {
@@ -291,7 +325,7 @@ func (rt *Runtime) notifyOnline(ctx context.Context, s telegramSettings, session
 		if event.online {
 			ips = mergeIPs(slices.Clone(ips), rt.onlineIPs(event.client.ID))
 		}
-		for _, text := range onlineMessages(event, ips, lang) {
+		for _, text := range onlineMessages(event, clientEndpoints(draft, event.client), ips, lang) {
 			_, _ = telegramBroadcast(ctx, rt.telegramIdentity(s), text)
 		}
 	}
