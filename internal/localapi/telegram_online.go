@@ -107,19 +107,6 @@ func ouiTraffic(n uint64) string {
 	return fmt.Sprintf("%.2f%s", value, units[unit])
 }
 
-// onlineMessages的字段、顺序与写法照OUI的上线/下线通知（用户2026-10-22提供截图）：每个IP一条，其余内容相同；没有采到IP时发一条不含IP。
-// 不含“节点名称”行（用户2026-10-22要求去掉）；2026-11-02起按用户要求加一行“入站”，只写类型与端口，由inboundsFor按IP给出实际连的入站。
-func onlineMessages(event onlineEvent, ips []string, inboundsFor func(ip string) []string, lang string) []string {
-	if len(ips) == 0 {
-		return []string{onlineMessage(event, inboundsFor(""), "", lang)}
-	}
-	messages := []string{}
-	for _, ip := range ips {
-		messages = append(messages, onlineMessage(event, inboundsFor(ip), ip, lang))
-	}
-	return messages
-}
-
 // linkedInbounds返回客户端关联的已启用入站（都已停用时返回全部关联入站），按关联顺序。
 func linkedInbounds(draft workspaceDraft, client clientDraft) []inboundDraft {
 	enabled, all := []inboundDraft{}, []inboundDraft{}
@@ -219,20 +206,18 @@ func ipInbounds(linked []inboundDraft, ip string, peers map[string]map[int]bool)
 	return udp
 }
 
-// messageInbounds给出通知里“入站”行的内容：单入站客户端直接写该入站；多入站写该IP会话期间实际连过的入站（没有IP时合并全部IP），
-// 判断不出时返回空切片（显示“未能识别”），不再列出全部关联入站；没有关联入站时返回nil（不写这一行）。
-func messageInbounds(linked []inboundDraft, seen map[string][]string, ip string) []string {
+// messageInbounds给出通知里“入站”行的内容：单入站客户端直接写该入站；多入站写会话期间各IP实际连过的入站（合并去重，按关联顺序），
+// 判断不出时返回空切片（显示“未能识别”），不列出全部关联入站；没有关联入站时返回nil（不写这一行）。
+func messageInbounds(linked []inboundDraft, seen map[string][]string) []string {
 	if len(linked) == 0 {
 		return nil
 	}
 	if len(linked) == 1 {
 		return []string{endpointLabel(linked[0])}
 	}
-	ids := seen[ip]
-	if ip == "" {
-		for _, list := range seen {
-			ids = mergeIPs(ids, list)
-		}
+	ids := []string{}
+	for _, list := range seen {
+		ids = mergeIPs(ids, list)
 	}
 	labels := []string{}
 	for _, in := range linked {
@@ -243,7 +228,9 @@ func messageInbounds(linked []inboundDraft, seen map[string][]string, ip string)
 	return labels
 }
 
-func onlineMessage(event onlineEvent, inbounds []string, ip, lang string) string {
+// onlineMessage的字段、顺序与写法照OUI的上线/下线通知（用户2026-10-22提供截图），不含“节点名称”行（用户2026-10-22要求去掉）。
+// 2026-11-02起按用户要求：加一行“入站”（只写类型与端口）；每次上线/下线只发一条，会话期间出现过的IP合并到一行（OUI为每个IP一条）。
+func onlineMessage(event onlineEvent, inbounds, ips []string, lang string) string {
 	say := func(zh, en string) string { return i18n.Pick(lang, zh, en) }
 	code := func(value string) string { return "<code>" + html.EscapeString(value) + "</code>" }
 	lines := []string{say("💎 <b>o-ui 用户通知</b>", "💎 <b>o-ui client alert</b>"), say("📴 <b>客户端下线</b>", "📴 <b>Client offline</b>")}
@@ -261,12 +248,16 @@ func onlineMessage(event onlineEvent, inbounds []string, ip, lang string) string
 		}
 		lines = append(lines, say("🔌 入站：", "🔌 Inbound: ")+strings.Join(endpoints, say("、", ", ")))
 	}
-	if ip != "" {
+	if len(ips) > 0 {
 		label := say("🌐 IP 地址：", "🌐 IP: ")
 		if !event.online {
 			label = say("🌐 离线 IP 地址：", "🌐 Last IP: ")
 		}
-		lines = append(lines, label+code(ip))
+		addresses := []string{}
+		for _, ip := range ips {
+			addresses = append(addresses, code(ip))
+		}
+		lines = append(lines, label+strings.Join(addresses, say("、", ", ")))
 	}
 	if event.online {
 		return strings.Join(append(lines, say("⏰ 上线时间：", "⏰ Online at: ")+code(event.session.start.Local().Format("2006-01-02 15:04:05"))), "\n")
@@ -458,10 +449,7 @@ func (rt *Runtime) notifyOnline(ctx context.Context, s telegramSettings, session
 			ips = mergeIPs(slices.Clone(ips), current)
 			seen = attribute(event.client, maps.Clone(seen), current)
 		}
-		linked := linkedInbounds(draft, event.client)
-		inboundsFor := func(ip string) []string { return messageInbounds(linked, seen, ip) }
-		for _, text := range onlineMessages(event, ips, inboundsFor, lang) {
-			_, _ = telegramBroadcast(ctx, rt.telegramIdentity(s), text)
-		}
+		text := onlineMessage(event, messageInbounds(linkedInbounds(draft, event.client), seen), ips, lang)
+		_, _ = telegramBroadcast(ctx, rt.telegramIdentity(s), text)
 	}
 }

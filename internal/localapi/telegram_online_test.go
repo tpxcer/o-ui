@@ -41,7 +41,7 @@ func TestOnlineChangesAnnouncesOnceAndOffline(t *testing.T) {
 	if !online.online || !online.session.start.Equal(start) {
 		t.Fatal("1 MB in this session should announce online once", online)
 	}
-	text := onlineMessage(online, []string{"Reality · TCP/54716"}, "203.0.113.9", "zh")
+	text := onlineMessage(online, []string{"Reality · TCP/54716"}, []string{"203.0.113.9"}, "zh")
 	if strings.Contains(text, "节点名称") {
 		t.Fatal("alerts no longer include the inbound name line", text)
 	}
@@ -57,25 +57,20 @@ func TestOnlineChangesAnnouncesOnceAndOffline(t *testing.T) {
 	if offline.online || len(sessions) != 0 {
 		t.Fatal("10 minutes without traffic should announce offline and end the session", offline, sessions)
 	}
-	perIP := map[string][]string{"203.0.113.9": {"Reality · TCP/54716"}, "198.51.100.7": {"HY2 · UDP/443"}}
-	messages := onlineMessages(offline, []string{"203.0.113.9", "198.51.100.7"}, func(ip string) []string { return perIP[ip] }, "zh")
-	if len(messages) != 2 || !strings.Contains(messages[0], "🌐 离线 IP 地址：<code>203.0.113.9</code>") || !strings.Contains(messages[1], "🌐 离线 IP 地址：<code>198.51.100.7</code>") {
-		t.Fatal("like OUI, one message per IP", messages)
-	}
-	if !strings.Contains(messages[0], "🔌 入站：<code>Reality · TCP/54716</code>\n") || strings.Contains(messages[0], "HY2") || !strings.Contains(messages[1], "🔌 入站：<code>HY2 · UDP/443</code>\n") {
-		t.Fatal("each IP's alert names only the inbound that IP actually used", messages)
-	}
-	for _, text := range messages {
-		for _, part := range []string{"💎 <b>o-ui 用户通知</b>\n📴 <b>客户端下线</b>", "📧 用户/节点：<code>a&lt;b</code>\n🔌 入站：", "⏱ 在线时长：<code>1分钟30秒</code>", "⏰ 下线时间：<code>", "📊 流量：<code>↑683.59KB / ↓878.91KB / 合计1.53MB</code>"} {
-			if !strings.Contains(text, part) {
-				t.Fatalf("offline message missing %q:\n%s", part, text)
-			}
+	// 用户2026-11-02要求：一次下线只发一条，会话期间的多个IP合并到一行（不再像OUI那样每个IP一条）。
+	text = onlineMessage(offline, []string{"Reality · TCP/54716", "HY2 · UDP/443"}, []string{"203.0.113.9", "198.51.100.7"}, "zh")
+	for _, part := range []string{"💎 <b>o-ui 用户通知</b>\n📴 <b>客户端下线</b>", "📧 用户/节点：<code>a&lt;b</code>\n🔌 入站：<code>Reality · TCP/54716</code>、<code>HY2 · UDP/443</code>\n🌐 离线 IP 地址：<code>203.0.113.9</code>、<code>198.51.100.7</code>\n", "⏱ 在线时长：<code>1分钟30秒</code>", "⏰ 下线时间：<code>", "📊 流量：<code>↑683.59KB / ↓878.91KB / 合计1.53MB</code>"} {
+		if !strings.Contains(text, part) {
+			t.Fatalf("offline message missing %q:\n%s", part, text)
 		}
 	}
-	if unknown := onlineMessages(offline, nil, func(string) []string { return []string{} }, "zh"); !strings.Contains(unknown[0], "🔌 入站：未能识别") {
+	if strings.Count(text, "离线 IP 地址") != 1 || strings.Count(text, "在线时长") != 1 {
+		t.Fatal("one alert per session, with every IP on one line", text)
+	}
+	if unknown := onlineMessage(offline, []string{}, nil, "zh"); !strings.Contains(unknown, "🔌 入站：未能识别") {
 		t.Fatal("an undetermined inbound is shown as unknown, not as every linked inbound", unknown)
 	}
-	if only := onlineMessages(offline, nil, func(string) []string { return nil }, "zh"); len(only) != 1 || strings.Contains(only[0], "IP") || strings.Contains(only[0], "入站") {
+	if only := onlineMessage(offline, nil, nil, "zh"); strings.Contains(only, "IP") || strings.Contains(only, "入站") {
 		t.Fatal("without sampled IPs send one message without the IP line", only)
 	}
 
@@ -247,20 +242,17 @@ func TestIPInboundsAndMessageInbounds(t *testing.T) {
 	if got := ipInbounds(linked, "198.51.100.7", nil); got != nil {
 		t.Fatal("no attribution without the connection table", got)
 	}
-	seen := map[string][]string{"203.0.113.9": {"x"}, "198.51.100.7": {"h"}}
-	if got := strings.Join(messageInbounds(linked, seen, "203.0.113.9"), "|"); got != "XHTTP-Reality · TCP/59028" {
-		t.Fatal(got)
+	seen := map[string][]string{"203.0.113.9": {"h"}, "198.51.100.7": {"h", "x"}}
+	if got := strings.Join(messageInbounds(linked, seen), "|"); got != "XHTTP-Reality · TCP/59028|HY2 · UDP/62197" {
+		t.Fatal("merge every IP's inbounds once, in link order", got)
 	}
-	if got := strings.Join(messageInbounds(linked, seen, ""), "|"); got != "XHTTP-Reality · TCP/59028|HY2 · UDP/62197" {
-		t.Fatal("without an IP, merge every IP's inbounds in link order", got)
-	}
-	if got := messageInbounds(linked, seen, "192.0.2.1"); got == nil || len(got) != 0 {
+	if got := messageInbounds(linked, map[string][]string{"192.0.2.1": nil}); got == nil || len(got) != 0 {
 		t.Fatal("undetermined inbound is an empty list, shown as unknown", got)
 	}
-	if got := strings.Join(messageInbounds(linked[2:], nil, "192.0.2.1"), "|"); got != "Reality · TCP/54716" {
+	if got := strings.Join(messageInbounds(linked[2:], nil), "|"); got != "Reality · TCP/54716" {
 		t.Fatal("single-inbound clients always name their inbound", got)
 	}
-	if messageInbounds(nil, seen, "203.0.113.9") != nil {
+	if messageInbounds(nil, seen) != nil {
 		t.Fatal("no linked inbound omits the line")
 	}
 }
