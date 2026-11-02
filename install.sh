@@ -1264,10 +1264,20 @@ def main():
             return False
         return all(isinstance(x, dict) and len(x) == 1 and set(x) <= {"match", "counter", "return"}
                    for rule in rules if identity(rule) == key for x in rule.get("expr", [None]))
+    # fail2ban的nftables动作（默认inet f2b-table）只拒绝封禁集合里的来源IP，不是端口拦截层；
+    # 逐条确认每条规则都限定了“来源地址属于命名集合”，混入不限来源的规则仍按拦截层处理。
+    def banlist(c):
+        if (c.get("family"), c.get("table")) != ("inet", "f2b-table") or c.get("policy") != "accept":
+            return False
+        def source_set(expr):
+            match = expr.get("match") if isinstance(expr, dict) else None
+            return isinstance(match, dict) and match.get("op") == "==" and isinstance(match.get("right"), str) and match["right"].startswith("@") \
+                and match.get("left", {}).get("payload", {}).get("field") == "saddr"
+        return all(any(source_set(x) for x in r.get("expr", [])) for r in rules if identity(r) == identity(c))
     chain = next((c for c in chains if identity(c) == target), None)
     for c in chains:
         managed = (backend == "ufw" and identity(c) in (("ip", "filter", "INPUT"), ("ip6", "filter", "INPUT"))) or (backend == "firewalld" and c.get("table") == "firewalld")
-        if identity(c) == target or managed:
+        if identity(c) == target or managed or banlist(c):
             continue
         def blocks(expr):
             if identity(c) in (("ip", "filter", "INPUT"), ("ip6", "filter", "INPUT")) and expr == {"jump": {"target": "o-ui-iplimit"}}:

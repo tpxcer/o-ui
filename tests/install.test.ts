@@ -1326,6 +1326,32 @@ test('nft自动放行：预检或提交失败时保留原文件，未知拦截�
   assert.equal(layout.status, 3); assert.match(layout.out, /不支持的host_hardening持久化布局/);
 });
 
+test('nft：fail2ban只封来源IP的集合链不算拦截层，混入不限来源的规则仍拒绝', async () => {
+  const box = await nftSandbox();
+  const ban = (expr: unknown[]) => ({ rule: { family: 'inet', table: 'f2b-table', chain: 'f2b-chain', handle: 4, expr } });
+  const sshd = ban([{ match: { op: '==', left: { payload: { protocol: 'tcp', field: 'dport' } }, right: 22 } }, { match: { op: '==', left: { payload: { protocol: 'ip', field: 'saddr' } }, right: '@addr-set-sshd' } }, { reject: { type: 'icmp', expr: 'port-unreachable' } }]);
+  const withF2b = structuredClone(box.initial) as { nftables: any[] };
+  withF2b.nftables.push({ chain: { family: 'inet', table: 'f2b-table', name: 'f2b-chain', type: 'filter', hook: 'input', prio: -1, policy: 'accept' } }, sshd);
+  await writeFile(join(box.state, 'nft.json'), JSON.stringify(withF2b));
+  const allowed = box.helper(['allow', '50576', 'tcp']);
+  assert.equal(allowed.status, 0, allowed.out);
+  assert.equal(box.helper(['delete', '50576', 'tcp']).status, 0);
+  // 只有fail2ban、没有受支持拦截层的主机：报“未检测到”（面板显示未确认），不再报操作失败。
+  const bare = { nftables: withF2b.nftables.filter((e: any) => (e.chain ?? e.rule)?.table !== 'host_hardening') };
+  await writeFile(join(box.state, 'nft.json'), JSON.stringify(bare));
+  const unverified = box.helper(['allow', '50576', 'udp']);
+  assert.equal(unverified.status, 4, unverified.out);
+  assert.match(unverified.out, /未检测到启用的UFW\/firewalld/);
+  for (const expr of [[{ reject: null }], [{ match: { op: '!=', left: { payload: { protocol: 'ip', field: 'saddr' } }, right: '@addr-set-sshd' } }, { drop: null }]]) {
+    const mixed = structuredClone(bare);
+    mixed.nftables.push(ban(expr));
+    await writeFile(join(box.state, 'nft.json'), JSON.stringify(mixed));
+    const blocked = box.helper(['allow', '50576', 'udp']);
+    assert.equal(blocked.status, 3, blocked.out);
+    assert.match(blocked.out, /尚不支持的nftables INPUT拦截层/);
+  }
+});
+
 test('nft与UFW同时存在须均放行，已有外部规则不接管、不删除', async () => {
   const box = await nftSandbox();
   const result = box.helper(['allow', '50574', 'udp'], { FAKE_UFW: '1' });
