@@ -110,8 +110,8 @@ esac`,
 printf 'reno cubic bbr\\n' >"$O_UI_ROOT_PREFIX/proc/sys/net/ipv4/tcp_available_congestion_control"`,
   ufw: `s=$FAKE_STATE
 case $1 in
-  status) if [ -n "\${FAKE_UFW:-}" ] || [ -f "$s/ufw-active" ]; then echo 'Status: active'; echo; echo 'To Action From'; cat "$s/ufw-rules" 2>/dev/null || true; else echo 'Status: inactive'; fi ;;
-  show) [ -z "$FAKE_UFW_SAVED" ] || echo 'ufw allow 443/tcp' ;;
+  status) if [ -n "\${FAKE_UFW:-}" ] || [ -f "$s/ufw-active" ]; then echo 'Status: active'; [ -z "\${FAKE_UFW_SLOW_STATUS:-}" ] || sleep 0.3; echo; echo 'To Action From'; cat "$s/ufw-rules" 2>/dev/null || true; else echo 'Status: inactive'; fi ;;
+  show) [ -z "$FAKE_UFW_SAVED" ] || echo 'ufw allow 443/tcp'; [ "$FAKE_UFW_SAVED" != big ] || { i=0; while [ $i -lt 3000 ]; do echo "ufw allow $i/tcp comment padding-for-pipe-buffer-test"; i=$((i+1)); done; } ;;
   allow) echo "ufw $*" >>"$s/calls.log"; [ -z "$FAKE_UFW_FAIL" ] || exit 1; echo "$2 ALLOW Anywhere" >>"$s/ufw-rules" ;;
   --force) echo "ufw $*" >>"$s/calls.log"; : >"$s/ufw-active" ;;
   delete) echo "ufw $*" >>"$s/calls.log"; grep -v "^$3 " "$s/ufw-rules" >"$s/ufw-rules.tmp" || true; mv "$s/ufw-rules.tmp" "$s/ufw-rules" ;;
@@ -120,7 +120,7 @@ esac`,
   'apt-get': `echo "apt-get $*" >>"$FAKE_STATE/calls.log"; [ -z "$FAKE_PKG_FAIL" ] || exit 1
 mkdir -p "$O_UI_ROOT_PREFIX/etc/default"
 [ -f "$O_UI_ROOT_PREFIX/etc/default/ufw" ] || printf 'IPV6=yes\\n' >"$O_UI_ROOT_PREFIX/etc/default/ufw"`,
-  'iptables-save': `echo "iptables-save" >>"$FAKE_STATE/calls.log"; [ -z "$FAKE_IPTABLES_SAVED" ] || printf '%s\\n' '-A INPUT -j DROP'`,
+  'iptables-save': `echo "iptables-save" >>"$FAKE_STATE/calls.log"; [ -z "$FAKE_IPTABLES_SAVED" ] || printf '%s\\n' '-A INPUT -j DROP'; [ "$FAKE_IPTABLES_SAVED" != big ] || { i=0; while [ $i -lt 3000 ]; do echo "-A INPUT -p tcp --dport $i -j ACCEPT"; i=$((i+1)); done; }`,
   'ip6tables-save': `exit 0`,
   'firewall-cmd': `s=$FAKE_STATE
 echo "firewall-cmd $*" >>"$s/calls.log"
@@ -1063,6 +1063,26 @@ test('已有nft、iptables或未启用UFW保存规则时不安装第二套；读
     assert.doesNotMatch(await box.log('calls.log'), /ufw (allow|default|--force)/);
     if (type !== 'read-failure') assert.doesNotMatch(await box.log('calls.log'), /apt-get/);
   }
+});
+
+// grep -q匹配后立即退出，写端还没写完就收到SIGPIPE；在pipefail下整条管道会被判成“没匹配到”。
+test('既有规则超过管道缓冲时仍判定为已有规则，不安装第二套防火墙', async () => {
+  for (const env of [{ FAKE_IPTABLES_SAVED: 'big' }, { FAKE_UFW_SAVED: 'big' }] as Record<string, string>[]) {
+    const box = await sandbox();
+    const result = box.run(['install', '--package', box.pkg], [...start(), ...acme(), 'n', 'y'], { SSH_CONNECTION: '192.0.2.1 45678 192.0.2.2 5522', ...env });
+    assert.equal(result.status, 0, result.out);
+    const calls = await box.log('calls.log');
+    assert.doesNotMatch(calls, /ufw (allow|default|--force)/, JSON.stringify(env));
+    assert.doesNotMatch(calls, /apt-get/, JSON.stringify(env));
+  }
+});
+
+test('ufw status输出未写完时仍完成启用与自启核验，不误报失败', async () => {
+  const box = await sandbox();
+  const result = box.run(['install', '--package', box.pkg], [...start(), ...acme(), 'n', 'y'], { SSH_CONNECTION: '192.0.2.1 45678 192.0.2.2 5522', FAKE_UFW_SLOW_STATUS: '1' });
+  assert.equal(result.status, 0, result.out);
+  assert.match(await box.log('calls.log'), /systemctl enable ufw/);
+  assert.doesNotMatch(result.out, /UFW运行或开机自启核验失败/);
 });
 
 test('依赖安装、规则写入或IPv6检查失败都不能启用UFW', async () => {

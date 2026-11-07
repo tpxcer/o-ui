@@ -901,11 +901,12 @@ bbr_disable() {
 
 # ---------- 防火墙：既有规则不接管，全新环境经确认后配置UFW ----------
 
+# 这里不用“printf | grep -q”：grep匹配后立即退出，规则超过管道缓冲时写端收到SIGPIPE，pipefail下会把“已有规则”误判成没有。
 fw_existing_rules() {
   local rules
   if command -v ufw >/dev/null 2>&1; then
     rules=$(LC_ALL=C ufw show added 2>/dev/null) || return 2
-    if printf '%s\n' "$rules" | grep -Eq '^ufw '; then return 0; fi
+    if grep -Eq '^ufw ' <<<"$rules"; then return 0; fi
   fi
   # 任意既有规则都保守保留，包括Docker/NAT；无法读取时不猜测是空机器。
   command -v nft >/dev/null 2>&1 || return 2
@@ -913,11 +914,11 @@ fw_existing_rules() {
   [ -n "${rules//[[:space:]]/}" ] && return 0
   if command -v iptables-save >/dev/null 2>&1; then
     rules=$(iptables-save 2>/dev/null) || return 2
-    if printf '%s\n' "$rules" | grep -Eq '^(-A |:[^ ]+ (DROP|REJECT))'; then return 0; fi
+    if grep -Eq '^(-A |:[^ ]+ (DROP|REJECT))' <<<"$rules"; then return 0; fi
   fi
   if command -v ip6tables-save >/dev/null 2>&1; then
     rules=$(ip6tables-save 2>/dev/null) || return 2
-    if printf '%s\n' "$rules" | grep -Eq '^(-A |:[^ ]+ (DROP|REJECT))'; then return 0; fi
+    if grep -Eq '^(-A |:[^ ]+ (DROP|REJECT))' <<<"$rules"; then return 0; fi
   fi
   return 1
 }
@@ -968,7 +969,8 @@ fw_install_offer() {
   if ! ufw --force enable >/dev/null; then
     warn "UFW启用失败，请检查 ufw status；备份：$backup" "UFW enable failed; inspect ufw status; backup: $backup"; return 0
   fi
-  if ! LC_ALL=C ufw status | grep -qi '^status: active' || ! systemctl enable ufw >/dev/null || ! systemctl is-enabled --quiet ufw; then
+  local ufw_state
+  if ! ufw_state=$(LC_ALL=C ufw status) || ! grep -qi '^status: active' <<<"$ufw_state" || ! systemctl enable ufw >/dev/null || ! systemctl is-enabled --quiet ufw; then
     warn "UFW运行或开机自启核验失败，请检查 ufw status 和 systemctl status ufw；备份：$backup" "UFW active or boot-persistence verification failed; inspect ufw status and systemctl status ufw; backup: $backup"; return 0
   fi
   OUI_FW=ufw
