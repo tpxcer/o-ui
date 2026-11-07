@@ -64,11 +64,11 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent-bg); wi
 .data-table th.select-cell + th { width: 26%; }
 .clients-table th.select-cell + th { width: auto; }
 /* 流量和最近上线（含实时速度）加宽，让“累计 X / Y”和上下行速度各占一行；IP列放下英文“1 / 2 online IPs”即可。 */
-.clients-table th:nth-child(3), .clients-table th:nth-child(5) { width: 16%; }
-.clients-table th:nth-child(4) { width: auto; }
+.clients-table th:nth-child(3), .clients-table th:nth-child(4) { width: 16%; }
+.clients-table th:nth-child(6) { width: auto; }
 /* 宽屏时到期列定宽，把空间让给“客户端 / 入站”，关联入站名不至于只剩两三个字。 */
-@media (min-width: 1281px) { .clients-table th:nth-child(4) { width: 10%; } }
-.clients-table th:nth-child(6) { width: 13%; }
+@media (min-width: 1281px) { .clients-table th:nth-child(6) { width: 10%; } }
+.clients-table th:nth-child(5) { width: 13%; }
 @media (min-width: 1101px) { .clients-table th:not(.select-cell), .clients-table td:not(.select-cell) { padding-left: 12px; padding-right: 12px; } }
 .clients-table th:last-child { width: 132px; }
 .clients-table.with-notify th:nth-child(7) { width: 112px; }
