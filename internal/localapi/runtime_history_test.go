@@ -394,6 +394,79 @@ func TestOfficialHistoryExpiredCertificate(t *testing.T) {
 	}
 }
 
+// 面板证书自动续签后面板会重启并按已应用快照恢复：复用面板证书的入站须换上当前面板证书，
+// 快照里的旧副本即使已过期也不能拒绝恢复（2026-11-08 美国 VPS 实测 HY2 仍用旧证书）。
+func TestOfficialHistoryRefreshesPanelCertificate(t *testing.T) {
+	root := os.Getenv("PANEL_RUNTIME_QA_CORE")
+	if root == "" {
+		t.Skip("设置PANEL_RUNTIME_QA_CORE后验证恢复时换用当前面板证书")
+	}
+	m, err := core.NewManager(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	s, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	rt, err := NewRuntime(m, s, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rt.Close()
+	record, doc := historyFixture(t, rt)
+	dir := filepath.Dir(record.Candidate.File)
+	certPath, keyPath := filepath.Join(dir, "cert.pem"), filepath.Join(dir, "key.pem")
+	pair, err := tls.LoadX509KeyPair(certPath, keyPath)
+	if err != nil || pair.Leaf == nil {
+		t.Fatal("invalid test certificate", err)
+	}
+	pair.Leaf.NotBefore, pair.Leaf.NotAfter = time.Now().Add(-2*time.Hour), time.Now().Add(-time.Hour)
+	der, err := x509.CreateCertificate(rand.Reader, pair.Leaf, pair.Leaf, pair.PrivateKey.(crypto.Signer).Public(), pair.PrivateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(certPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0600); err != nil {
+		t.Fatal(err)
+	}
+	record, err = rt.snapshot(record.Candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal(record)
+	if doc, err = s.SaveDocument(context.Background(), appliedDocument, doc.Revision, data); err != nil {
+		t.Fatal(err)
+	}
+	workspace := []byte(`{"inbounds":[{"id":"one","preset":"hy2","connection":{"usePanelCertificate":true}}],"clients":[]}`)
+	if _, err = s.SaveDocument(context.Background(), "workspace", 0, workspace); err != nil {
+		t.Fatal(err)
+	}
+	panelCert, panelKey := runtimeCertificate(t, t.TempDir())
+	if rt.panelTLS, err = loadPanelPair(panelTLSDraft{panelCert, panelKey}); err != nil {
+		t.Fatal(err)
+	}
+	c, err := rt.resumeCandidate(context.Background(), doc.Revision)
+	if err != nil {
+		t.Fatal("resume should use the renewed panel certificate", err)
+	}
+	var resumed struct {
+		Inbounds []config.CompiledInbound `json:"inbounds"`
+	}
+	data, _ = os.ReadFile(c.File)
+	if json.Unmarshal(data, &resumed) != nil || len(resumed.Inbounds) != 1 {
+		t.Fatal("unexpected resumed config", string(data))
+	}
+	used, _ := os.ReadFile(resumed.Inbounds[0].Stream.TLS.Certificates[0].File)
+	if string(used) != string(rt.panelTLS.cert) {
+		t.Fatal("resumed inbound still uses the snapshot certificate")
+	}
+	if snapshot, _ := os.ReadFile(certPath); string(snapshot) == string(rt.panelTLS.cert) {
+		t.Fatal("the applied snapshot itself must stay unchanged")
+	}
+}
+
 func TestResumeHistoryRequiresExactInstalledCore(t *testing.T) {
 	m, err := core.NewManager(t.TempDir())
 	if err != nil {

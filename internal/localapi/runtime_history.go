@@ -1,12 +1,15 @@
 package localapi
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"independent-panel/internal/i18n"
 	"io"
 	"net/http"
@@ -226,6 +229,25 @@ func (rt *Runtime) historyCandidate(ctx context.Context, revision int64, restart
 	if json.Unmarshal(full["inbounds"], &inbounds) != nil {
 		return c, i18n.New("历史入站配置无效", "Historical inbound configuration is invalid")
 	}
+	dir := ""
+	resumeDir := func() (string, error) {
+		if dir == "" {
+			created, err := os.MkdirTemp(rt.root, "resume-")
+			if err != nil {
+				return "", i18n.New("无法创建恢复候选目录", "Cannot create the resume candidate directory")
+			}
+			dir = created
+		}
+		return dir, nil
+	}
+	refreshed, err := rt.refreshPanelCertificates(ctx, inbounds, resumeDir)
+	if err != nil {
+		return c, err
+	}
+	if refreshed > 0 {
+		full["inbounds"], _ = json.Marshal(inbounds)
+		rt.logs.Add("xray.cert_refresh")
+	}
 	for _, in := range inbounds {
 		if in.Stream.TLS == nil {
 			continue
@@ -233,6 +255,9 @@ func (rt *Runtime) historyCandidate(ctx context.Context, revision int64, restart
 		for _, cert := range in.Stream.TLS.Certificates {
 			pair, err := tls.LoadX509KeyPair(cert.File, cert.Key)
 			if err != nil || pair.Leaf == nil || time.Now().Before(pair.Leaf.NotBefore) || !time.Now().Before(pair.Leaf.NotAfter) {
+				if dir != "" {
+					_ = os.RemoveAll(dir)
+				}
 				return c, i18n.New("历史TLS证书无效或已过期，拒绝恢复", "Historical TLS certificate is invalid or expired; refusing to resume")
 			}
 		}
@@ -248,9 +273,8 @@ func (rt *Runtime) historyCandidate(ctx context.Context, revision int64, restart
 		full["api"], _ = json.Marshal(map[string]any{"tag": "panel-stats", "listen": rt.statsSocket, "services": []string{"StatsService"}})
 		c.StatsAddress = "unix://" + rt.statsSocket
 	}
-	dir, err := os.MkdirTemp(rt.root, "resume-")
-	if err != nil {
-		return c, i18n.New("无法创建恢复候选目录", "Cannot create the resume candidate directory")
+	if _, err = resumeDir(); err != nil {
+		return c, err
 	}
 	data, _ := json.Marshal(full)
 	c.File, c.Inbounds = filepath.Join(dir, "config.json"), len(inbounds)
@@ -385,4 +409,70 @@ func registerRuntimeHistory(mux *http.ServeMux, rt *Runtime) {
 			respond(w, 200, rt.engine.Status())
 		})
 	}
+}
+
+// refreshPanelCertificates：已应用快照保存的是应用当时的面板证书副本。面板证书自动续签后面板会重启并按快照恢复，
+// 不换的话复用面板证书的入站会一直用旧副本，旧副本过期后还会拒绝恢复。这里只对已保存配置仍选择“复用面板证书”、
+// 且当前面板证书覆盖旧证书全部域名/IP的入站，把当前面板证书写进本次恢复目录并改用它；其余配置与快照文件保持不变。
+func (rt *Runtime) refreshPanelCertificates(ctx context.Context, inbounds []config.CompiledInbound, resumeDir func() (string, error)) (int, error) {
+	if rt.panelTLS == nil || len(rt.panelTLS.pair.Certificate) == 0 {
+		return 0, nil
+	}
+	panel, err := x509.ParseCertificate(rt.panelTLS.pair.Certificate[0])
+	if err != nil {
+		return 0, nil
+	}
+	doc, err := rt.state.ReadDocument(ctx, "workspace")
+	if err != nil {
+		return 0, err
+	}
+	var draft workspaceDraft
+	if string(doc.Data) == "null" || json.Unmarshal(doc.Data, &draft) != nil {
+		return 0, nil
+	}
+	usePanel := map[string]bool{}
+	for _, in := range draft.Inbounds {
+		if in.Connection != nil && in.Connection.UsePanelCertificate {
+			usePanel["in-"+in.ID] = true
+		}
+	}
+	refreshed := 0
+	for index := range inbounds {
+		in := &inbounds[index]
+		if in.Stream.TLS == nil || len(in.Stream.TLS.Certificates) != 1 || !usePanel[in.Tag] {
+			continue
+		}
+		old, err := tls.LoadX509KeyPair(in.Stream.TLS.Certificates[0].File, in.Stream.TLS.Certificates[0].Key)
+		if err != nil || len(old.Certificate) == 0 {
+			continue
+		}
+		leaf, err := x509.ParseCertificate(old.Certificate[0])
+		if err != nil || bytes.Equal(leaf.Raw, panel.Raw) {
+			continue
+		}
+		names := append([]string{}, leaf.DNSNames...)
+		for _, ip := range leaf.IPAddresses {
+			names = append(names, ip.String())
+		}
+		covered := len(names) > 0
+		for _, name := range names {
+			if panel.VerifyHostname(name) != nil {
+				covered = false
+			}
+		}
+		if !covered {
+			continue
+		}
+		dir, err := resumeDir()
+		if err != nil {
+			return refreshed, err
+		}
+		cert, key := filepath.Join(dir, fmt.Sprintf("%d-panel-cert.pem", index)), filepath.Join(dir, fmt.Sprintf("%d-panel-key.pem", index))
+		if writePrivate(cert, rt.panelTLS.cert) != nil || writePrivate(key, rt.panelTLS.key) != nil {
+			return refreshed, i18n.New("无法写入当前面板证书，未恢复核心", "Cannot write the current panel certificate; core not resumed")
+		}
+		in.Stream.TLS.Certificates[0] = config.Certificate{File: cert, Key: key}
+		refreshed++
+	}
+	return refreshed, nil
 }

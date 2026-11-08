@@ -50,6 +50,7 @@ var definitions = map[string]definition{
 	"xray.rollback.failed":     {"xray", "error", i18n.T("新核心启动失败，原配置恢复也失败；核心已停止", "New core failed to start and restoring the previous configuration also failed; the core is stopped")},
 	"xray.applied":             {"xray", "info", i18n.T("配置应用及运行历史保存成功", "Configuration applied and run history saved")},
 	"xray.empty":               {"xray", "info", i18n.T("已应用空有效配置；旧监听已停止，不启动新核心", "Applied an empty valid configuration; old listeners stopped, no core started")},
+	"xray.cert_refresh":        {"xray", "info", i18n.T("恢复核心时，复用面板证书的TLS入站已换用当前面板证书", "On resume, TLS inbounds reusing the panel certificate switched to the current panel certificate")},
 	"xray.limits":              {"xray", "warning", i18n.T("已应用到期或用尽过滤；同核心其他连接可能短暂重连", "Applied expiry/quota filtering; other connections on this core may briefly reconnect")},
 	"xray.guard":               {"xray", "error", i18n.T("采样、持久化或限制执行失败，独立核心已安全停止；未知尾流不能补算", "Sampling, persistence or limit enforcement failed; the core was stopped safely and unmeasured traffic cannot be recovered")},
 	"core.port_busy":           {"xray", "error", i18n.T("核心报告地址或端口已被占用；未显示地址原文", "Core reports the address or port is in use (address hidden)")},
