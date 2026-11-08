@@ -92,8 +92,9 @@ func ClashProxy(outbound map[string]any, name string) ([]YAMLField, error) {
 		}
 		switch stream.Security {
 		case "reality":
+			// Xray 26.9.8起REALITY服务端要求X25519MLKEM768密钥交换，Mihomo需显式开启；旧版Mihomo忽略此字段。
 			r := stream.RealitySettings
-			proxy = append(proxy, YAMLField{"servername", r.ServerName}, YAMLField{"client-fingerprint", r.Fingerprint}, YAMLField{"reality-opts", []YAMLField{{"public-key", r.Password}, {"short-id", r.ShortID}}})
+			proxy = append(proxy, YAMLField{"servername", r.ServerName}, YAMLField{"client-fingerprint", r.Fingerprint}, YAMLField{"reality-opts", []YAMLField{{"public-key", r.Password}, {"short-id", r.ShortID}, {"support-x25519mlkem768", true}}})
 		case "tls":
 			proxy = append(proxy, YAMLField{"servername", stream.TLSSettings.ServerName}, YAMLField{"client-fingerprint", "chrome"})
 			if len(stream.TLSSettings.ALPN) > 0 {

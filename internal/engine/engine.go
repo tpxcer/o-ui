@@ -99,7 +99,8 @@ func command(c Candidate, args ...string) *exec.Cmd {
 	cmd := exec.Command(c.Binary, args...)
 	cmd.Dir = filepath.Dir(c.Binary)
 	// 不继承外部XRAY配置/资源环境，也不回传可能包含凭据的核心输出。
-	cmd.Env = []string{"PATH=/usr/bin:/bin", "XRAY_LOCATION_ASSET=" + filepath.Dir(c.Binary)}
+	// v26.10.31之前的核心随Go默认开MPTCP监听（CVE-2026-98432可被远程拿root），默认关掉；配置里显式开启仍有效。
+	cmd.Env = []string{"PATH=/usr/bin:/bin", "XRAY_LOCATION_ASSET=" + filepath.Dir(c.Binary), "GODEBUG=multipathtcp=0"}
 	cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
 	return cmd
 }

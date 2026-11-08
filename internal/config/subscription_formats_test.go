@@ -26,9 +26,9 @@ func presetOutbound(t *testing.T, preset string) map[string]any {
 func TestClashProxyFourPresets(t *testing.T) {
 	for preset, want := range map[string][]string{
 		"hy2":           {`type: "hysteria2"`, `password: "`, `sni: "example.test"`, `alpn:` + "\n" + `      - "h3"`},
-		"reality":       {`type: "vless"`, `network: "tcp"`, `flow: "xtls-rprx-vision"`, `servername: "example.test"`, `client-fingerprint: "chrome"`, "reality-opts:\n      public-key: \"", `short-id: "0123456789abcdef"`},
+		"reality":       {`type: "vless"`, `network: "tcp"`, `flow: "xtls-rprx-vision"`, `servername: "example.test"`, `client-fingerprint: "chrome"`, "reality-opts:\n      public-key: \"", `short-id: "0123456789abcdef"`, "      support-x25519mlkem768: true\n"},
 		"xhttp-tls":     {`network: "xhttp"`, `tls: true`, `servername: "example.test"`, "xhttp-opts:\n      path: \"", `mode: "auto"`},
-		"xhttp-reality": {`network: "xhttp"`, "reality-opts:", "xhttp-opts:"},
+		"xhttp-reality": {`network: "xhttp"`, "reality-opts:", "support-x25519mlkem768: true", "xhttp-opts:"},
 	} {
 		t.Run(preset, func(t *testing.T) {
 			proxy, err := ClashProxy(presetOutbound(t, preset), `中文 "名称": yes`)

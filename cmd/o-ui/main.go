@@ -1,3 +1,6 @@
+// Go 1.24+默认让监听走MPTCP；CVE-2026-98432下MPTCP监听可被远程拿root，面板一律用普通TCP。
+//go:debug multipathtcp=0
+
 package main
 
 import (

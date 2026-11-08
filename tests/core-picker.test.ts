@@ -206,10 +206,15 @@ test('精确输入候选时立即说明已验客户端限制，不重绘输入�
     control(picker, '#core-picker-submit').fire(); assert.equal(confirm.open, true);
     assert.match(confirm.innerHTML, /Mihomo v1\.19\.32/); assert.match(confirm.innerHTML, /26\.10\.17/);
     confirm.close();
-    for (const version of ['26.7.28', '26.10.18', '26.10.17-invalid', '26.10.1']) {
+    for (const version of ['26.7.28', '26.9.7', '26.10.17-invalid']) {
       select(picker, version);
       assert.equal(control(picker, '#core-compatibility-warning').hidden, true);
       assert.equal(control(picker, '#core-compatibility-warning').textContent, '');
+    }
+    for (const version of ['26.9.8', 'v26.10.31', '27.1.1']) {
+      select(picker, version);
+      assert.equal(control(picker, '#core-compatibility-warning').hidden, false);
+      assert.match(control(picker, '#core-compatibility-warning').textContent, /X25519MLKEM768.*小火箭.*Clash/);
     }
     assert.equal(writes, 0);
   });

@@ -157,6 +157,21 @@ func (rt *Runtime) checkpointCurrent(ctx context.Context) error {
 	return rt.checkpoint(ctx, c, *status.StartedAt)
 }
 
+// 开机等冷启动时核心加载较慢，统计接口可能尚未就绪：核心仍在运行就在statsReadyTimeout内重试，
+// 不把一次查询失败当作启动失败而停掉核心。
+var statsReadyTimeout = 20 * time.Second
+
+func (rt *Runtime) checkpointStarted(ctx context.Context) error {
+	deadline := time.Now().Add(statsReadyTimeout)
+	for {
+		err := rt.checkpointCurrent(ctx)
+		if _, running := rt.engine.Current(); err == nil || !running || time.Now().After(deadline) {
+			return err
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
 func (rt *Runtime) stop(ctx context.Context) error {
 	unexpected := rt.engine.Status().UnexpectedExit
 	err := rt.checkpointCurrent(ctx)
@@ -233,7 +248,7 @@ func (rt *Runtime) apply(ctx context.Context, c engine.Candidate) error {
 	// 核心已切换：收尾不随关闭信号或请求断开中止，否则历史停在切换未完成、下次启动拒绝恢复；关闭流程持rt.mu等待收尾。
 	ctx = context.WithoutCancel(ctx)
 	if c.Inbounds > 0 {
-		if err = rt.checkpointCurrent(ctx); err != nil {
+		if err = rt.checkpointStarted(ctx); err != nil {
 			_ = rt.engine.Stop()
 			_ = rt.markStopped(context.Background(), true)
 			rt.issue = i18n.T("启动后统计初始化失败，独立核心已停止；未采集尾流未知", "Statistics failed to initialize after start; core stopped, unmeasured traffic unknown")
