@@ -43,7 +43,7 @@ func TestOfficialHistoryProcessRecovery(t *testing.T) {
 	if manager.Selected() != version {
 		t.Fatal("selected core does not match explicit QA version")
 	}
-	for _, version := range []string{version, "26.3.27"} {
+	for _, version := range []string{version, "26.10.31"} {
 		if _, err := manager.Binary(version); err != nil {
 			t.Fatal("requires both verified official test versions", version, err)
 		}
@@ -289,7 +289,7 @@ func TestOfficialHistoryProcessRecovery(t *testing.T) {
 	}
 	data, _ = json.Marshal(draft)
 	call("PUT", "workspace", store.Document{Revision: 1, Data: data}, 200)
-	call("POST", "core/install", map[string]string{"version": "26.3.27"}, 200)
+	call("POST", "core/install", map[string]string{"version": "26.10.31"}, 200)
 	workspaceBefore, settingsBefore := readDoc("workspace"), readDoc("xray-settings")
 	stop(false)
 	if time.Now().UnixMilli() >= expires {
@@ -300,7 +300,10 @@ func TestOfficialHistoryProcessRecovery(t *testing.T) {
 		t.Fatal("missing checkpoint/history before real process restart")
 	}
 	// 在停止的临时库注入已耗尽累计；不改变运行历史或用户数据库。
-	persisted.Totals["quota"] = traffic.Count{Uplink: 10000}
+	// 在原累计上追加，累计不能小于日/周/月分期里已记的用量，否则账本校验拒绝启动。
+	exhausted := persisted.Totals["quota"]
+	exhausted.Uplink += 10000
+	persisted.Totals["quota"] = exhausted
 	data, _ = json.Marshal(persisted)
 	if _, err := db.Exec("UPDATE documents SET revision=revision+1,data=? WHERE name='traffic'", data); err != nil {
 		t.Fatal(err)
@@ -358,7 +361,7 @@ func TestOfficialHistoryProcessRecovery(t *testing.T) {
 	}
 	assertDrafts()
 	_ = json.Unmarshal(call("GET", "core/status", nil, 200), &selected)
-	if selected.Selected != "26.3.27" || historyDataCount(readDoc(appliedDocument).Data) != 1 {
+	if selected.Selected != "26.10.31" || historyDataCount(readDoc(appliedDocument).Data) != 1 {
 		t.Fatal("auto resume changed selection or revived blocked users")
 	}
 	roundTrip("client-one", true)
@@ -386,7 +389,7 @@ func TestOfficialHistoryProcessRecovery(t *testing.T) {
 	}
 	assertDrafts()
 	_ = json.Unmarshal(call("GET", "core/status", nil, 200), &selected)
-	if selected.Selected != "26.3.27" || historyDataCount(readDoc(appliedDocument).Data) != 1 {
+	if selected.Selected != "26.10.31" || historyDataCount(readDoc(appliedDocument).Data) != 1 {
 		t.Fatal("recovery changed selection or revived blocked users")
 	}
 	roundTrip("client-one", true)
@@ -413,7 +416,7 @@ func TestOfficialHistoryProcessRecovery(t *testing.T) {
 	call("POST", "runtime/restart", restart, 409)
 	assertDrafts()
 	_ = json.Unmarshal(call("GET", "core/status", nil, 200), &selected)
-	if selected.Selected != "26.3.27" || ledger().Totals["client-one"].Total() < beforeCount.Total() || ledger().Totals["quota"] != persisted.Totals["quota"] || historyDataCount(readDoc(appliedDocument).Data) != 1 {
+	if selected.Selected != "26.10.31" || ledger().Totals["client-one"].Total() < beforeCount.Total() || ledger().Totals["quota"] != persisted.Totals["quota"] || historyDataCount(readDoc(appliedDocument).Data) != 1 {
 		t.Fatal("restart changed selection/usage or revived blocked identities")
 	}
 	roundTrip("client-one", true)

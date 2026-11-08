@@ -19,6 +19,23 @@ const apiBase = "https://api.github.com/repos/XTLS/Xray-core"
 
 var versionPattern = regexp.MustCompile(`^[0-9]{1,3}\.[0-9]{1,2}\.[0-9]{1,2}$`)
 
+// MinimumVersion是o-ui能运行的最低官方版本：统计接口监听Unix套接字，v26.5.3起才支持（XTLS/Xray-core e61eeae258），更早的核心启动即退出。
+const MinimumVersion = "26.5.3"
+
+var errUnsupported = i18n.New("该 Xray 版本低于 v26.5.3，不支持 o-ui 使用的本机统计套接字，启动即退出；请选择 v26.5.3 及以上版本", "This Xray version is older than v26.5.3 and does not support the local statistics socket o-ui uses, so it exits on start; choose v26.5.3 or later")
+
+// Supported报告已规范化的版本是否不低于MinimumVersion。
+func Supported(version string) bool {
+	parse := func(v string) (n int) {
+		for _, part := range strings.Split(v, ".") {
+			p, _ := strconv.Atoi(part)
+			n = n*1000 + p
+		}
+		return n
+	}
+	return versionPattern.MatchString(version) && parse(version) >= parse(MinimumVersion)
+}
+
 func NormalizeVersion(value string) (string, error) {
 	value = strings.TrimPrefix(strings.TrimSpace(value), "v")
 	if !versionPattern.MatchString(value) {

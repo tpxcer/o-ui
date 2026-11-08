@@ -1,6 +1,6 @@
 import { escapeHtml as esc } from './workspace.ts';
 import { api } from './api.ts';
-import { coreCompatibilityWarning } from './core-compatibility.ts';
+import { coreCompatibilityWarning, coreSupported } from './core-compatibility.ts';
 import './core.css';
 import { t } from './i18n.ts';
 
@@ -55,15 +55,15 @@ export function initCore(refreshIcons: () => void, onStatus: (status: CoreStatus
       <div class="core-picker-toolbar"><span>${status ? `${t('当前选择 v', 'Selected v')}${esc(status.selected)} ${t('· 运行状态见首页', '· runtime status on the dashboard')}` : t('本机核心服务未连接', 'Core service not connected')}</span><button class="text-button" id="core-picker-refresh" ${loading || checking || installing ? 'disabled' : ''}>${loading ? t('读取官方版本中…', 'Reading official versions…') : t('刷新版本', 'Refresh versions')}</button></div>
       <div class="core-release-list" role="radiogroup" aria-label="${t('Xray官方版本', 'Official Xray versions')}">${versions.map(version => {
         const release = releases.find(item => item.version === version);
-        const labels = [version === DEFAULT_CORE_VERSION ? t('默认', 'Default') : '', release ? (release.prerelease ? t('预发布', 'Pre-release') : t('正式版', 'Release')) : '', status?.installed.includes(version) ? t('已安装', 'Installed') : ''].filter(Boolean).join(' · ');
-        return `<label class="core-release-row"><span class="core-release-copy"><strong class="core-release-tag ${release?.prerelease ? 'is-prerelease' : ''}">v${esc(version)}</strong><small>${esc(labels)}</small></span><input type="radio" name="core-picker-version" id="core-picker-${esc(version.replaceAll('.', '-'))}" value="${esc(version)}" ${selected === version ? 'checked' : ''} ${busy ? 'disabled' : ''} aria-label="${t('选择v', 'Select v')}${esc(version)}"></label>`;
+        const labels = [version === DEFAULT_CORE_VERSION ? t('默认', 'Default') : '', release ? (release.prerelease ? t('预发布', 'Pre-release') : t('正式版', 'Release')) : '', status?.installed.includes(version) ? t('已安装', 'Installed') : '', coreSupported(version) ? '' : t('不兼容', 'Incompatible')].filter(Boolean).join(' · ');
+        return `<label class="core-release-row"><span class="core-release-copy"><strong class="core-release-tag ${release?.prerelease ? 'is-prerelease' : ''}">v${esc(version)}</strong><small>${esc(labels)}</small></span><input type="radio" name="core-picker-version" id="core-picker-${esc(version.replaceAll('.', '-'))}" value="${esc(version)}" ${selected === version ? 'checked' : ''} ${busy || !coreSupported(version) ? 'disabled' : ''} aria-label="${t('选择v', 'Select v')}${esc(version)}"></label>`;
       }).join('')}</div>
       <label class="form-field core-exact-version"><span id="core-exact-label">${t('其他官方精确版本', 'Other exact official version')}</span><input id="core-exact-version" type="text" maxlength="12" value="${esc(selected)}" aria-labelledby="core-exact-label" aria-describedby="core-exact-hint core-compatibility-warning" autocomplete="off" ${busy ? 'disabled' : ''}></label><p class="form-hint" id="core-exact-hint">${t('列表来自官方最近50项发布记录；也可输入精确版本，安装前再次核实。不自动更新。', 'The list comes from the latest 50 official releases; you can also enter an exact version, which is verified again before install. No automatic updates.')}</p>
       <p class="core-warning" id="core-compatibility-warning" role="status" aria-live="polite" hidden></p>
       ${listError ? `<p class="form-error" role="alert">${esc(listError)}</p>` : ''}${error ? `<p class="form-error" role="alert">${esc(error)}</p>` : ''}
       <p class="core-message" role="status">${esc(message || (checking ? t('正在读取本机核心状态…', 'Reading core status…') : status?.busy ? t('核心版本操作进行中，请稍后刷新。', 'A core version operation is in progress; refresh later.') : ''))}</p>
       </div></section><p class="form-hint">${t('官方来源：XTLS / Xray-core。确认切换后用新版本重启正在运行的 Xray；旧版本保留，可随时切回。', 'Official source: XTLS / Xray-core. Confirming a switch restarts the running Xray with the new version; old versions are kept so you can switch back.')}</p></div>
-      <footer>${status?.previous && status.installed.includes(status.previous) ? `<button class="text-button" id="core-picker-previous" ${checking || busy ? 'disabled' : ''}>${t('切回 v', 'Switch back to v')}${esc(status.previous)}</button>` : ''}<button class="secondary-button" id="core-picker-cancel">${t('关闭', 'Close')}</button><button class="primary-button" id="core-picker-submit" ${!status || checking || busy ? 'disabled' : ''}>${installing ? t('下载校验中…', 'Downloading and verifying…') : `${t('选择 v', 'Select v')}${esc(selected)}`}</button></footer>`;
+      <footer>${status?.previous && status.installed.includes(status.previous) && coreSupported(status.previous) ? `<button class="text-button" id="core-picker-previous" ${checking || busy ? 'disabled' : ''}>${t('切回 v', 'Switch back to v')}${esc(status.previous)}</button>` : ''}<button class="secondary-button" id="core-picker-cancel">${t('关闭', 'Close')}</button><button class="primary-button" id="core-picker-submit" ${!status || checking || busy ? 'disabled' : ''}>${installing ? t('下载校验中…', 'Downloading and verifying…') : `${t('选择 v', 'Select v')}${esc(selected)}`}</button></footer>`;
     picker.querySelectorAll('#core-picker-close, #core-picker-cancel').forEach(button => button.addEventListener('click', () => picker.close()));
     picker.querySelector('#core-picker-refresh')!.addEventListener('click', () => { void loadReleases(); void loadStatus(); });
     picker.querySelectorAll<HTMLInputElement>('[name="core-picker-version"]').forEach(radio => radio.addEventListener('change', () => {
@@ -109,6 +109,7 @@ export function initCore(refreshIcons: () => void, onStatus: (status: CoreStatus
     if (!status || checking || installing || status.busy) return;
     pendingVersion = version.trim().replace(/^v/, '');
     if (!/^[0-9]{1,3}\.[0-9]{1,2}\.[0-9]{1,2}$/.test(pendingVersion)) { error = t('版本格式应为26.7.28或v26.7.28。', 'Version should look like 26.7.28 or v26.7.28.'); paint(); return; }
+    if (!coreSupported(pendingVersion)) { error = coreCompatibilityWarning(pendingVersion); paint(); return; }
     returnFocus = document.activeElement as HTMLElement;
     const release = releases.find(item => item.version === pendingVersion);
     const compatibility = coreCompatibilityWarning(pendingVersion);

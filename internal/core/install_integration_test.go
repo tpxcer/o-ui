@@ -27,7 +27,7 @@ func TestOfficialCoreInstallation(t *testing.T) {
 	defer m.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	for _, version := range []string{"26.3.27", DefaultVersion} {
+	for _, version := range []string{"26.10.31", DefaultVersion} {
 		if err := m.Install(ctx, version); err != nil {
 			t.Fatal("official install failed", version, err)
 		}

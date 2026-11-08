@@ -12,7 +12,7 @@ hooks.deregister();
 const settle = async () => { for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve)); };
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { resolve, promise }; }
 const status = (selected = '26.7.28', busy = false): CoreStatus => ({
-  selected, busy, defaultVersion: '26.7.28', previous: selected === '26.7.28' ? '26.3.27' : '26.7.28', installed: ['26.7.28', '26.3.27'], platform: 'test', runtime: 'not-started',
+  selected, busy, defaultVersion: '26.7.28', previous: selected === '26.7.28' ? '26.6.27' : '26.7.28', installed: ['26.7.28', '26.6.27'], platform: 'test', runtime: 'not-started',
 });
 const releases = () => Response.json({ releases: [{ version: '26.7.28', prerelease: true, url: 'https://github.com/XTLS/Xray-core/releases/tag/v26.7.28' }] });
 class Control {
@@ -86,19 +86,19 @@ test('核心版本读取到外部busy后仍可刷新，完成后恢复选择而�
 test('核心状态慢读取期间不能确认或安装，完成后保留手填候选再显式安装', async () => {
   const pending = deferred<Response>(); let reads = 0, writes = 0;
   await withPage(async (path, options) => {
-    if (options?.method === 'POST') { writes++; assert.deepEqual(JSON.parse(String(options.body)), { version: '26.3.27' }); return Response.json(status('26.3.27')); }
+    if (options?.method === 'POST') { writes++; assert.deepEqual(JSON.parse(String(options.body)), { version: '26.6.27' }); return Response.json(status('26.6.27')); }
     if (path === '/api/core/releases') return releases();
     return ++reads === 2 ? pending.promise : Response.json(status());
   }, async ({ core, picker, confirm, seen }) => {
-    await settle(); core.openPicker(); await settle(); select(picker, '26.3.27');
+    await settle(); core.openPicker(); await settle(); select(picker, '26.6.27');
     assert.equal(control(picker, '#core-picker-submit').disabled, true);
     assert.equal(control(picker, '#core-picker-previous').disabled, true);
     control(picker, '#core-picker-submit').fire(); await settle(); assert.equal(confirm.open, false); assert.equal(writes, 0);
     pending.resolve(Response.json(status())); await settle();
-    assert.equal(control(picker, '#core-exact-version').value, '26.3.27');
+    assert.equal(control(picker, '#core-exact-version').value, '26.6.27');
     control(picker, '#core-picker-submit').fire(); assert.equal(confirm.open, true);
     control(confirm, '#core-install-confirm').fire(); await settle();
-    assert.equal(writes, 1); assert.equal(seen.at(-1)?.selected, '26.3.27');
+    assert.equal(writes, 1); assert.equal(seen.at(-1)?.selected, '26.6.27');
   });
 });
 
@@ -109,34 +109,53 @@ test('核心安装中关闭再打开不启动旧状态查询、不丢进度且�
     if (path === '/api/core/releases') return releases();
     reads++; return Response.json(status());
   }, async ({ core, picker, confirm, seen }) => {
-    await settle(); core.openPicker(); await settle(); select(picker, '26.3.27');
+    await settle(); core.openPicker(); await settle(); select(picker, '26.6.27');
     control(picker, '#core-picker-submit').fire(); control(confirm, '#core-install-confirm').fire(); await settle();
     assert.equal(writes, 1); control(picker, '#core-picker-cancel').fire(); core.openPicker(); await settle();
-    assert.equal(reads, 2); assert.equal(control(picker, '#core-exact-version').value, '26.3.27');
+    assert.equal(reads, 2); assert.equal(control(picker, '#core-exact-version').value, '26.6.27');
     assert.match(picker.innerHTML, /正在下载官方包/);
     control(picker, '#core-picker-submit').fire(); control(confirm, '#core-install-confirm').fire(); await settle(); assert.equal(writes, 1);
-    pending.resolve(Response.json(status('26.3.27'))); await settle();
-    assert.equal(seen.at(-1)?.selected, '26.3.27'); assert.match(picker.innerHTML, /已用新版本重启 Xray/);
+    pending.resolve(Response.json(status('26.6.27'))); await settle();
+    assert.equal(seen.at(-1)?.selected, '26.6.27'); assert.match(picker.innerHTML, /已用新版本重启 Xray/);
   });
 });
 
 test('确认切换后安装成功才应用一次，应用期间不能重复提交，失败如实提示且保留新选择', async () => {
   let fail!: (reason: Error) => void; const applying = new Promise<string>((_, reject) => { fail = reject; }); let writes = 0;
   await withPage(async (path, options) => {
-    if (options?.method === 'POST') { writes++; return Response.json(status('26.3.27')); }
+    if (options?.method === 'POST') { writes++; return Response.json(status('26.6.27')); }
     if (path === '/api/core/releases') return releases();
     return Response.json(status());
   }, async ({ core, picker, confirm, seen, switched }) => {
-    await settle(); core.openPicker(); await settle(); select(picker, '26.3.27');
+    await settle(); core.openPicker(); await settle(); select(picker, '26.6.27');
     control(picker, '#core-picker-submit').fire(); assert.match(confirm.innerHTML, /重启正在运行的 Xray/);
     control(confirm, '#core-install-confirm').fire(); await settle();
-    assert.deepEqual(switched, ['26.3.27']); assert.match(picker.innerHTML, /正在应用/);
+    assert.deepEqual(switched, ['26.6.27']); assert.match(picker.innerHTML, /正在应用/);
     control(picker, '#core-picker-submit').fire(); control(confirm, '#core-install-confirm').fire(); await settle();
     assert.equal(writes, 1); assert.equal(switched.length, 1);
     fail(new Error('新配置启动失败，已恢复原版本和配置')); await settle();
-    assert.match(picker.innerHTML, /已选择 v26\.3\.27，但用新版本重启 Xray 失败：新配置启动失败/);
-    assert.equal(seen.at(-1)?.selected, '26.3.27'); assert.equal(control(picker, '#core-picker-submit').disabled, false);
+    assert.match(picker.innerHTML, /已选择 v26\.6\.27，但用新版本重启 Xray 失败：新配置启动失败/);
+    assert.equal(seen.at(-1)?.selected, '26.6.27'); assert.equal(control(picker, '#core-picker-submit').disabled, false);
   }, () => applying);
+});
+
+test('低于 v26.5.3 的核心标为不兼容，不能选择、确认或切回', async () => {
+  let writes = 0;
+  await withPage(async (path, options) => {
+    if (options?.method === 'POST') { writes++; return Response.json(status()); }
+    if (path === '/api/core/releases') return Response.json({ releases: [{ version: '26.4.25', prerelease: true, url: '' }, { version: '26.5.3', prerelease: true, url: '' }] });
+    return Response.json({ ...status(), previous: '26.3.27', installed: ['26.7.28', '26.3.27'] });
+  }, async ({ core, picker, confirm }) => {
+    await settle(); core.openPicker(); await settle();
+    assert.match(picker.innerHTML, /v26\.4\.25<\/strong><small>预发布 · 不兼容/); assert.match(picker.innerHTML, /v26\.3\.27<\/strong><small>已安装 · 不兼容/);
+    assert.doesNotMatch(picker.innerHTML, /v26\.5\.3<\/strong><small>[^<]*不兼容/);
+    assert.equal(control(picker, '#core-picker-26-4-25').disabled, true); assert.equal(control(picker, '#core-picker-26-5-3').disabled, false);
+    assert.equal(picker.innerHTML.includes('core-picker-previous'), false);
+    select(picker, 'v26.3.27');
+    assert.match(control(picker, '#core-compatibility-warning').textContent, /不支持 o-ui 使用的本机统计套接字.*v26\.5\.3/);
+    control(picker, '#core-picker-submit').fire(); await settle();
+    assert.equal(confirm.open, false); assert.equal(writes, 0); assert.match(picker.innerHTML, /启动即退出，不能选择/);
+  });
 });
 
 test('安装失败时不应用新版本', async () => {
@@ -145,7 +164,7 @@ test('安装失败时不应用新版本', async () => {
     if (path === '/api/core/releases') return releases();
     return Response.json(status());
   }, async ({ core, picker, confirm, switched }) => {
-    await settle(); core.openPicker(); await settle(); select(picker, '26.3.27');
+    await settle(); core.openPicker(); await settle(); select(picker, '26.6.27');
     control(picker, '#core-picker-submit').fire(); control(confirm, '#core-install-confirm').fire(); await settle();
     assert.deepEqual(switched, []); assert.match(picker.innerHTML, /摘要不匹配/);
   });
@@ -155,51 +174,51 @@ test('核心安装结果不确定且服务仍busy时先刷新确认，不能重�
   let reads = 0, writes = 0;
   await withPage(async (path, options) => {
     if (options?.method === 'POST') {
-      return ++writes === 1 ? Response.json({ error: '未确认结果' }, { status: 500 }) : Response.json(status('26.3.27'));
+      return ++writes === 1 ? Response.json({ error: '未确认结果' }, { status: 500 }) : Response.json(status('26.6.27'));
     }
     if (path === '/api/core/releases') return releases();
     return Response.json(status('26.7.28', ++reads === 3));
   }, async ({ core, picker, confirm, seen }) => {
-    await settle(); core.openPicker(); await settle(); select(picker, '26.3.27');
+    await settle(); core.openPicker(); await settle(); select(picker, '26.6.27');
     control(picker, '#core-picker-submit').fire(); control(confirm, '#core-install-confirm').fire(); await settle();
     assert.match(picker.innerHTML, /未确认切换成功/); assert.equal(control(picker, '#core-picker-refresh').disabled, false);
     control(picker, '#core-picker-submit').fire(); control(confirm, '#core-install-confirm').fire(); await settle(); assert.equal(writes, 1);
     control(picker, '#core-picker-refresh').fire(); await settle(); assert.equal(reads, 4);
     control(picker, '#core-picker-submit').fire(); control(confirm, '#core-install-confirm').fire(); await settle();
-    assert.equal(writes, 2); assert.equal(seen.at(-1)?.selected, '26.3.27');
+    assert.equal(writes, 2); assert.equal(seen.at(-1)?.selected, '26.6.27');
   });
 });
 
 test('核心状态读取失败后保留手填候选，禁止安装，显式刷新成功后恢复', async () => {
   const pending = deferred<Response>(); let reads = 0, writes = 0;
   await withPage(async (path, options) => {
-    if (options?.method === 'POST') { writes++; return Response.json(status('26.3.27')); }
+    if (options?.method === 'POST') { writes++; return Response.json(status('26.6.27')); }
     if (path === '/api/core/releases') return releases();
     return ++reads === 2 ? pending.promise : Response.json(status());
   }, async ({ core, picker, confirm, seen }) => {
-    await settle(); core.openPicker(); select(picker, '26.3.27');
+    await settle(); core.openPicker(); select(picker, '26.6.27');
     pending.resolve(Response.json({ error: '读取失败' }, { status: 500 })); await settle();
-    assert.equal(seen.at(-1), null); assert.equal(control(picker, '#core-exact-version').value, '26.3.27');
+    assert.equal(seen.at(-1), null); assert.equal(control(picker, '#core-exact-version').value, '26.6.27');
     assert.equal(control(picker, '#core-picker-submit').disabled, true); assert.equal(control(picker, '#core-picker-refresh').disabled, false);
     control(picker, '#core-picker-submit').fire(); await settle(); assert.equal(confirm.open, false); assert.equal(writes, 0);
     control(picker, '#core-picker-refresh').fire(); await settle();
-    assert.equal(control(picker, '#core-exact-version').value, '26.3.27'); assert.equal(control(picker, '#core-picker-submit').disabled, false);
+    assert.equal(control(picker, '#core-exact-version').value, '26.6.27'); assert.equal(control(picker, '#core-picker-submit').disabled, false);
     control(picker, '#core-picker-submit').fire(); control(confirm, '#core-install-confirm').fire(); await settle();
-    assert.equal(writes, 1); assert.equal(seen.at(-1)?.selected, '26.3.27');
+    assert.equal(writes, 1); assert.equal(seen.at(-1)?.selected, '26.6.27');
   });
 });
 
 test('官方版本列表失败不自动改默认，仍可精确输入，格式错误或取消均不安装', async () => {
   let writes = 0;
   await withPage(async (path, options) => {
-    if (options?.method === 'POST') { writes++; assert.deepEqual(JSON.parse(String(options.body)), { version: '26.3.27' }); return Response.json(status('26.3.27')); }
+    if (options?.method === 'POST') { writes++; assert.deepEqual(JSON.parse(String(options.body)), { version: '26.6.27' }); return Response.json(status('26.6.27')); }
     return path === '/api/core/releases' ? Response.json({ error: '官方列表暂不可用' }, { status: 503 }) : Response.json(status());
   }, async ({ core, picker, confirm }) => {
     await settle(); core.openPicker(); await settle();
     assert.equal(control(picker, '#core-exact-version').value, '26.7.28'); assert.match(picker.innerHTML, /仍可输入精确版本/); assert.equal(writes, 0);
     select(picker, 'latest'); control(picker, '#core-picker-submit').fire();
     assert.equal(confirm.open, false); assert.match(picker.innerHTML, /版本格式/);
-    select(picker, 'v26.3.27'); control(picker, '#core-picker-submit').fire();
+    select(picker, 'v26.6.27'); control(picker, '#core-picker-submit').fire();
     assert.equal(confirm.open, true); confirm.cancel[0].fire(); await settle(); assert.equal(writes, 0);
     control(picker, '#core-picker-submit').fire(); control(confirm, '#core-install-confirm').fire(); await settle(); assert.equal(writes, 1);
   });
@@ -215,8 +234,8 @@ test('初次慢读取期间重复打开不重复查询，也不能未读状态�
     core.openPicker(); core.openPicker(); await settle();
     assert.equal(reads, 1); assert.equal(control(picker, '#core-picker-submit').disabled, true);
     control(picker, '#core-picker-submit').fire(); await settle(); assert.equal(confirm.open, false); assert.equal(writes, 0);
-    pending.resolve(Response.json(status('26.3.27'))); await settle();
-    assert.equal(control(picker, '#core-exact-version').value, '26.3.27'); assert.equal(control(picker, '#core-picker-submit').disabled, false);
+    pending.resolve(Response.json(status('26.6.27'))); await settle();
+    assert.equal(control(picker, '#core-exact-version').value, '26.6.27'); assert.equal(control(picker, '#core-picker-submit').disabled, false);
   });
 });
 

@@ -279,6 +279,9 @@ func (m *Manager) InstallWithSelectionLock(ctx context.Context, input string, se
 	if err != nil {
 		return err
 	}
+	if !Supported(v) {
+		return errUnsupported
+	}
 	if !m.busy.CompareAndSwap(false, true) {
 		return ErrBusy
 	}

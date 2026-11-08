@@ -31,7 +31,7 @@ func TestOfficialStagedInstallation(t *testing.T) {
 	defer m.Close()
 	m.client = &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
 		var selected string
-		for _, version := range []string{"26.3.27", DefaultVersion} {
+		for _, version := range []string{"26.10.31", DefaultVersion} {
 			if r.URL.String() == apiBase+"/releases/tags/v"+version {
 				selected = filepath.Join(input, version+".json")
 			}
@@ -50,7 +50,7 @@ func TestOfficialStagedInstallation(t *testing.T) {
 	})}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	for _, version := range []string{"26.3.27", DefaultVersion} {
+	for _, version := range []string{"26.10.31", DefaultVersion} {
 		if err := m.Install(ctx, version); err != nil {
 			t.Fatal("official staged installation failed", version, err)
 		}
