@@ -57,14 +57,14 @@ class Dialog extends Control {
 }
 function control(dialog: Dialog, selector: string) { const item = dialog.querySelector(selector); assert.ok(item, `缺少控件 ${selector}`); return item; }
 function select(dialog: Dialog, version: string) { const input = control(dialog, '#core-exact-version'); input.value = version; input.fire('input'); }
-async function withPage(fetcher: typeof fetch, run: (page: { core: ReturnType<typeof initCore>; picker: Dialog; confirm: Dialog; seen: (CoreStatus | null)[] }) => Promise<void>) {
-  const dialogs: Dialog[] = [], seen: (CoreStatus | null)[] = [];
+async function withPage(fetcher: typeof fetch, run: (page: { core: ReturnType<typeof initCore>; picker: Dialog; confirm: Dialog; seen: (CoreStatus | null)[]; switched: string[] }) => Promise<void>, afterSwitch: () => Promise<string> = async () => '已用新版本重启 Xray') {
+  const dialogs: Dialog[] = [], seen: (CoreStatus | null)[] = [], switched: string[] = [];
   const values = { fetch: fetcher, location: { protocol: 'http:' }, window: { dispatchEvent() {} }, document: {
     createElement() { const dialog = new Dialog(); dialogs.push(dialog); return dialog; }, body: { append() {} }, activeElement: null,
   } };
   const previous = Object.fromEntries(Object.keys(values).map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
   for (const [key, value] of Object.entries(values)) Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
-  try { const core = initCore(() => {}, value => { seen.push(value); }); await run({ core, picker: dialogs[0], confirm: dialogs[1], seen }); }
+  try { const core = initCore(() => {}, value => { seen.push(value); }, () => { switched.push(seen.at(-1)?.selected ?? ''); return afterSwitch(); }); await run({ core, picker: dialogs[0], confirm: dialogs[1], seen, switched }); }
   finally { for (const [key, descriptor] of Object.entries(previous)) { if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key); } }
 }
 
@@ -116,7 +116,38 @@ test('核心安装中关闭再打开不启动旧状态查询、不丢进度且�
     assert.match(picker.innerHTML, /正在下载官方包/);
     control(picker, '#core-picker-submit').fire(); control(confirm, '#core-install-confirm').fire(); await settle(); assert.equal(writes, 1);
     pending.resolve(Response.json(status('26.3.27'))); await settle();
-    assert.equal(seen.at(-1)?.selected, '26.3.27'); assert.match(picker.innerHTML, /未改变当前运行的核心/);
+    assert.equal(seen.at(-1)?.selected, '26.3.27'); assert.match(picker.innerHTML, /已用新版本重启 Xray/);
+  });
+});
+
+test('确认切换后安装成功才应用一次，应用期间不能重复提交，失败如实提示且保留新选择', async () => {
+  let fail!: (reason: Error) => void; const applying = new Promise<string>((_, reject) => { fail = reject; }); let writes = 0;
+  await withPage(async (path, options) => {
+    if (options?.method === 'POST') { writes++; return Response.json(status('26.3.27')); }
+    if (path === '/api/core/releases') return releases();
+    return Response.json(status());
+  }, async ({ core, picker, confirm, seen, switched }) => {
+    await settle(); core.openPicker(); await settle(); select(picker, '26.3.27');
+    control(picker, '#core-picker-submit').fire(); assert.match(confirm.innerHTML, /重启正在运行的 Xray/);
+    control(confirm, '#core-install-confirm').fire(); await settle();
+    assert.deepEqual(switched, ['26.3.27']); assert.match(picker.innerHTML, /正在应用/);
+    control(picker, '#core-picker-submit').fire(); control(confirm, '#core-install-confirm').fire(); await settle();
+    assert.equal(writes, 1); assert.equal(switched.length, 1);
+    fail(new Error('新配置启动失败，已恢复原版本和配置')); await settle();
+    assert.match(picker.innerHTML, /已选择 v26\.3\.27，但用新版本重启 Xray 失败：新配置启动失败/);
+    assert.equal(seen.at(-1)?.selected, '26.3.27'); assert.equal(control(picker, '#core-picker-submit').disabled, false);
+  }, () => applying);
+});
+
+test('安装失败时不应用新版本', async () => {
+  await withPage(async (path, options) => {
+    if (options?.method === 'POST') return Response.json({ error: '摘要不匹配' }, { status: 422 });
+    if (path === '/api/core/releases') return releases();
+    return Response.json(status());
+  }, async ({ core, picker, confirm, switched }) => {
+    await settle(); core.openPicker(); await settle(); select(picker, '26.3.27');
+    control(picker, '#core-picker-submit').fire(); control(confirm, '#core-install-confirm').fire(); await settle();
+    assert.deepEqual(switched, []); assert.match(picker.innerHTML, /摘要不匹配/);
   });
 });
 

@@ -358,6 +358,13 @@ const core = initCore(refreshIcons, status => {
   const button = document.querySelector<HTMLElement>('[data-action="core-version"]');
   const hint = status ? `${t('切换 Xray 版本，当前 v', 'Switch Xray version, current v')}${status.selected}` : t('Xray 版本管理', 'Xray version management');
   if (button) { button.title = hint; button.setAttribute('aria-label', hint); }
+}, async () => {
+  // 确认切换版本即按已保存配置用新版本重启（与首页“重启”同一接口，预检失败保留原核心）；已停止时不擅自启动代理。
+  if (!latestRuntime?.running) return t('已选择新版本。Xray 当前未运行，下次启动时使用。', 'New version selected. Xray is not running; it will be used on the next start.');
+  try {
+    const status = await applySavedConfig();
+    return status.running ? `${t('已用新版本重启 Xray：', 'Xray restarted with the new version: ')}${runtimeStatusText(status)}` : t('没有已启用的入站，Xray 保持停止。', 'No enabled inbounds; Xray stays stopped.');
+  } finally { void runtime.refresh(); }
 });
 xraySettings = initXraySettings(document.querySelector('#core-view')!, refreshIcons, authenticated, () => { void quickRuntime('restart'); }, () => { void runtime.refresh(); });
 const panelSettings = initPanelSettings(document.querySelector('#panel-view')!, authenticated);

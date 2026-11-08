@@ -15,7 +15,8 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   return api<T>(`core/${path}`, options);
 }
 
-export function initCore(refreshIcons: () => void, onStatus: (status: CoreStatus | null) => void): { openPicker: () => void } {
+// afterSwitch在版本安装并选择成功后执行（用户2026-11-08要求确认后直接重启生效），返回给用户看的结果。
+export function initCore(refreshIcons: () => void, onStatus: (status: CoreStatus | null) => void, afterSwitch: () => Promise<string>): { openPicker: () => void } {
   let status: CoreStatus | null = null;
   let releases: CoreRelease[] = [];
   let selected = DEFAULT_CORE_VERSION;
@@ -61,7 +62,7 @@ export function initCore(refreshIcons: () => void, onStatus: (status: CoreStatus
       <p class="core-warning" id="core-compatibility-warning" role="status" aria-live="polite" hidden></p>
       ${listError ? `<p class="form-error" role="alert">${esc(listError)}</p>` : ''}${error ? `<p class="form-error" role="alert">${esc(error)}</p>` : ''}
       <p class="core-message" role="status">${esc(message || (checking ? t('正在读取本机核心状态…', 'Reading core status…') : status?.busy ? t('核心版本操作进行中，请稍后刷新。', 'A core version operation is in progress; refresh later.') : ''))}</p>
-      </div></section><p class="form-hint">${t('官方来源：XTLS / Xray-core。只管理本机独立核心包，不启动代理、不更新 VPS，保留旧版本。', 'Official source: XTLS / Xray-core. Only o-ui\'s own core packages are managed; no proxy is started and old versions are kept.')}</p></div>
+      </div></section><p class="form-hint">${t('官方来源：XTLS / Xray-core。确认切换后用新版本重启正在运行的 Xray；旧版本保留，可随时切回。', 'Official source: XTLS / Xray-core. Confirming a switch restarts the running Xray with the new version; old versions are kept so you can switch back.')}</p></div>
       <footer>${status?.previous && status.installed.includes(status.previous) ? `<button class="text-button" id="core-picker-previous" ${checking || busy ? 'disabled' : ''}>${t('切回 v', 'Switch back to v')}${esc(status.previous)}</button>` : ''}<button class="secondary-button" id="core-picker-cancel">${t('关闭', 'Close')}</button><button class="primary-button" id="core-picker-submit" ${!status || checking || busy ? 'disabled' : ''}>${installing ? t('下载校验中…', 'Downloading and verifying…') : `${t('选择 v', 'Select v')}${esc(selected)}`}</button></footer>`;
     picker.querySelectorAll('#core-picker-close, #core-picker-cancel').forEach(button => button.addEventListener('click', () => picker.close()));
     picker.querySelector('#core-picker-refresh')!.addEventListener('click', () => { void loadReleases(); void loadStatus(); });
@@ -111,7 +112,7 @@ export function initCore(refreshIcons: () => void, onStatus: (status: CoreStatus
     returnFocus = document.activeElement as HTMLElement;
     const release = releases.find(item => item.version === pendingVersion);
     const compatibility = coreCompatibilityWarning(pendingVersion);
-    modal.innerHTML = `<div class="dialog-heading"><h2 id="core-confirm-title">${t('确认选择 v', 'Confirm selecting v')}${esc(pendingVersion)}</h2><button class="icon-button" data-cancel aria-label="${t('关闭确认', 'Close confirmation')}">×</button></div><div class="dialog-body"><p>${t('将从 Xray 官方获取匹配本机的版本，校验后写入本项目独立目录并保存选择。已安装版本可直接复用。', 'The matching official Xray package will be downloaded, verified, written to o-ui\'s own directory and selected. Installed versions are reused directly.')}</p><p>${release?.prerelease ? t('此版本被官方标为预发布版。', 'This version is marked as a pre-release by the Xray project. ') : ''}${t('不会启动代理，不会更新 VPS，也不会删除旧版本。', 'No proxy is started and old versions are not deleted.')}</p>${compatibility ? `<p class="core-warning" role="note">${esc(compatibility)}</p>` : ''}</div><footer><button class="secondary-button" data-cancel>${t('取消', 'Cancel')}</button><button class="primary-button" id="core-install-confirm">${t('确认安装并选择', 'Confirm install and select')}</button></footer>`;
+    modal.innerHTML = `<div class="dialog-heading"><h2 id="core-confirm-title">${t('确认选择 v', 'Confirm selecting v')}${esc(pendingVersion)}</h2><button class="icon-button" data-cancel aria-label="${t('关闭确认', 'Close confirmation')}">×</button></div><div class="dialog-body"><p>${t('将从 Xray 官方获取匹配本机的版本，校验后写入本项目独立目录并保存选择。已安装版本可直接复用。', 'The matching official Xray package will be downloaded, verified, written to o-ui\'s own directory and selected. Installed versions are reused directly.')}</p><p>${release?.prerelease ? t('此版本被官方标为预发布版。', 'This version is marked as a pre-release by the Xray project. ') : ''}${t('确认后按已保存配置用此版本重启正在运行的 Xray（预检通过才切换），现有连接会短暂中断；Xray 已停止时只保存选择。不会删除旧版本。', 'After confirming, the running Xray restarts with this version using the saved configuration (only if the preflight passes); existing connections drop briefly. If Xray is stopped, only the selection is saved. Old versions are not deleted.')}</p>${compatibility ? `<p class="core-warning" role="note">${esc(compatibility)}</p>` : ''}</div><footer><button class="secondary-button" data-cancel>${t('取消', 'Cancel')}</button><button class="primary-button" id="core-install-confirm">${t('确认切换', 'Confirm switch')}</button></footer>`;
     modal.querySelectorAll('[data-cancel]').forEach(button => button.addEventListener('click', () => modal.close()));
     modal.querySelector('#core-install-confirm')!.addEventListener('click', () => { modal.close(); void install(pendingVersion); });
     modal.showModal();
@@ -123,7 +124,9 @@ export function initCore(refreshIcons: () => void, onStatus: (status: CoreStatus
     try {
       status = await request<CoreStatus>('install', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ version }) });
       selected = status.selected; onStatus(status);
-      message = `${t('已安装并选择 v', 'Installed and selected v')}${status.selected}${t('。未改变当前运行的核心，需另行应用已保存配置。', '. The running core is unchanged; apply the saved configuration separately.')}`;
+      message = `${t('已安装并选择 v', 'Installed and selected v')}${status.selected}${t('，正在应用…', ', applying…')}`; paint();
+      try { message = await afterSwitch(); }
+      catch (reason) { message = ''; error = `${t('已选择 v', 'Selected v')}${status.selected}${t('，但用新版本重启 Xray 失败：', ', but restarting Xray with it failed: ')}${(reason as Error).message}`; }
     } catch (reason) {
       error = (reason as Error).message; message = t('未确认切换成功，请刷新本机状态。', 'The switch could not be confirmed; refresh the status.');
       try { status = await request<CoreStatus>('status'); onStatus(status); } catch { status = null; onStatus(null); }
