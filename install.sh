@@ -465,6 +465,17 @@ json_field() {
   printf '%s' "$1" | sed -n -e "s/.*\"$2\":\"\([^\"]*\)\".*/\1/p" -e "s/.*\"$2\":\(true\)[,}].*/\1/p" -e "s/.*\"$2\":\(false\)[,}].*/\1/p" | head -n 1
 }
 
+# 网页可修改面板端口，安装配置里的OUI_PORT不会随之更新；改写面板访问设置前先以面板自身保存的监听端口为准，避免退回旧端口。
+panel_sync_port() {
+  local json listen port
+  json=$(panel_show 2>/dev/null) || return 0
+  listen=$(json_field "$json" listen)
+  port=${listen##*:}
+  case $port in ''|*[!0-9]*) return 0 ;; esac
+  [ "$port" -ge 1024 ] && [ "$port" -le 65535 ] || return 0
+  OUI_PORT=$port
+}
+
 panel_url() {
   local path=${OUI_PATH:-/}
   if [ "$OUI_MODE" = local ]; then
@@ -1744,6 +1755,7 @@ cmd_cert() {
   if [ -n "$CERT_FORCE" ]; then
     ask_yes "强制重新申请会消耗CA签发配额，频繁执行可能被限流；成功后自动写入面板、启用HTTPS并重启。继续？" "Forced reissue consumes CA issuance quota and may hit rate limits; success automatically installs the certificate, enables HTTPS and restarts the panel. Continue?" n || return 0
   fi
+  panel_sync_port
   local old_mode=$OUI_MODE old_host=$OUI_HOST old_challenge=$OUI_CHALLENGE old_renew=$OUI_RENEW old_http_service=$OUI_HTTP_SERVICE
   ask_access
   if [ "$old_mode" = acme ] && [ "$old_host" = "$OUI_HOST" ] && [ -z "$CERT_FORCE" ] &&
@@ -1812,16 +1824,18 @@ cmd_status() {
 cmd_port() {
   require_installed
   stdin_check
+  panel_sync_port
   local old=$OUI_PORT
   if [ -n "${1-}" ]; then
     case $1 in *[!0-9]*) die "端口须为1024–65535的数字" "port must be a number 1024–65535" ;; esac
     [ "$1" -ge 1024 ] && [ "$1" -le 65535 ] || die "端口须为1024–65535的数字" "port must be a number 1024–65535"
+    [ "$1" != "$old" ] || { conf_save; info "端口未变化。" "Port unchanged."; return 0; }
     ! port_in_use "$1" || die "端口$1已被占用" "port $1 is in use"
     OUI_PORT=$1
   else
     ask_port
   fi
-  [ "$OUI_PORT" != "$old" ] || { info "端口未变化。" "Port unchanged."; return 0; }
+  [ "$OUI_PORT" != "$old" ] || { conf_save; info "端口未变化。" "Port unchanged."; return 0; }
   systemctl stop o-ui
   if [ "$OUI_MODE" = local ]; then
     panel_local_only >/dev/null || { OUI_PORT=$old; systemctl start o-ui || true; die "修改端口失败，原设置保持" "changing the port failed; previous settings kept"; }

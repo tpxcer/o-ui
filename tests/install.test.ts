@@ -658,6 +658,24 @@ test('HTTP-01续期：未到期不临停，到期/失败均恢复，监听者改
   assert.doesNotMatch((await box.log('calls.log')).slice(before), /systemctl (stop|start) (caddy|nginx)/);
 });
 
+// 网页可改面板端口，但安装配置里仍是安装时的端口；改证书或改端口时须以面板实际端口为准（2026-11-08 美国 VPS 运行 o-ui cert 后面板从 1266 退回 1255）。
+test('网页改过面板端口后，证书与改端口命令以面板实际端口为准，不退回安装时的端口', async () => {
+  const box = await sandbox();
+  assert.equal(box.run(['install', '--package', box.pkg], [...start(), ...acme(), 'n']).status, 0);
+  await writeFile(join(box.state, 'https-enabled'), '0.0.0.0:34567 https://example.com:34567');
+  assert.equal((await conf(box)).OUI_PORT, '23456');
+  const same = box.run(['port', '34567']);
+  assert.equal(same.status, 0, same.out);
+  assert.match(same.out, /端口未变化/);
+  assert.equal((await conf(box)).OUI_PORT, '34567', '同步后的实际端口写回安装配置');
+  await writeFile(join(box.root, 'etc/o-ui/o-ui.conf'), (await box.read('etc/o-ui/o-ui.conf')).replace('OUI_PORT=34567', 'OUI_PORT=23456'));
+  const dns = box.run(['cert'], ['example.com', '2', 'token-x', '', '', 'y']);
+  assert.equal(dns.status, 0, dns.out);
+  assert.equal(await readFile(join(box.state, 'https-enabled'), 'utf8'), '0.0.0.0:34567 https://example.com:34567');
+  assert.equal((await conf(box)).OUI_PORT, '34567');
+  assert.match(dns.out, /https:\/\/example\.com:34567\//);
+});
+
 test('HTTP-01重新配置时更换方式/授权须确认强制签发，改DNS后不再临停网站', async () => {
   const box = await sandbox();
   assert.equal(box.run(['install', '--package', box.pkg], [...start(), ...acme(), 'n']).status, 0);
