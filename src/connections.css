@@ -27,7 +27,7 @@
 .connection-card-heading h3 { margin: 0; min-width: 0; font-size: 14px; font-weight: 600; color: var(--green); overflow-wrap: anywhere; }
 .connection-card-actions { display: flex; gap: 4px; flex-shrink: 0; }
 .connection-qr { margin: 16px 0 0; text-align: center; }
-.connection-qr img { display: block; width: 336px; max-width: 100%; height: auto; margin: 0 auto; background: #fff; border-radius: 8px; image-rendering: pixelated; }
+.connection-qr img { display: block; width: 256px; max-width: 100%; height: auto; margin: 0 auto; background: #fff; border-radius: 8px; image-rendering: pixelated; }
 .connection-dialog .is-copied { color: var(--green); background: var(--raised); }
 .connection-details { margin-top: 12px; color: var(--muted); font-size: 13px; }
 .connection-details .info-tip-text { top: auto; bottom: calc(100% + 6px); max-height: min(360px, 50dvh); overflow-y: auto; }

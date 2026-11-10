@@ -345,7 +345,11 @@ const runtime = initRuntime((status, at) => {
   xraySettings?.setRuntime(status, at);
   management?.setRuntime(status, at);
   const label = document.querySelector('#core-home-status');
-  if (label) label.textContent = runtimeStatusText(status);
+  if (label) {
+    const text = runtimeStatusText(status), tone = `core-stopped status-badge is-${status?.running ? 'good' : status?.unexpectedExit ? 'bad' : 'muted'}`;
+    // 每5秒刷新一次状态，内容没变就不重写，避免打扰读屏。
+    if (label.textContent !== text || label.className !== tone) { label.className = tone; label.replaceChildren(document.createElement('b'), text); }
+  }
 });
 const backup = initBackup(refreshIcons);
 const logs = initLogs(refreshIcons);

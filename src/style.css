@@ -224,7 +224,11 @@ main { margin-left: var(--sidebar-width); padding: 20px 28px 40px; outline: none
 .action:hover svg { color: var(--blue); }
 .action svg { width: 16px; height: 16px; }
 /* Xray与o-ui两张卡的按钮统一为图标在上、文字在下。 */
-.xray-card .action, .panel-card .action { flex-direction: column; gap: 6px; font-size: 13px; }
+.xray-card .action, .panel-card .action { flex-direction: column; gap: 6px; font-size: 13px; min-height: 62px; border: 1px solid var(--border); background: color-mix(in srgb, var(--raised) 45%, transparent); transition: background-color .15s, border-color .15s, color .15s; }
+.xray-card .action:hover, .panel-card .action:hover { border-color: var(--border-strong); background: var(--raised); }
+.xray-card .actions, .panel-card .actions { padding: 12px; gap: 8px; }
+.xray-card .action svg, .panel-card .action svg { width: 18px; height: 18px; color: color-mix(in srgb, var(--blue) 70%, var(--muted)); }
+.action.is-update svg { color: var(--orange); }
 /* 发现新版本时“检测更新”变为橙色“立即升级”（参照OUI） */
 .action.is-update, .action.is-update:hover { color: var(--orange); font-weight: 600; }
 .action.is-update:disabled { cursor: wait; opacity: .8; }

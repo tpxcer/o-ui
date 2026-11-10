@@ -27,7 +27,7 @@ export function coreReadings(m: CoreMetrics | null, now = Date.now()): { values:
 
 // 速度图纵轴上限取整：四等分后每格为1、2、2.5或5乘10的幂（如1 MB/s、750 KB/s、500 KB/s、250 KB/s），最低1 KB/s。
 export function chartScale(peak: number): number {
-  const step = Math.max(peak, 1000) / 4, power = 10 ** Math.floor(Math.log10(step));
+  const step = Math.max(peak, 10_000) / 4, power = 10 ** Math.floor(Math.log10(step));
   return [1, 2, 2.5, 5, 10].find(n => n * power >= step)! * power * 4;
 }
 // 后端数值可能是十进制字符串；容量（内存、交换、磁盘）用默认1024，网卡流量与速率传1000。

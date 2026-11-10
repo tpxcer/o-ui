@@ -104,3 +104,14 @@
   .rule-label { justify-self: start; text-align: left; }
   .rule-row.is-top > .rule-label { min-height: 0; }
 }
+/* 设置页分组不再是“卡片里的小卡片”：改为通栏分组（标题带 + 内容），只保留外层一个边框。 */
+.xray-settings-card { --settings-pad: 20px; }
+.xray-settings-card:has(:is(.setting-section, .xray-setting-section):last-child) { padding-bottom: 4px; }
+.xray-settings-card :is(.setting-section, .xray-setting-section) { border: 0; border-radius: 0; background: transparent; margin: 0 calc(-1 * var(--settings-pad)); }
+.xray-settings-card :is(.setting-section, .xray-setting-section) > summary { padding-inline: var(--settings-pad); background: color-mix(in srgb, var(--raised) 45%, transparent); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.xray-settings-card :is(.setting-section, .xray-setting-section) + :is(.setting-section, .xray-setting-section) > summary { margin-top: -1px; }
+.xray-settings-card :is(.setting-section, .xray-setting-section):not([open]):last-child > summary { border-bottom-color: transparent; }
+.xray-settings-card .xray-setting-content { padding-inline: var(--settings-pad); }
+/* 标签页下面紧跟分组时不留空隙，分组标题带直接贴着标签栏的分隔线。 */
+.xray-settings-card .xray-settings-tabs:has(+ * > :is(.setting-section, .xray-setting-section):first-child, + * > * > :is(.setting-section, .xray-setting-section):first-child) { margin-bottom: -1px; }
+@media (max-width: 700px) { .xray-settings-card { --settings-pad: 16px; } .xray-settings-card:has(:is(.setting-section, .xray-setting-section):last-child) { padding-bottom: 4px; } }
