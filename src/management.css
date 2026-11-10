@@ -92,11 +92,9 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent-bg); wi
 .firewall-maintenance button { flex-shrink: 0; }
 @media (max-width: 480px) { .firewall-maintenance li { align-items: flex-start; flex-direction: column; } }
 .data-table.clients-table td .date-value, .data-table.clients-table td .text-button { white-space: normal; }
-.inbounds-table th:nth-child(6) { width: 110px; }
-/* 状态列放得下“已启用”和防火墙状态胶囊加重试按钮，不折成两行。 */
-.inbounds-table th:nth-child(4) { width: 19%; }
+.inbounds-table th:nth-child(5) { width: 110px; }
 /* 类型列放得下“XHTTP-Reality”标签；操作列只有三个图标，不用留那么宽。 */
-.inbounds-table th.select-cell + th { width: 24%; }
+.inbounds-table th.select-cell + th { width: 30%; }
 .inbounds-table th:nth-child(3) { width: 16%; }
 .inbounds-table th:last-child { width: 132px; }
 .select-cell input { margin: 0; vertical-align: middle; }
@@ -108,7 +106,10 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent-bg); wi
   18% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--green) 8%, transparent); }
   28% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--green) 20%, transparent); }
 }
-@media (prefers-reduced-motion: reduce) { .status-badge.is-online b { animation: none; } }
+.inbound-dot { display: inline-block; width: 8px; height: 8px; margin-right: 8px; border-radius: 50%; vertical-align: 1px; background: var(--green); }
+.inbound-dot.is-off { background: var(--muted); opacity: .6; }
+.inbound-dot.is-online { animation: online-heartbeat 2s ease-out infinite; }
+@media (prefers-reduced-motion: reduce) { .status-badge.is-online b, .inbound-dot.is-online { animation: none; } }
 .table-secondary.speed-pair { display: flex; flex-wrap: wrap; gap: 2px 10px; margin-top: 6px; font-variant-numeric: tabular-nums; }
 .speed-pair > span { white-space: nowrap; }
 .speed-up { color: var(--blue); }
@@ -268,8 +269,6 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent-bg); wi
   .clients-table.with-notify td[data-client-notify] .icon-button { margin-left: -6px; }
   .clients-table.with-notify td[data-client-notify]::before { order: 1; }
   .clients-table.with-notify td:last-child { grid-column: 2; }
-  /* 入站卡片右列略宽，手机上放得下防火墙状态胶囊和重试按钮。 */
-  .inbounds-table tr { grid-template-columns: minmax(0, 4fr) minmax(0, 5fr); }
 }
 @media (max-width: 850px) {
   .data-table tbody { grid-template-columns: 1fr; }

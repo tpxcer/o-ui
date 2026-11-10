@@ -27,7 +27,6 @@ const input = (label: string, name: string, value: string | number, attrs = '', 
   ? `<div class="form-field info-tip-host"><span class="field-label"><label for="field-${name}">${label}</label>${infoTip(hint)}</span><input id="field-${name}" name="${name}" value="${esc(String(value))}" ${attrs}></div>`
   : `<label class="form-field">${label}<input name="${name}" value="${esc(String(value))}" ${attrs}></label>`;
 const check = (label: string, name: string, checked: boolean) => `<label class="check-field"><input type="checkbox" name="${name}"${checked ? ' checked' : ''}><span>${label}</span></label>`;
-const badge = (text: string, ok: boolean) => `<span class="status-badge ${ok ? 'is-good' : 'is-muted'}"><b></b>${esc(text)}</span>`;
 const trafficResetFields = (value: TrafficReset = 'never') => `<div class="form-field info-tip-host"><span class="field-label"><span id="traffic-reset-label">${t('流量统计重置周期', 'Traffic statistics reset period')}</span>${infoTip(t('仅作用于本节点及其客户端的展示统计。按服务器时间每日零点、每周一零点、每月1日零点重置，不影响累计限额。', 'Applies to display statistics for this node and its clients only. Resets at server midnight, Monday midnight or the first day of each month; lifetime quotas are unchanged.'))}</span><select name="trafficReset" aria-labelledby="traffic-reset-label">${([['never', t('不重置', 'Never')], ['daily', t('每日', 'Daily')], ['weekly', t('每周', 'Weekly')], ['monthly', t('每月', 'Monthly')]]).map(([key, label]) => `<option value="${key}"${value === key ? ' selected' : ''}>${label}</option>`).join('')}</select></div>`;
 const readTrafficReset = (data: FormData): TrafficReset => {
   const value = String(data.get('trafficReset') ?? 'never');
@@ -570,6 +569,12 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
     const at = traffic?.lastOnline?.[item.id];
     return clientStatus(viewClient(item), clientInbounds(state, item)) === t('可用', 'Available') && persistent && !!at && !!traffic?.collecting && !trafficError && !!traffic.sampledAt && Date.now() - Date.parse(traffic.sampledAt) <= 10_000 && Date.now() - Date.parse(at) <= onlineWindowMs;
   };
+  // 入站状态点：停用灰色，启用绿色；有关联客户端在线时加心跳动画。
+  const inboundDot = (item: Inbound) => {
+    const online = item.enabled && state.clients.some(client => clientInboundIds(client).includes(item.id) && isOnline(client));
+    const text = !item.enabled ? t('已停用', 'Disabled') : online ? t('已启用，有客户端在线', 'Enabled, clients online') : t('已启用', 'Enabled');
+    return `<span class="inbound-dot ${!item.enabled ? 'is-off' : online ? 'is-online' : 'is-on'}" data-inbound-dot="${esc(item.id)}" role="img" title="${text}" aria-label="${text}"></span>`;
+  };
   const trafficCell = (item: Client) => {
     const trafficPeriod = clientInboundIds(item).length === 1 ? inboundTrafficPeriod(clientInbounds(state, item)[0]) : 'total';
     const bytes = persistent ? usedBytes(traffic, item.id, trafficPeriod) : BigInt(Math.round(item.usedGB * 1e9));
@@ -620,12 +625,11 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
     for (const id of [...selected]) if (!visible.has(id)) selected.delete(id);
     const count = visible.size;
     root.querySelector('#result-count')!.textContent = `${t('显示', 'Showing')} ${count} / ${page === 'inbounds' ? state.inbounds.length : state.clients.length} ${t('条', '')}`;
-    const headers = page === 'inbounds' ? [t('入站名称', 'Inbound name'), t('类型 / 端口', 'Type / port'), t('状态', 'Status'), t('客户端', 'Clients'), t('总流量', 'Total traffic'), t('操作', 'Actions')]
+    const headers = page === 'inbounds' ? [t('入站名称', 'Inbound name'), t('类型 / 端口', 'Type / port'), t('客户端', 'Clients'), t('总流量', 'Total traffic'), t('操作', 'Actions')]
       : [t('客户端 / 入站', 'Client / inbound'), t('最近上线', 'Last online'), t('流量', 'Traffic'), t('IP / 订阅', 'IP / subscription'), t('到期', 'Expiry'), ...(persistent ? [t('TG 上线通知', 'TG online alerts')] : []), t('操作', 'Actions')];
     root.querySelector('#list-content')!.innerHTML = count ? `<table class="data-table ${page}-table${page === 'clients' && persistent ? ' with-notify' : ''}"><caption class="sr-only">${page === 'inbounds' ? persistent ? t('入站列表', 'Inbounds') : t('入站演示列表', 'Demo inbounds') : persistent ? t('客户端列表', 'Clients') : t('客户端演示列表', 'Demo clients')}</caption><thead><tr><th scope="col" class="select-cell"><input type="checkbox" data-select-all aria-label="${t('全选', 'Select all')}"></th>${headers.map(label => `<th scope="col">${label}</th>`).join('')}</tr></thead><tbody>${page === 'inbounds' ? inboundRows.map(item => `<tr>${selectCell(item)}
-      <td data-label="${t('入站名称', 'Inbound name')}"><strong class="record-name">${esc(item.name)}</strong><small class="table-secondary">${presets[item.preset].protocol} · ${presets[item.preset].security}</small></td>
+      <td data-label="${t('入站名称', 'Inbound name')}"><strong class="record-name">${inboundDot(item)}${esc(item.name)}</strong><small class="table-secondary">${presets[item.preset].protocol} · ${presets[item.preset].security}</small>${persistent ? `<div data-inbound-firewall="${esc(item.id)}">${firewallCell(item)}</div>` : ''}</td>
       <td data-label="${t('类型 / 端口', 'Type / port')}"><span class="tag preset-${item.preset}">${presets[item.preset].label}</span><small class="table-secondary">${presets[item.preset].transport} / ${item.port}${item.portHopping ? ` · ${t('跳跃', 'hop')} ${item.portHopping}` : ''}</small></td>
-      <td data-label="${t('状态', 'Status')}">${badge(item.enabled ? t('已启用', 'Enabled') : t('已停用', 'Disabled'), item.enabled)}${persistent ? `<div data-inbound-firewall="${esc(item.id)}">${firewallCell(item)}</div>` : ''}</td>
       <td data-label="${t('客户端', 'Clients')}"><button class="text-button" data-op="clients" data-id="${esc(item.id)}">${state.clients.filter(client => clientInboundIds(client).includes(item.id)).length} ${t('个客户端', 'clients')}</button></td>
       <td data-label="${t('总流量', 'Total traffic')}" data-inbound-traffic="${esc(item.id)}">${inboundTraffic(item.id)}</td><td data-label="${t('操作', 'Actions')}">${rowActions(item, 'inbound')}</td></tr>`).join('') : clientRows.map(item => {
         const linked = clientInbounds(state, item);
@@ -774,9 +778,9 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
     const key = `${inbound.port}/${inbound.preset === 'hy2' ? 'udp' : 'tcp'}`;
     const status = firewall?.workspaceRevision === revision ? firewall.endpoints[key] : undefined;
     const hint = status ? `${status.message} · ${status.checkedAt}` : t('尚无放行记录；不代表公网可达。', 'No firewall record; public reachability is unverified.');
-    // 放行成功是常态，不再每行重复显示；只给读屏留一句，失败和未确认照常提示并可重试。
-    if (status?.state === 'allowed') return `<small class="sr-only">${esc(firewallStatusText(status))}</small>`;
-    return `<span class="status-badge ${status?.state === 'failed' ? 'is-bad' : 'is-muted'}" title="${esc(hint)}"><b></b>${esc(firewallStatusText(status))}</span><button class="icon-button" data-firewall-retry="${esc(inbound.id)}" title="${t('重试放行防火墙', 'Retry firewall update')}" aria-label="${t('重试放行防火墙', 'Retry firewall update')}" ${firewallBusy || loading || submitting ? 'disabled' : ''}>${icon('refresh-cw')}</button>`;
+    // 只有放行失败才在列表里提示并可重试；成功和未确认只给读屏留一句。
+    if (status?.state !== 'failed') return `<small class="sr-only">${esc(firewallStatusText(status))}</small>`;
+    return `<span class="status-badge is-bad" title="${esc(hint)}"><b></b>${esc(firewallStatusText(status))}</span><button class="icon-button" data-firewall-retry="${esc(inbound.id)}" title="${t('重试放行防火墙', 'Retry firewall update')}" aria-label="${t('重试放行防火墙', 'Retry firewall update')}" ${firewallBusy || loading || submitting ? 'disabled' : ''}>${icon('refresh-cw')}</button>`;
   }
   function renderFirewall(): void {
     root.querySelectorAll<HTMLElement>('[data-inbound-firewall]').forEach(cell => {
@@ -873,6 +877,7 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
       });
       refreshIcons();
       root.querySelectorAll<HTMLElement>('[data-inbound-traffic]').forEach(cell => { cell.innerHTML = inboundTraffic(cell.dataset.inboundTraffic!); });
+      root.querySelectorAll<HTMLElement>('[data-inbound-dot]').forEach(dot => { const item = state.inbounds.find(inbound => inbound.id === dot.dataset.inboundDot); if (item) dot.outerHTML = inboundDot(item); });
     }
   }
   if (persistent) {
