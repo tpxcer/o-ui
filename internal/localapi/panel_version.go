@@ -87,9 +87,11 @@ type releaseNote struct {
 
 // releaseHighlights取发布说明开头的要点（“- ”开头，到第一个空行为止），即本次更新的主要内容；最多10条。
 // 每条按“中文 / English”拆开：取其后不再出现汉字的那个“ / ”，中文部分里的“Chrome / Edge”之类不会被拆错。
+// 也支持分两行写的“- 中文：…”与紧随其后的“- English: …”，合成一条。
 func releaseHighlights(body string) []releaseNote {
 	notes := []releaseNote{}
 	plain := strings.NewReplacer("**", "", "`", "")
+	pairZh := false
 	for _, line := range strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n") {
 		text, ok := strings.CutPrefix(strings.TrimSpace(line), "- ")
 		if !ok {
@@ -99,6 +101,15 @@ func releaseHighlights(body string) []releaseNote {
 			continue
 		}
 		text = plain.Replace(strings.TrimSpace(text))
+		if en, ok := cutAnyPrefix(text, "English:", "English："); ok && pairZh {
+			notes[len(notes)-1].En = clip(en, 300)
+			pairZh = false
+			continue
+		}
+		zh, pair := cutAnyPrefix(text, "中文：", "中文:")
+		if pairZh = pair; pair {
+			text = zh
+		}
 		note := releaseNote{Zh: text, En: text}
 		for from := 0; ; {
 			at := strings.Index(text[from:], " / ")
@@ -118,6 +129,15 @@ func releaseHighlights(body string) []releaseNote {
 		}
 	}
 	return notes
+}
+
+func cutAnyPrefix(s string, prefixes ...string) (string, bool) {
+	for _, prefix := range prefixes {
+		if rest, ok := strings.CutPrefix(s, prefix); ok {
+			return strings.TrimSpace(rest), true
+		}
+	}
+	return s, false
 }
 
 func hasHan(s string) bool {

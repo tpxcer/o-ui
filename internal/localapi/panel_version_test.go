@@ -108,6 +108,10 @@ func TestReleaseHighlights(t *testing.T) {
 	if notes := releaseHighlights(many); len(notes) != 10 {
 		t.Fatal("at most 10 highlights", len(notes))
 	}
+	paired := releaseHighlights("- 中文：启停按钮跟随状态。\n- English: The on/off button follows its state.\n- 中文：只有中文\n- 另一条 / Another\n")
+	if fmt.Sprint(paired) != fmt.Sprint([]releaseNote{{Zh: "启停按钮跟随状态。", En: "The on/off button follows its state."}, {Zh: "只有中文", En: "只有中文"}, {Zh: "另一条", En: "Another"}}) {
+		t.Fatalf("paired lines %q", paired)
+	}
 	if notes := releaseHighlights("Plain text without a list"); len(notes) != 0 {
 		t.Fatal("no list means no highlights", notes)
 	}
