@@ -16,7 +16,10 @@ import (
 	"unicode"
 )
 
-const releaseAPI = "https://api.github.com/repos/tpxcer/o-ui/releases/latest"
+const (
+	releaseAPI    = "https://api.github.com/repos/tpxcer/o-ui/releases/latest"
+	releaseTagAPI = "https://api.github.com/repos/tpxcer/o-ui/releases/tags/"
+)
 
 // 版本号按发布日期（用户2026-10-21决定）：当天第一个为2026-10-21，第二个起为2026-10-21-v1、-v2……；
 // 兼容此前的vX.Y.Z（含预发布后缀），任何日期版本都比旧版本新。
@@ -66,6 +69,9 @@ type panelUpdates struct {
 	checked time.Time
 	fetch   func(context.Context) (latestRelease, error)
 	now     func() time.Time
+	// 当前版本的发布说明：点“更新说明”时才查GitHub，成功后一直复用（同一版本的说明不再变）。
+	fetchTag    func(context.Context, string) (latestRelease, error)
+	currentNote *latestRelease
 }
 
 type latestRelease struct {
@@ -203,8 +209,17 @@ func newerVersion(latest, current string) bool {
 }
 
 func fetchLatestRelease(ctx context.Context) (latestRelease, error) {
+	return fetchRelease(ctx, releaseAPI, "")
+}
+
+func fetchTaggedRelease(ctx context.Context, tag string) (latestRelease, error) {
+	return fetchRelease(ctx, releaseTagAPI+tag, tag)
+}
+
+// fetchRelease读取一个GitHub正式版；want非空时要求标签与之一致。
+func fetchRelease(ctx context.Context, url, want string) (latestRelease, error) {
 	client := &http.Client{Timeout: 8 * time.Second, Transport: &http.Transport{Proxy: nil, TLSHandshakeTimeout: 5 * time.Second, ResponseHeaderTimeout: 5 * time.Second, MaxResponseHeaderBytes: 16 << 10}}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, releaseAPI, nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return latestRelease{}, err
 	}
@@ -223,7 +238,7 @@ func fetchLatestRelease(ctx context.Context) (latestRelease, error) {
 		URL  string `json:"html_url"`
 		Body string `json:"body"`
 	}
-	if json.NewDecoder(io.LimitReader(response.Body, 256<<10)).Decode(&release) != nil || !validVersion(release.Tag) || !strings.HasPrefix(release.URL, "https://github.com/") {
+	if json.NewDecoder(io.LimitReader(response.Body, 256<<10)).Decode(&release) != nil || !validVersion(release.Tag) || (want != "" && release.Tag != want) || !strings.HasPrefix(release.URL, "https://github.com/") {
 		return latestRelease{}, i18n.New("GitHub 返回的版本信息无效", "GitHub returned invalid release information")
 	}
 	return latestRelease{tag: release.Tag, url: release.URL, notes: releaseHighlights(release.Body)}, nil
@@ -248,8 +263,35 @@ func (p *panelUpdates) get(ctx context.Context, check bool) panelVersion {
 	return panelVersion{Current: p.current, Latest: p.latest, URL: p.url, Notes: p.notes, UpdateAvailable: newerVersion(p.latest, p.current), Issue: p.issue}
 }
 
+type currentReleaseNotes struct {
+	Version string        `json:"version"`
+	URL     string        `json:"url,omitempty"`
+	Notes   []releaseNote `json:"notes"`
+	Issue   string        `json:"issue,omitempty"`
+}
+
+func (p *panelUpdates) releaseNotes(ctx context.Context) currentReleaseNotes {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	view := currentReleaseNotes{Version: p.current, Notes: []releaseNote{}}
+	if !validVersion(p.current) {
+		view.Issue = i18n.T("开发版本没有发布说明", "Development builds have no release notes")
+		return view
+	}
+	if p.currentNote == nil {
+		release, err := p.fetchTag(ctx, p.current)
+		if err != nil {
+			view.Issue = i18n.T("无法从 GitHub 读取本版本的发布说明", "Cannot read this version's release notes from GitHub")
+			return view
+		}
+		p.currentNote = &release
+	}
+	view.URL, view.Notes = p.currentNote.url, p.currentNote.notes
+	return view
+}
+
 func registerPanelVersion(mux *http.ServeMux) {
-	registerPanelUpdates(mux, &panelUpdates{current: installedVersion(), fetch: fetchLatestRelease})
+	registerPanelUpdates(mux, &panelUpdates{current: installedVersion(), fetch: fetchLatestRelease, fetchTag: fetchTaggedRelease})
 }
 
 func registerPanelUpdates(mux *http.ServeMux, updates *panelUpdates) {
@@ -257,6 +299,9 @@ func registerPanelUpdates(mux *http.ServeMux, updates *panelUpdates) {
 		v := updates.get(r.Context(), r.URL.Query().Get("check") == "1")
 		v.CanUpgrade, v.Update = upgradeReady(), readUpgradeStatus()
 		respond(w, 200, v)
+	})
+	mux.HandleFunc("GET /api/panel/release-notes", func(w http.ResponseWriter, r *http.Request) {
+		respond(w, 200, updates.releaseNotes(r.Context()))
 	})
 	// 立即升级：重新向GitHub确认最新正式版确实更新，再启动升级助手；升级期间面板与代理会短暂中断。
 	mux.HandleFunc("POST /api/panel/update", func(w http.ResponseWriter, r *http.Request) {

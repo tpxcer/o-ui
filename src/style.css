@@ -216,9 +216,15 @@ main { margin-left: var(--sidebar-width); padding: 20px 28px 40px; outline: none
 .demo-suffix { font-size: 12px; color: var(--muted); margin-left: -6px; }
 .version-tag { display: inline-block; font-size: 12px; padding: 1px 7px; color: var(--green); background: color-mix(in srgb, var(--green) 14%, transparent); border-radius: 999px; margin-left: 6px; font-weight: 500; vertical-align: 1px; font-variant-numeric: tabular-nums; }
 .version-tag:empty { display: none; }
+/* 版本旁的“更新说明”沿用ⓘ的弹出层，按钮本身是文字链接样式。 */
+.release-notes-tip { margin-right: auto; margin-left: 0; }
+.release-notes-tip[hidden] { display: none; }
+.info-tip-button.release-notes-button { width: auto; height: auto; padding: 2px 4px; border: 0; border-radius: 4px; color: var(--blue); font-family: inherit; font-size: 13px; font-weight: 500; font-style: normal; line-height: 1.4; cursor: pointer; }
+.info-tip-button.release-notes-button:hover, .info-tip-button.release-notes-button[aria-expanded="true"] { color: var(--blue); text-decoration: underline; }
+.release-notes-tip .info-tip-text ul { margin: 4px 0 0; padding-left: 18px; }
+.release-notes-tip .info-tip-text li { display: list-item; }
 .actions { display: grid; grid-template-columns: 1fr; padding: 8px; gap: 4px; }
 .four-actions { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-.six-actions { grid-template-columns: repeat(6, minmax(0, 1fr)); }
 .action { border: 0; background: transparent; min-width: 0; min-height: 44px; padding: 6px 8px; color: var(--muted); display: flex; align-items: center; justify-content: center; gap: 7px; font-size: 14px; border-radius: var(--radius-sm); }
 .action:hover { color: var(--text); background: var(--raised); }
 .action:hover svg { color: var(--blue); }
@@ -281,9 +287,7 @@ dialog footer { padding: 12px 22px 18px; display: flex; justify-content: flex-en
   .stat-group dl > div { flex-direction: column; gap: 0; }
   .card-body { padding: 20px; }
   .card-header { padding-left: 20px; padding-right: 16px; }
-  .panel-card .six-actions { grid-template-columns: repeat(3, minmax(0, 1fr)); row-gap: 8px; }
-  .xray-card .four-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 8px; }
-  .panel-card .action:nth-child(3) { border-right: 0; }
+  .xray-card .four-actions, .panel-card .four-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 8px; }
 }
 @media (min-width: 701px) and (max-width: 900px) {
   main { padding-left: 16px; padding-right: 16px; }
@@ -292,9 +296,7 @@ dialog footer { padding: 12px 22px 18px; display: flex; justify-content: flex-en
   .sparkline { display: none; }
   .resource-percent { margin-left: auto; }
   .four-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 8px; }
-  .four-actions .action:nth-child(2) { border-right: 0; }
   .action { gap: 5px; font-size: 13px; }
-  .six-actions .action { flex-direction: column; }
   .stat-group { padding: 0 10px; }
 }
 @media (max-width: 700px) {
@@ -333,12 +335,11 @@ dialog footer { padding: 12px 22px 18px; display: flex; justify-content: flex-en
   .card-body { padding: 16px; }
   .card-header { min-height: 50px; padding-left: 16px; padding-right: 10px; }
   .field { grid-template-columns: 76px minmax(0, 1fr); gap: 10px; font-size: 14px; }
-  .four-actions, .xray-card .four-actions { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .four-actions, .xray-card .four-actions, .panel-card .four-actions { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .action { gap: 5px; font-size: 13px; }
   .four-actions .action { flex-direction: column; }
-  .six-actions { grid-template-columns: repeat(3, minmax(0, 1fr)); row-gap: 8px; }
-  .six-actions .action:nth-child(3) { border-right: 0; }
-  .six-actions .action { min-height: 48px; flex-direction: column; }
+  /* 手机上四个磁贴一行，收窄左右内边距让“备份和恢复”不折行。 */
+  .xray-card .action, .panel-card .action { padding-left: 2px; padding-right: 2px; }
   .card-collapse { display: inline-grid; }
   .card-collapse svg { transition: transform .2s; }
   .card.is-collapsed > .card-body { display: none; }

@@ -29,7 +29,7 @@ export function initMonitor(root: HTMLElement, runtime: () => RuntimeStatus | nu
   groups[3].querySelectorAll('dt')[1].textContent = t('UDP 套接字', 'UDP sockets');
   const coreStatus = document.createElement('p');
   coreStatus.className = 'monitor-status core-metrics-status info-tip-host';
-  coreStatus.innerHTML = `<span></span>${infoTip(t('仅本面板自有 Xray：内存为 RSS，线程不含监督进程；TCP 不含监听，UDP 含监听、不是 QUIC 会话或设备数。', 'o-ui\'s own Xray only: memory is RSS, threads exclude the supervisor; TCP excludes listeners, UDP includes listeners and is not QUIC sessions or devices.'))}`;
+  coreStatus.innerHTML = `<span></span>${infoTip(t('仅本面板自有 Xray：内存为 RSS，线程不含监督进程；TCP 不含监听，UDP 含监听、不是 QUIC 会话或设备数。约每2秒更新；客户端流量见客户端页。', 'o-ui\'s own Xray only: memory is RSS, threads exclude the supervisor; TCP excludes listeners, UDP includes listeners and is not QUIC sessions or devices. Updated about every 2 seconds; client traffic is on the Clients page.'))}`;
   // 放进统计卡的“Xray 使用情况”一栏，不再悬在卡片外面。
   groups[1].append(coreStatus);
   const coreStatusText = coreStatus.querySelector('span')!;
@@ -136,7 +136,7 @@ export function initMonitor(root: HTMLElement, runtime: () => RuntimeStatus | nu
     drawHover();
     const at = s && fresh(s.at) ? new Date(s.at).toLocaleTimeString(locale, {hour12:false}) : s && Date.parse(s.at) > 0 ? `${t('已过期', 'stale')} ${new Date(s.at).toLocaleTimeString(locale, {hour12:false})}` : t('尚无有效采样', 'No valid samples yet');
     statusText.textContent = `${error || (active ? s.issues.length ? `${t('部分不可用：', 'Partly unavailable: ')}${s.issues.join(t('；', '; '))}` : speed?.upload == null ? t('正在建立速率基线', 'Building the rate baseline') : t('采集中', 'Sampling') : t('采样已过期或尚未就绪', 'Sample is stale or not ready'))} · ${at}`;
-    statusTip.textContent = source === 'host' ? t('按服务器物理网卡统计（同 OUI，不含回环与 docker、tun 等虚拟网卡）：上传为服务器发出，下载为服务器收到，含网站、SSH 等全部流量；经节点的流量进出各计一次。', 'Measured on the server\'s physical NICs (like OUI; loopback and virtual NICs such as docker or tun excluded): upload is sent by the server, download is received, including all traffic such as websites and SSH; proxied traffic counts once in and once out.') : t('只统计本面板客户端经 Xray 的流量（客户端角度），不含系统其他程序。', 'Counts only client traffic through o-ui\'s Xray (from the client\'s side), not other programs.');
+    statusTip.textContent = (source === 'host' ? t('按服务器物理网卡统计（同 OUI，不含回环与 docker、tun 等虚拟网卡）：上传为服务器发出，下载为服务器收到，含网站、SSH 等全部流量；经节点的流量进出各计一次。', 'Measured on the server\'s physical NICs (like OUI; loopback and virtual NICs such as docker or tun excluded): upload is sent by the server, download is received, including all traffic such as websites and SSH; proxied traffic counts once in and once out.') : t('只统计本面板客户端经 Xray 的流量（客户端角度），不含系统其他程序。', 'Counts only client traffic through o-ui\'s Xray (from the client\'s side), not other programs.')) + t('图表显示最近3分钟，只保存在内存中，面板重启后清空。', ' The chart shows the last 3 minutes, kept in memory and cleared when o-ui restarts.');
   }
   async function refresh(): Promise<void> {
     if (disposed || busy) return;

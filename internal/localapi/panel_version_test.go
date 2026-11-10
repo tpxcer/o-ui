@@ -56,6 +56,38 @@ func TestPanelVersionChecksOnlyOnRequestAndCaches(t *testing.T) {
 	}
 }
 
+// 版本号旁的“更新说明”（用户2026-11-10要求）：按当前版本标签读取发布说明，成功后复用，失败不缓存。
+func TestCurrentReleaseNotes(t *testing.T) {
+	calls, fail := 0, true
+	p := &panelUpdates{current: "2026-11-10-v3", fetchTag: func(_ context.Context, tag string) (latestRelease, error) {
+		calls++
+		if tag != "2026-11-10-v3" {
+			t.Fatal("must ask for the installed tag", tag)
+		}
+		if fail {
+			return latestRelease{}, errors.New("offline")
+		}
+		return latestRelease{tag: tag, url: "https://github.com/tpxcer/o-ui/releases/tag/" + tag, notes: []releaseNote{{Zh: "启停按钮跟随状态", En: "On/off button follows state"}}}, nil
+	}}
+	if v := p.releaseNotes(context.Background()); v.Issue == "" || len(v.Notes) != 0 || v.Version != "2026-11-10-v3" {
+		t.Fatal("failure must be reported", v)
+	}
+	fail = false
+	if v := p.releaseNotes(context.Background()); v.Issue != "" || len(v.Notes) != 1 || v.Notes[0].Zh != "启停按钮跟随状态" || calls != 2 {
+		t.Fatal("notes after a failed attempt", v, calls)
+	}
+	if p.releaseNotes(context.Background()); calls != 2 {
+		t.Fatal("notes of the same version must be reused")
+	}
+	dev := &panelUpdates{current: "dev", fetchTag: func(context.Context, string) (latestRelease, error) {
+		t.Fatal("dev must not contact GitHub")
+		return latestRelease{}, nil
+	}}
+	if v := dev.releaseNotes(context.Background()); v.Issue == "" {
+		t.Fatal("dev build", v)
+	}
+}
+
 // 检测到新版本时展示本次更新的主要内容（用户2026-10-22要求）：取发布说明开头的要点，按“中文 / English”拆成两种语言。
 func TestReleaseHighlights(t *testing.T) {
 	body := "- 弹窗改为磨砂材质 / Dialogs are frosted.\r\n" +

@@ -1,6 +1,6 @@
 import { createIcons, Gauge, LogIn, Users, Settings, Wrench, PanelLeftClose,
   PanelLeftOpen, Moon, Sun, Eye, EyeOff, ArrowUp, ArrowDown, List, Power, RotateCw,
-  RefreshCw, SlidersHorizontal, DatabaseBackup, ChartArea, ChartNoAxesCombined, Menu, X,
+  RefreshCw, SlidersHorizontal, DatabaseBackup, Menu, X,
   Info, Plus, Search, Pencil, Trash2, CalendarDays, Shuffle, QrCode, Zap, LogOut, GripVertical, Bell, BellOff, SunMoon, ChevronDown, ChevronLeft, ChevronRight } from 'lucide';
 import { demo, linePath, percent, resourceColor, samples } from './model.ts';
 import { initManagement } from './management.ts';
@@ -11,7 +11,7 @@ import { initMonitor } from './monitor.ts';
 import { initLogs } from './logs.ts';
 import type { RuntimeStatus } from './runtime.ts';
 import { initXraySettings } from './xray-settings.ts';
-import { installInfoTips } from './info-tip.ts';
+import { infoTip, installInfoTips } from './info-tip.ts';
 import { initPanelSettings } from './panel-settings.ts';
 import { initServerInfo } from './server-info.ts';
 import { requireLogin } from './auth.ts';
@@ -31,7 +31,7 @@ document.addEventListener('click', event => {
 
 const icons = { Gauge, LogIn, Users, Settings, Wrench, PanelLeftClose,
   PanelLeftOpen, Moon, Sun, Eye, EyeOff, ArrowUp, ArrowDown, List, Power, RotateCw,
-  RefreshCw, SlidersHorizontal, DatabaseBackup, ChartArea, ChartNoAxesCombined, Menu, X,
+  RefreshCw, SlidersHorizontal, DatabaseBackup, Menu, X,
   Info, Plus, Search, Pencil, Trash2, CalendarDays, Shuffle, QrCode, Zap, LogOut, GripVertical, Bell, BellOff, SunMoon, ChevronDown, ChevronLeft, ChevronRight };
 const icon = (name: string) => `<i data-lucide="${name}" aria-hidden="true"></i>`;
 const action = (label: string, name: string, id: string) =>
@@ -92,7 +92,7 @@ app.innerHTML = `
     <div id="home-view">
     <header class="page-heading"><div><h1 class="page-title" tabindex="-1">${t('系统状态', 'Dashboard')}</h1><p>${t('服务器资源、网速与 Xray 运行概况。', 'Server resources, network speed and Xray at a glance.')}</p></div></header>
     <section class="card status-card" aria-label="${t('资源状态（演示）', 'Resource status (demo)')}">
-      <div class="network-panel"><div class="section-label">${t('整体速度', 'Overall speed')}</div>
+      <div class="network-panel"><div class="section-label info-tip-host">${t('整体速度', 'Overall speed')}${authenticated ? '' : infoTip(t('当前趋势是固定演示样本，并非采集结果。', 'The current trend is a fixed demo sample, not collected data.'))}</div>
         <div class="speed-readings"><div class="speed upload"><span class="speed-label"><b></b>${t('上传', 'Upload')}</span><strong>${icon('arrow-up')}268.00 <small>KB/s</small></strong></div>
         <div class="speed download"><span class="speed-label"><b></b>${t('下载', 'Download')}</span><strong>${icon('arrow-down')}174.00 <small>KB/s</small></strong></div></div>
         ${chart()}
@@ -120,12 +120,12 @@ app.innerHTML = `
       <section class="card xray-card" aria-labelledby="xray-title"><header class="card-header"><h2 id="xray-title"><button class="core-title-trigger" data-action="core-open" aria-label="${t('Xray版本管理', 'Xray version management')}">Xray</button></h2><span class="core-stopped" id="core-home-status">${t('核心管理待连接 · 代理未启动', 'Core management not connected · proxy not started')}</span></header><div class="actions four-actions">
         ${action(t('日志', 'Logs'), 'list', 'xray-log')}${action(t('停止', 'Stop'), 'power', 'stop')}${action(t('重启', 'Restart'), 'rotate-cw', 'restart')}${action(t('切换版本', 'Switch version'), 'wrench', 'core-version')}
       </div></section>
-      <section class="card panel-card" aria-labelledby="panel-title"><header class="card-header"><h2 id="panel-title">o-ui <span class="version-tag">${t('原型', 'prototype')}</span></h2></header><div class="actions six-actions">
-        ${action(t('日志', 'Logs'), 'list', 'panel-log')}${action(t('配置', 'Config'), 'sliders-horizontal', 'config')}${action(t('备份和恢复', 'Backup and restore'), 'database-backup', 'backup')}${action(t('系统历史', 'System history'), 'chart-area', 'history')}${action(t('Xray 指标', 'Xray metrics'), 'chart-no-axes-combined', 'metrics')}${action(t('检测更新', 'Check for updates'), 'refresh-cw', 'update')}
+      <section class="card panel-card" aria-labelledby="panel-title"><header class="card-header info-tip-host"><h2 id="panel-title">o-ui <span class="version-tag">${t('原型', 'prototype')}</span></h2><span class="info-tip release-notes-tip" id="release-notes-tip" hidden><button type="button" class="info-tip-button release-notes-button" aria-expanded="false" aria-describedby="release-notes-text">${t('更新说明', 'Release notes')}</button><span class="info-tip-text" id="release-notes-text" role="tooltip">${t('正在读取发布说明…', 'Loading release notes…')}</span></span></header><div class="actions four-actions">
+        ${action(t('日志', 'Logs'), 'list', 'panel-log')}${action(t('配置', 'Config'), 'sliders-horizontal', 'config')}${action(t('备份和恢复', 'Backup and restore'), 'database-backup', 'backup')}${action(t('检测更新', 'Check for updates'), 'refresh-cw', 'update')}
       </div></section>
     </div>
     <section class="card statistics" aria-label="${t('运行统计（演示）', 'Runtime statistics (demo)')}">
-      ${[[t('系统正常运行时间', 'System uptime'), [['Xray', t('3小时', '3h')], ['OS', t('5天14小时', '5d 14h')]]], [t('使用情况', 'Usage'), [[t('内存', 'Memory'), '68.24 MB'], [t('线程', 'Threads'), '32']]], [t('总数据', 'Total data'), [[t('已发送', 'Sent'), '72.18 GB'], [t('已接收', 'Received'), '69.82 GB']]], [t('连接数', 'Connections'), [['TCP', '238'], ['UDP', '10']]]].map(([title, pairs]) => `<div class="stat-group"><h2>${title}</h2><dl>${(pairs as string[][]).map(([label, value]) => `<div><dt>${label}</dt><dd>${value}</dd></div>`).join('')}</dl></div>`).join('')}
+      ${[[t('系统正常运行时间', 'System uptime'), [['Xray', t('3小时', '3h')], ['OS', t('5天14小时', '5d 14h')]]], [t('使用情况', 'Usage'), [[t('内存', 'Memory'), '68.24 MB'], [t('线程', 'Threads'), '32']]], [t('总数据', 'Total data'), [[t('已发送', 'Sent'), '72.18 GB'], [t('已接收', 'Received'), '69.82 GB']]], [t('连接数', 'Connections'), [['TCP', '238'], ['UDP', '10']]]].map(([title, pairs], index) => `<div class="stat-group"><h2${index === 1 && !authenticated ? ' class="info-tip-host"' : ''}>${title}${index === 1 && !authenticated ? infoTip(t('离线预览只显示演示数据，不采集核心指标。', 'The offline preview shows demo data only and collects no core metrics.')) : ''}</h2><dl>${(pairs as string[][]).map(([label, value]) => `<div><dt>${label}</dt><dd>${value}</dd></div>`).join('')}</dl></div>`).join('')}
     </section>
     </div>
     <div id="workspace-view" hidden></div>
@@ -140,7 +140,13 @@ if (authenticated) {
   document.querySelector('.demo-notice')!.remove();
   const versionTag = document.querySelector('#panel-title .version-tag')!, sidebarVersion = document.querySelector('.prototype-version')!;
   versionTag.textContent = ''; sidebarVersion.textContent = 'o-ui';
-  void api<PanelVersion>('panel/version').then(version => { versionTag.textContent = version.current; sidebarVersion.textContent = version.current; }).catch(() => {});
+  void api<PanelVersion>('panel/version').then(version => {
+    versionTag.textContent = version.current; sidebarVersion.textContent = version.current;
+    const tip = document.querySelector<HTMLElement>('#release-notes-tip')!;
+    tip.hidden = false;
+    // 悬停、聚焦或点按时才读取，之后复用（用户2026-11-10要求鼠标放上去就显示）。
+    for (const type of ['mouseenter', 'focusin', 'click']) tip.addEventListener(type, () => void loadReleaseNotes(version.current));
+  }).catch(() => {});
   void api<PanelVersion>('panel/version?check=1').then(version => { release = version; paintUpdate(); }).catch(() => {});
   document.querySelector('.speed-readings')!.innerHTML = t('<p class="form-intro">网速尚未采集</p>', '<p class="form-intro">Network speed not sampled yet</p>');
   document.querySelector('.traffic-chart')!.innerHTML = t('<p class="form-intro">暂无真实历史记录</p>', '<p class="form-intro">No history yet</p>');
@@ -257,8 +263,6 @@ const descriptions: Record<string, [string, string]> = {
   'update': [t('面板更新', 'Panel updates'), authenticated ? t('内部测试包不提供在线更新，也不检查更新。更换版本时先正常停止面板，再用新包的 o-ui 命令指定同一数据目录启动（见包内《本机运行说明》）；Xray 核心在版本管理中单独选择，不随面板更新。', 'The panel does not update online or check for updates. To change versions, stop the panel normally, then start the new package\'s o-ui command with the same data directory (see the package\'s run guide). The Xray core is selected separately in version management and is not updated with the panel.') : t('当前原型尚未发版，没有发起更新检查。后续面板更新与 Xray 核心更新分开，不自动覆盖现有核心。', 'This prototype has no releases; no update check was made. Panel updates and Xray core updates are separate and never overwrite the existing core automatically.')],
   'backup': [t('备份和恢复', 'Backup and restore'), t('离线演示不读写真实数据。请登录本机服务使用加密备份与恢复。', 'The offline demo does not read or write real data. Sign in to use encrypted backup and restore.')],
   'config': [t('配置', 'Config'), t('核心配置管理尚未接入。后续采用生成候选、官方核心预检、应用与核验的流程，失败保留上一份可用配置。', 'Core configuration management is not connected here. It generates a candidate, runs the official preflight, applies and verifies, keeping the last working configuration on failure.')],
-  'history': [t('系统历史', 'System history'), authenticated ? t('首页显示最近3分钟的面板业务网速，只保存在内存中，面板重启后清空。', 'The dashboard shows proxy traffic speed for the last 3 minutes, kept in memory and cleared when o-ui restarts.') : t('当前趋势是固定演示样本，并非采集结果。', 'The current trend is a fixed demo sample, not collected data.')],
-  'metrics': [t('Xray 指标', 'Xray metrics'), authenticated ? t('首页显示本面板 Xray 的内存、线程和 TCP/UDP 连接数，约每2秒更新；客户端流量见客户端页。', 'The dashboard shows memory, threads and TCP/UDP sockets of o-ui\'s Xray, updated about every 2 seconds; client traffic is on the Clients page.') : t('离线预览只显示演示数据，不采集核心指标。', 'The offline preview shows demo data only and collects no core metrics.')],
   'xray-log': [t('Xray 日志', 'Xray logs'), t('离线演示不读取真实日志，请登录本机面板查看脱敏诊断。', 'The offline demo reads no real logs; sign in to view redacted diagnostics.')],
   'panel-log': [t('面板日志', 'Panel logs'), t('离线演示不读取真实日志，请登录本机面板查看本轮操作摘要。', 'The offline demo reads no real logs; sign in to view the operation summary.')],
 };
@@ -278,18 +282,45 @@ async function checkUpdate(): Promise<void> {
   if (!dialog.open) return;
   document.querySelector('#dialog-description')!.textContent = text;
   // 发现新版本时展示本次更新的主要内容（GitHub发布说明开头的要点）。
-  if (notes.length) {
-    const box = document.createElement('div'), list = document.createElement('ul'), title = document.createElement('strong');
-    box.className = 'release-notes'; title.textContent = t('本次更新', 'In this release');
-    for (const note of notes) { const item = document.createElement('li'); item.textContent = note; list.append(item); }
-    box.append(title, list);
-    document.querySelector('#dialog-description')!.after(box);
-  }
+  appendReleaseNotes(notes);
   if (upgrade) {
     const action = document.querySelector<HTMLButtonElement>('#dialog-action')!;
     action.textContent = t('立即升级', 'Update now'); action.hidden = false; action.disabled = false;
     // 弹窗里已说明中断与回退，点“立即升级”直接开始，不再弹浏览器确认框（用户2026-10-22要求）。
     action.onclick = () => { dialog.close(); void startUpgrade(upgrade, paintUpdate); };
+  }
+}
+function appendReleaseNotes(notes: string[]): void {
+  if (!notes.length) return;
+  const box = document.createElement('div'), list = document.createElement('ul'), title = document.createElement('strong');
+  box.className = 'release-notes'; title.textContent = t('本次更新', 'In this release');
+  for (const note of notes) { const item = document.createElement('li'); item.textContent = note; list.append(item); }
+  box.append(title, list);
+  document.querySelector('#dialog-description')!.after(box);
+}
+// 版本号旁的“更新说明”：悬停显示当前已安装版本的发布说明要点；成功后不再重复读取，失败下次悬停重试。
+let releaseNotesState: 'idle' | 'loading' | 'done' = 'idle';
+async function loadReleaseNotes(version: string): Promise<void> {
+  if (releaseNotesState !== 'idle') return;
+  releaseNotesState = 'loading';
+  const box = document.querySelector<HTMLElement>('#release-notes-text')!;
+  try {
+    const view = await api<{ notes: { zh: string; en: string }[]; issue?: string }>('panel/release-notes');
+    const notes = view.notes.map(note => lang === 'en' ? note.en : note.zh);
+    const title = document.createElement('strong'); title.textContent = `${version} ${t('本次更新', 'in this release')}`;
+    if (view.issue || !notes.length) {
+      const text = document.createElement('span'); text.textContent = view.issue ?? t('这个版本的发布说明里没有要点。', 'This version\'s release notes have no highlights.');
+      box.replaceChildren(title, text);
+      releaseNotesState = view.issue ? 'idle' : 'done';
+      return;
+    }
+    const list = document.createElement('ul');
+    for (const note of notes) { const item = document.createElement('li'); item.textContent = note; list.append(item); }
+    box.replaceChildren(title, list);
+    releaseNotesState = 'done';
+  } catch (reason) {
+    box.textContent = (reason as Error).message;
+    releaseNotesState = 'idle';
   }
 }
 // 首页“o-ui”卡片的升级按钮（参照OUI）：发现新版本时变为橙色“立即升级”，升级中显示进度；失败后恢复。
