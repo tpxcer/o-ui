@@ -142,6 +142,9 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent-bg); wi
 .row-actions .icon-button { width: 32px; min-width: 0; height: 32px; }
 .row-actions .icon-button svg { width: 16px; height: 16px; }
 .danger-icon:hover { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }
+/* 启停按钮跟随入站状态：启用为绿色，停用为灰色。 */
+.power-toggle.is-on { color: var(--green); }
+.power-toggle.is-on:hover:not(:disabled) { color: var(--green); background: color-mix(in srgb, var(--green) 12%, transparent); }
 .mini-meter { margin-top: 8px; height: 4px; border-radius: 999px; overflow: hidden; background: var(--track); max-width: 160px; }
 .mini-meter span { display: block; height: 100%; border-radius: inherit; background: var(--blue); }
 .mini-meter.is-warn span { background: var(--warning); }
