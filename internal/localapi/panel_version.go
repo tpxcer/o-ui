@@ -106,7 +106,7 @@ func releaseHighlights(body string) []releaseNote {
 			pairZh = false
 			continue
 		}
-		zh, pair := cutAnyPrefix(text, "中文：", "中文:")
+		zh, pair := cutAnyPrefix(text, zhNotePrefix, zhNotePrefixASCII)
 		if pairZh = pair; pair {
 			text = zh
 		}
@@ -130,6 +130,12 @@ func releaseHighlights(body string) []releaseNote {
 	}
 	return notes
 }
+
+// 发布说明分行写法的中文前缀（全角与半角冒号）。
+const (
+	zhNotePrefix      = "中文："
+	zhNotePrefixASCII = "中文:"
+)
 
 func cutAnyPrefix(s string, prefixes ...string) (string, bool) {
 	for _, prefix := range prefixes {
