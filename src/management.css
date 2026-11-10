@@ -95,6 +95,10 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent-bg); wi
 .inbounds-table th:nth-child(6) { width: 110px; }
 /* 状态列放得下“已启用”和防火墙状态胶囊加重试按钮，不折成两行。 */
 .inbounds-table th:nth-child(4) { width: 19%; }
+/* 类型列放得下“XHTTP-Reality”标签；操作列只有三个图标，不用留那么宽。 */
+.inbounds-table th.select-cell + th { width: 24%; }
+.inbounds-table th:nth-child(3) { width: 16%; }
+.inbounds-table th:last-child { width: 132px; }
 .select-cell input { margin: 0; vertical-align: middle; }
 .status-cell { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .status-badge.is-online { color: var(--green); }
@@ -264,6 +268,8 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent-bg); wi
   .clients-table.with-notify td[data-client-notify] .icon-button { margin-left: -6px; }
   .clients-table.with-notify td[data-client-notify]::before { order: 1; }
   .clients-table.with-notify td:last-child { grid-column: 2; }
+  /* 入站卡片右列略宽，手机上放得下防火墙状态胶囊和重试按钮。 */
+  .inbounds-table tr { grid-template-columns: minmax(0, 4fr) minmax(0, 5fr); }
 }
 @media (max-width: 850px) {
   .data-table tbody { grid-template-columns: 1fr; }
