@@ -64,6 +64,7 @@ func handler(manager *core.Manager, state *store.Store, dist string, hosts []str
 	registerPanelRestart(mux)
 	registerApplySaved(mux, rt)
 	registerOutboundTraffic(mux, rt)
+	registerOutboundProbe(mux, rt)
 	registerFreePort(mux, state)
 	registerFirewall(mux, rt, state)
 	registerListOrder(mux, state)

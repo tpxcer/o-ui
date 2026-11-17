@@ -1,6 +1,9 @@
 import { addClient, clientInboundIds, clientInbounds, chineseDate, clientStatus, createQuick, defaultConnection, defaultSniffing, deleteRecords, editClient,
   editInbound, escapeHtml as esc, inboundName, presets, quickInboundName, randomName, seedWorkspace } from './workspace.ts';
 import type { Client, ClientInput, Connection, Inbound, Preset, TrafficReset, Workspace } from './workspace.ts';
+import { clientProxyTargets } from './client-chain.ts';
+import { parseParts, type Parts } from './xray-config.ts';
+import type { SettingsDraft } from './xray-settings-model.ts';
 import { api, APIError, confirmSaved, jsonBody, uncertainSave } from './api.ts';
 import { initCalendar } from './calendar.ts';
 import Sortable from 'sortablejs';
@@ -34,7 +37,7 @@ const readTrafficReset = (data: FormData): TrafficReset => {
   return value;
 };
 
-export function initManagement(root: HTMLElement, refreshIcons: () => void, navigate: (page: string) => void, showDetail: (title: string, text: string) => void, persistent = false, onSaved: () => void = () => {}): { render: (page: 'inbounds' | 'clients') => void; setRuntime: (status: RuntimeStatus | null, at: number) => void } {
+export function initManagement(root: HTMLElement, refreshIcons: () => void, navigate: (page: string) => void, showDetail: (title: string, text: string) => void, persistent = false, onSaved: () => void = () => {}, showOutbounds: (tags: string[]) => void = () => navigate('xray')): { render: (page: 'inbounds' | 'clients') => void; setRuntime: (status: RuntimeStatus | null, at: number) => void } {
   let state: Workspace = persistent ? { inbounds: [], clients: [] } : seedWorkspace();
   let revision = 0, loaded = !persistent, loading = false, loadError = '', submitting = false, pendingNotice = '', reloadRequired = false;
   let page: 'inbounds' | 'clients' = 'inbounds';
@@ -48,6 +51,7 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
   let ipView: IPLimitView | null = null;
   let ipDialogRefresh: (() => void) | null = null, ipDialogClock: (() => void) | null = null;
   let ipDialogGeneration = 0;
+  let chainSettings: Parts | null = null, chainLoading = false;
   let subscriptionService: boolean | null = null;
   // Telegram上线/离线通知按客户端单独开启；开关存在独立设置里，切换不保存入站、不重启 Xray。
   let notifyView: { clients: Set<string>; botEnabled: boolean } | null = null;
@@ -516,6 +520,7 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
   }
   function operate(action: string, id: string): void {
     const inbound = state.inbounds.find(item => item.id === id), client = state.clients.find(item => item.id === id);
+    if (action === 'client-chain' && client) { const tags = chainTargets(client); if (tags.length) showOutbounds(tags); }
     if (action === 'connection' && client) showConnection?.(client.id, client.name, revision, clientInbounds(state, client));
     if (action === 'iplimit' && client) void ipDialog(client);
     if (action === 'edit-inbound' && inbound) inboundEditor(inbound);
@@ -611,6 +616,25 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
       confirmDeleteClients(ids, t('删除所选客户端', 'Delete selected clients'));
     }
   }
+  const chainTargets = (client: Client) => chainSettings ? clientProxyTargets(client, chainSettings) : [];
+  function chainBadge(client: Client): string {
+    const tags = chainTargets(client);
+    return tags.length ? `<button type="button" class="client-chain" data-op="client-chain" data-id="${esc(client.id)}" title="${esc(`${t('查看代理出站：', 'View proxy outbounds: ')}${tags.join(', ')}${t('。根据已保存路由标记，实际流量按匹配条件转发。', '. Based on saved routes; actual traffic follows matching conditions.')}`)}">${icon('link')}${t('链式代理', 'Proxy chain')}</button>` : '';
+  }
+  async function refreshChains(): Promise<void> {
+    if (!persistent || chainLoading) return;
+    chainLoading = true;
+    try { const document = await api<{ data: SettingsDraft | null }>('settings'); chainSettings = document.data ? parseParts(document.data) : null; }
+    catch { chainSettings = null; }
+    finally {
+      chainLoading = false;
+      root.querySelectorAll<HTMLElement>('[data-client-chain]').forEach(element => {
+        const client = state.clients.find(item => item.id === element.dataset.clientChain);
+        if (client) element.innerHTML = chainBadge(client);
+      });
+      refreshIcons();
+    }
+  }
   function listRows(): void {
     sortable?.destroy(); sortable = null;
     const query = search.trim().toLocaleLowerCase();
@@ -635,7 +659,7 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
         const linked = clientInbounds(state, item);
         const inbound = linked.map(item => `${item.name} · ${presets[item.preset].label} / ${item.port}`).join('\n');
         const chips = linked.length ? `<span class="table-secondary inbound-chips" title="${esc(inbound)}"><span class="inbound-chip" aria-hidden="true"><span class="preset-dots">${linked.slice(0, 4).map(item => `<i class="preset-dot preset-${item.preset}"></i>`).join('')}</span><span>${linked.length > 1 ? `${linked.length} ${t('个入站', 'inbounds')}` : esc(linked[0].name)}</span></span><span class="sr-only">${esc(linked.map(item => item.name).join(t('、', ', ')))}</span></span>` : '';
-        return `<tr data-client-row="${esc(item.id)}">${selectCell(item)}<td data-label="${t('客户端 / 入站', 'Client / inbound')}"><div class="client-identity"><label class="switch" title="${item.enabled ? t('停用', 'Disable') : t('启用', 'Enable')}"><input type="checkbox" data-toggle-client="${esc(item.id)}" ${item.enabled ? 'checked' : ''} ${loading || submitting || reloadRequired ? 'disabled' : ''} aria-label="${t('启用客户端', 'Enable client')} ${esc(item.name)}"><span aria-hidden="true"></span></label><div class="client-identity-text"><strong class="record-name">${esc(item.name)}</strong>${chips}</div></div></td>
+        return `<tr data-client-row="${esc(item.id)}">${selectCell(item)}<td data-label="${t('客户端 / 入站', 'Client / inbound')}"><div class="client-identity"><label class="switch" title="${item.enabled ? t('停用', 'Disable') : t('启用', 'Enable')}"><input type="checkbox" data-toggle-client="${esc(item.id)}" ${item.enabled ? 'checked' : ''} ${loading || submitting || reloadRequired ? 'disabled' : ''} aria-label="${t('启用客户端', 'Enable client')} ${esc(item.name)}"><span aria-hidden="true"></span></label><div class="client-identity-text"><div class="client-name-line"><strong class="record-name">${esc(item.name)}</strong><span data-client-chain="${esc(item.id)}">${chainBadge(item)}</span></div>${chips}</div></div></td>
           <td data-label="${t('最近上线', 'Last online')}" data-client-last>${lastOnlineCell(item)}</td>
           <td data-label="${t('流量', 'Traffic')}" data-client-traffic>${trafficCell(item)}</td>
           <td data-label="${t('IP / 订阅', 'IP / subscription')}" data-client-ip>${ipCell(item)}<small class="table-secondary">${subscriptionLabel(item)}</small></td>
@@ -762,6 +786,7 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
         try { await readOrder(kind); } catch { announce(t('列表顺序读取失败，拖动暂不可用；请刷新重试。', 'List order could not be loaded; reload to enable reordering.')); }
       }
       await refreshFirewall();
+      void refreshChains();
       if (inboundFilter && !state.inbounds.some(item => item.id === inboundFilter)) inboundFilter = '';
       if (force && modal.open) modal.close();
     } catch (reason) {
@@ -884,5 +909,5 @@ export function initManagement(root: HTMLElement, refreshIcons: () => void, navi
     window.setInterval(() => { void refreshTraffic(); }, 5000);
     window.setInterval(() => { if (!root.hidden && !document.hidden) { updateApplicationStatus(); ipDialogClock?.(); } }, 1000);
   }
-  return { render(next) { if (page !== next) { search = ''; filter = 'all'; selected.clear(); if (next === 'inbounds') inboundFilter = ''; } page = next; renderList(); if (!loaded) void load(); if (persistent) void refreshTraffic(); }, setRuntime(status, at) { runtime = status; runtimeAt = at; updateApplicationStatus(); } };
+  return { render(next) { if (page !== next) { search = ''; filter = 'all'; selected.clear(); if (next === 'inbounds') inboundFilter = ''; } page = next; renderList(); if (next === 'clients') void refreshChains(); if (!loaded) void load(); if (persistent) void refreshTraffic(); }, setRuntime(status, at) { runtime = status; runtimeAt = at; updateApplicationStatus(); } };
 }

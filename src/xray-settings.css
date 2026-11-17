@@ -115,3 +115,25 @@
 /* 标签页下面紧跟分组时不留空隙，分组标题带直接贴着标签栏的分隔线。 */
 .xray-settings-card .xray-settings-tabs:has(+ * > :is(.setting-section, .xray-setting-section):first-child, + * > * > :is(.setting-section, .xray-setting-section):first-child) { margin-bottom: -1px; }
 @media (max-width: 700px) { .xray-settings-card { --settings-pad: 16px; } .xray-settings-card:has(:is(.setting-section, .xray-setting-section):last-child) { padding-bottom: 4px; } }
+
+.outbound-probe-result { display: block; margin: 4px 0 0; max-width: 260px; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.xray-table .outbound-probe-result { text-align: right; margin-left: auto; }
+.outbound-probe-action { margin-right: auto; min-width: 0; flex: 1 1 180px; }
+.xray-dialog footer:has(.outbound-probe-action) { flex-wrap: wrap; }
+
+.xray-table tr.outbound-highlight { background: color-mix(in srgb, var(--warning) 12%, transparent); outline: 1px solid var(--warning); outline-offset: -1px; }
+
+@media (max-width: 700px) {
+  .table-scroll:has([data-outbound-tag], [data-routing-index]) { overflow-x: clip; }
+  .xray-table:has([data-outbound-tag], [data-routing-index]) { display: block; min-width: 0; }
+  .xray-table:has([data-outbound-tag], [data-routing-index]) thead { display: none; }
+  .xray-table:has([data-outbound-tag], [data-routing-index]) tbody { display: block; }
+  .xray-table :is(tr[data-outbound-tag], tr[data-routing-index]) { display: grid; padding: 8px 0; }
+  .xray-table :is(tr[data-outbound-tag], tr[data-routing-index]) + tr { border-top: 1px solid var(--border); }
+  .xray-table :is(tr[data-outbound-tag], tr[data-routing-index]) td { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 8px; width: auto; padding: 6px 12px; border: 0; }
+  .xray-table :is(tr[data-outbound-tag], tr[data-routing-index]) td::before { content: attr(data-label); color: var(--muted); font-size: 12px; }
+  .xray-table :is(tr[data-outbound-tag], tr[data-routing-index]) td:has(.row-actions) { display: block; }
+  .xray-table :is(tr[data-outbound-tag], tr[data-routing-index]) td:has(.row-actions)::before { display: none; }
+  .xray-table :is(tr[data-outbound-tag], tr[data-routing-index]) .row-actions { justify-content: flex-start; }
+  .xray-table .outbound-probe-result { text-align: left; margin-left: 0; }
+}

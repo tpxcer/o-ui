@@ -1,3 +1,4 @@
+import { defaultSettings } from '../src/xray-settings-model.ts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
@@ -56,12 +57,12 @@ class Control {
   }
   fire(name = 'click', event: any = {}) { this.handlers.get(name)?.({ preventDefault() {}, ...event }); }
 }
-async function withPage(fetcher: typeof fetch, run: (root: Control, dialogs: Control[], confirmation: { answer: boolean; count: number }, timers: { delay: number; callback: () => void }[]) => Promise<void>, firewallFetcher?: typeof fetch) {
+async function withPage(fetcher: typeof fetch, run: (root: Control, dialogs: Control[], confirmation: { answer: boolean; count: number }, timers: { delay: number; callback: () => void }[]) => Promise<void>, firewallFetcher?: typeof fetch, settingsFetcher?: typeof fetch) {
   const root = new Control(), dialogs: Control[] = [], confirmation = { answer: true, count: 0 };
   const timers: { delay: number; callback: () => void }[] = [];
   root.hidden = true;
   const values = {
-    fetch: ((url, options) => String(url).includes('/api/panel/list-order/') ? Promise.resolve(Response.json({ revision: 0, data: [] })) : String(url).endsWith('/api/runtime/firewall') ? firewallFetcher ? firewallFetcher(url, options) : Promise.resolve(Response.json({ data: null })) : fetcher(url, options)) as typeof fetch, location: { protocol: 'http:' }, HTMLInputElement: Control, HTMLButtonElement: Control, matchMedia() { return { matches: false }; }, setTimeout() { return 0; }, clearTimeout() {},
+    fetch: ((url, options) => String(url).endsWith('/api/settings') ? settingsFetcher ? settingsFetcher(url, options) : Promise.resolve(Response.json({ data: null })) : String(url).includes('/api/panel/list-order/') ? Promise.resolve(Response.json({ revision: 0, data: [] })) : String(url).endsWith('/api/runtime/firewall') ? firewallFetcher ? firewallFetcher(url, options) : Promise.resolve(Response.json({ data: null })) : fetcher(url, options)) as typeof fetch, location: { protocol: 'http:' }, HTMLInputElement: Control, HTMLButtonElement: Control, matchMedia() { return { matches: false }; }, setTimeout() { return 0; }, clearTimeout() {},
     window: { setInterval(callback: () => void, delay: number) { timers.push({ delay, callback }); }, addEventListener() {}, removeEventListener() {} },
     document: { createElement: (tag: string) => { const item = new Control(); item.onConfirm = () => { confirmation.count++; return confirmation.answer; }; if (tag === 'dialog') dialogs.push(item); return item; }, body: new Control(), activeElement: null, hidden: false, addEventListener() {}, querySelector() { return null; } },
   };
@@ -240,7 +241,7 @@ test('客户端启用与最近上线分列，在线有效采样显示速度，�
     await settle();
     let html = root.querySelector('#list-content').innerHTML;
     assert.doesNotMatch(html, /<th scope="col">启用<\/th>/);
-    assert.match(html, /class="client-identity"><label class="switch"[\s\S]*?data-toggle-client=[\s\S]*?class="client-identity-text"><strong class="record-name">/);
+    assert.match(html, /class="client-identity"><label class="switch"[\s\S]*?data-toggle-client=[\s\S]*?class="client-identity-text"><div class="client-name-line"><strong class="record-name">/);
     assert.doesNotMatch(html, /speed-pair|speed-up|speed-down/);
     assert.doesNotMatch(html.match(/<td data-label="启用">[\s\S]*?<\/td>/)?.[0] ?? '', /is-online/);
     assert.match(html, /data-client-last><span class="status-badge is-online"/);
@@ -625,4 +626,18 @@ test('IP上限冲突或不确定保存保留输入并锁定，断线确认成功
       }
     });
   });
+});
+
+
+test('客户端名后显示链式代理按钮，点击传递匹配出站位置', async () => {
+  const state = workspaceFixture(), client = state.clients[0];
+  const settings = { ...defaultSettings(), rules: JSON.stringify([{ type: 'field', user: [`client-${client.id}`], outboundTag: 'fixture-proxy' }]), outbounds: JSON.stringify([{ tag: 'direct', protocol: 'freedom' }, { tag: 'fixture-proxy', protocol: 'http' }]) };
+  await withPage(async url => String(url).endsWith('/api/workspace') ? Response.json({ revision: 1, data: state }) : Response.json({ totals: {}, clients: [], data: { enabled: false } }), async root => {
+    let targets: string[] = [];
+    initManagement(root as unknown as HTMLElement, () => {}, () => {}, () => {}, true, () => {}, tags => { targets = tags; }).render('clients'); await settle();
+    const html = root.querySelector('#list-content').innerHTML;
+    assert.match(html, /client-name-line/); assert.match(html, /class="client-chain"/); assert.match(html, /data-lucide="link"/); assert.match(html, /链式代理/);
+    assert.equal((html.match(/class="client-chain"/g) ?? []).length, 1);
+    clickWorkspace(root, 'data-op', 'client-chain', client.id); assert.deepEqual(targets, ['fixture-proxy']);
+  }, undefined, async () => Response.json({ revision: 1, data: settings }));
 });

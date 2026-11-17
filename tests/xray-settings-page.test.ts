@@ -39,7 +39,9 @@ function page(fetcher: (url: string, options?: RequestInit) => Promise<Response>
   const settings = initXraySettings(root as unknown as HTMLElement, () => {}, true);
   const click = (id: string) => { const button = { id, dataset: {}, closest: (selector: string) => selector === 'button' ? button : null }; root.handlers.get('click')!({ target: button }); };
   const change = (name: string, value: string) => root.handlers.get('change')!({ target: { name, value, type: 'text', dataset: {}, hasAttribute: () => false, closest: () => null } });
-  return { root, settings, click, change, restore, confirmation };
+  const action = (op: string, index = 0) => { const button = { dataset: { op, index: String(index) }, closest: (selector: string) => selector === 'button' ? button : null }; root.handlers.get('click')!({ target: button }); };
+  const tab = (settingsTab: string) => { const button = { dataset: { settingsTab }, closest: (selector: string) => selector === 'button' ? button : null }; root.handlers.get('click')!({ target: button }); };
+  return { root, settings, click, change, action, tab, restore, confirmation };
 }
 
 test('Xray设置：刷新前确认，取消不丢未保存修改，确认后换成最新修订', async () => {
@@ -123,4 +125,60 @@ test('Xray设置：保存时连接中断或浏览器重发得到冲突，但服�
       assert.equal(writes, 2, '确认后可继续用新修订保存');
     } finally { view.restore(); }
   });
+});
+
+
+test('出站测试发送页面草稿，就地显示结果且不保存或应用', async () => {
+  const probes: any[] = []; let writes = 0;
+  const view = page(async (url, options) => {
+    if (url.endsWith('/xray/outbound-test')) { probes.push(JSON.parse(String(options?.body))); return probes.length === 1 ? Response.json({ latencyMs: 42 }) : Response.json({ error: 'fixture failure' }, { status: 502 }); }
+    if (options?.method) writes++;
+    if (url.endsWith('/workspace')) return Response.json({ data: null });
+    if (url.endsWith('/outbound-traffic')) return Response.json({ outbounds: {} });
+    return Response.json({ revision: 1, data: defaultSettings() });
+  });
+  try {
+    view.settings.render(); await settle();
+    view.change('probeURL', 'https://unsaved.test/'); view.tab('outbounds'); await settle();
+    assert.match(view.root.innerHTML, /aria-label="连接测试"/);
+    view.action('outbound:test'); await settle();
+    assert.equal(probes[0].data.probeURL, 'https://unsaved.test/'); assert.equal(probes[0].tag, 'direct');
+    assert.match(view.root.innerHTML, /连接成功 · 42 ms/);
+    view.action('outbound:test'); await settle(); assert.match(view.root.innerHTML, /fixture failure/);
+    assert.equal(writes, 0);
+  } finally { view.restore(); }
+});
+
+test('修改测试配置时取消在途请求，不显示迟到的旧结果', async () => {
+  let signal: AbortSignal | undefined, release!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  const view = page(async (url, options) => {
+    if (url.endsWith('/xray/outbound-test')) { signal = options?.signal ?? undefined; await pending; return Response.json({ latencyMs: 999 }); }
+    if (url.endsWith('/workspace')) return Response.json({ data: null });
+    if (url.endsWith('/outbound-traffic')) return Response.json({ outbounds: {} });
+    return Response.json({ revision: 1, data: defaultSettings() });
+  });
+  try {
+    view.settings.render(); await settle(); view.tab('outbounds'); await settle();
+    view.action('outbound:test'); await settle(); assert.match(view.root.innerHTML, /正在测试/);
+    view.change('probeURL', 'https://changed.test/'); assert.equal(signal?.aborted, true);
+    release(); await settle(); assert.doesNotMatch(view.root.innerHTML, /999 ms|正在测试/);
+  } finally { release(); view.restore(); }
+});
+
+
+test('从客户端定位出站会读取最新设置，有草稿时保留未保存内容', async () => {
+  let reads = 0;
+  const view = page(async url => {
+    if (url.endsWith('/workspace')) return Response.json({ data: null });
+    if (url.endsWith('/outbound-traffic')) return Response.json({ outbounds: {} });
+    reads++; return Response.json({ revision: reads, data: { ...defaultSettings(), outbounds: JSON.stringify([{ tag: `proxy-${reads}`, protocol: 'http' }]) } });
+  });
+  try {
+    view.settings.render(); await settle();
+    view.settings.showOutbounds(['proxy-2']); view.settings.render(); await settle();
+    assert.match(view.root.innerHTML, /outbound-highlight/); assert.match(view.root.innerHTML, /data-outbound-tag="proxy-2"/); assert.equal(reads, 2);
+    view.change('probeURL', 'https://keep.test/'); view.settings.showOutbounds(['proxy-2']); view.settings.render(); await settle();
+    assert.equal(reads, 2); view.tab('basic'); assert.match(view.root.innerHTML, /keep.test/);
+  } finally { view.restore(); }
 });

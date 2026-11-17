@@ -57,6 +57,7 @@ type Runtime struct {
 	mu          sync.Mutex
 	panelMu     sync.Mutex
 	backupMu    sync.Mutex
+	probeMu     sync.Mutex
 	manager     *core.Manager
 	state       *store.Store
 	root        string
@@ -155,6 +156,8 @@ func (rt *Runtime) Close() error {
 	rt.monitor.Close()
 	rt.cancel()
 	<-rt.done
+	rt.probeMu.Lock()
+	rt.probeMu.Unlock()
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)

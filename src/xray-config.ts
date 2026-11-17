@@ -1,5 +1,6 @@
 // Xray设置的结构化编辑模型（参照OUI的表格+弹窗）：在已保存草稿的JSON字符串与可编辑对象之间转换。
 import type { SettingsDraft } from './xray-settings-model.ts';
+import type { Workspace } from './workspace.ts';
 import { t } from './i18n.ts';
 
 export type Json = Record<string, unknown>;
@@ -78,11 +79,12 @@ export function ruleFromForm(form: RuleForm): Json {
   return rule;
 }
 
-export function ruleSummary(rule: Json): string {
+export function ruleSummary(rule: Json, workspace?: Workspace): string {
   const parts: string[] = [];
   const add = (label: string, values: string[]) => { if (values.length) parts.push(`${label} ${values.slice(0, 3).join(', ')}${values.length > 3 ? ` +${values.length - 3}` : ''}`); };
   add(t('域名', 'Domain'), list(rule.domain)); add('IP', list(rule.ip)); add(t('来源', 'Source'), list(rule.source)); add(t('协议', 'Protocol'), list(rule.protocol));
-  add(t('入站', 'Inbound'), list(rule.inboundTag)); add(t('用户', 'User'), list(rule.user));
+  add(t('入站', 'Inbound'), list(rule.inboundTag).map(tag => workspace?.inbounds.find(item => `in-${item.id}` === tag)?.name || tag));
+  add(t('用户', 'User'), list(rule.user).map(tag => workspace?.clients.find(item => `client-${item.id}` === tag)?.name || tag));
   add(t('来源', 'Source'), list(rule.sourceIP));
   for (const [label, key] of [[t('端口', 'Port'), 'port'], [t('来源端口', 'Source port'), 'sourcePort'], [t('VLESS 路由', 'VLESS route'), 'vlessRoute'], [t('网络', 'Network'), 'network']] as const) if (typeof rule[key] === 'string') parts.push(`${label} ${rule[key]}`);
   if (rule.attrs && typeof rule.attrs === 'object') add(t('属性', 'Attrs'), Object.entries(rule.attrs as Record<string, unknown>).map(([name, value]) => `${name}=${String(value)}`));

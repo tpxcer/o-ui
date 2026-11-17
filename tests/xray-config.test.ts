@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { defaultSettings } from '../src/xray-settings-model.ts';
 import {
-  balancerFromForm, dnsServerForm, emptyRule, dnsServerFromForm, outboundAddress, outboundForm, outboundFromForm, outboundFromLink, outboundReverseTag, parseParts, ruleForm, ruleFromForm,
+  balancerFromForm, dnsServerForm, emptyRule, dnsServerFromForm, outboundAddress, outboundForm, outboundFromForm, outboundFromLink, outboundReverseTag, parseParts, ruleForm, ruleFromForm, ruleSummary,
   ruleValues, setRuleValues, syncObservatory, writeParts,
 } from '../src/xray-config.ts';
 
@@ -84,4 +84,14 @@ test('VLESS反向代理桥接端用简化写法，往返一致；无反向时仍
 
 test('WireGuard（WARP）出站在列表中显示对端地址', () => {
   assert.equal(outboundAddress({ tag: 'warp', protocol: 'wireguard', settings: { address: ['172.16.0.2/32'], peers: [{ endpoint: 'engage.cloudflareclient.com:2408' }] } }), 'engage.cloudflareclient.com:2408');
+});
+
+
+test('路由摘要将内部入站和用户标签显示为名称，未知标签保留且不改规则', () => {
+  const rule = { inboundTag: ['in-fixture-in'], user: ['client-fixture-client', 'custom-user'], domain: ['example.test'] };
+  const before = structuredClone(rule);
+  const workspace = { inbounds: [{ id: 'fixture-in', name: '测试入站' }], clients: [{ id: 'fixture-client', name: '测试客户端' }] } as any;
+  assert.equal(ruleSummary(rule, workspace), '域名 example.test · 入站 测试入站 · 用户 测试客户端, custom-user');
+  assert.equal(ruleSummary(rule, { inbounds: [], clients: [] }), '域名 example.test · 入站 in-fixture-in · 用户 client-fixture-client, custom-user');
+  assert.deepEqual(rule, before);
 });

@@ -25,7 +25,7 @@ const advancedParts: [AdvancedPart, string][] = [['rules', t('路由规则', 'Ro
 const button = (label: string, attrs: string, kind = 'secondary-button') => `<button type="button" class="${kind}" ${attrs}>${label}</button>`;
 const bytes = (value: string | number | undefined) => formatBytes(Number(value ?? 0));
 
-export function initXraySettings(root: HTMLElement, icons: () => void, persistent = false, onApply: () => void = () => {}, onSaved: () => void = () => {}): { render: () => void; setRuntime: (status: RuntimeStatus | null, at: number) => void } {
+export function initXraySettings(root: HTMLElement, icons: () => void, persistent = false, onApply: () => void = () => {}, onSaved: () => void = () => {}): { render: () => void; setRuntime: (status: RuntimeStatus | null, at: number) => void; showOutbounds: (tags: string[]) => void } {
   let draft = defaultSettings(), saved = structuredClone(draft), revision = 0, tab: Tab = 'basic', part: AdvancedPart = 'rules';
   let loaded = !persistent, loading = false, saving = false, reloadRequired = false, visible = false, error = '', feedback = '', jsonError = '';
   let runtime: RuntimeStatus | null = null, runtimeAt = 0, traffic: Traffic = {};
@@ -33,12 +33,17 @@ export function initXraySettings(root: HTMLElement, icons: () => void, persisten
   const dialog = document.createElement('dialog');
   dialog.className = 'edit-dialog xray-dialog';
   document.body.append(dialog);
+  let focusedOutbounds = new Set<string>(), focusPending = false;
+  let probeController: AbortController | null = null;
+  let listProbe: { index: number; snapshot: string; message: string; failed: boolean } | null = null;
+  const cancelProbe = () => { probeController?.abort(); probeController = null; };
   const dirty = () => JSON.stringify(draft) !== JSON.stringify(saved);
   const reverseTags = () => workspace.clients.flatMap(client => client.reverseTag ? [client.reverseTag] : []);
   const parts = (): Parts | null => { try { return parseParts(draft); } catch { return null; } };
   function change(mutate: (current: Parts) => Parts): void {
     const current = parts();
     if (!current) return;
+    cancelProbe(); listProbe = null;
     draft = writeParts(draft, mutate(current));
     feedback = ''; error = '';
     paint();
@@ -67,7 +72,7 @@ export function initXraySettings(root: HTMLElement, icons: () => void, persisten
     return settingSection(t('常规配置', 'General'), [
       settingRow(t('Freedom 策略', 'Freedom strategy'), t('直连出站的域名解析策略', 'Domain resolution strategy of direct outbounds'), selectControl('freedomStrategy', draft.freedomStrategy, freedomStrategies.map(value => [value, value]), 'Freedom')),
       settingRow(t('路由域名策略', 'Routing domain strategy'), t('路由匹配时的域名解析方式', 'How domains are resolved when matching routes'), selectControl('routingStrategy', draft.routingStrategy, routingStrategies.map(value => [value, value]), t('路由域名策略', 'Routing domain strategy'))),
-      settingRow(t('出站测试 URL', 'Outbound test URL'), t('负载均衡测速使用的地址', 'URL used by balancer health checks'), textControl('probeURL', draft.probeURL, t('出站测试 URL', 'Outbound test URL'), 'type="url"')),
+      settingRow(t('出站测试 URL', 'Outbound test URL'), t('手动连接测试和负载均衡探测使用的地址', 'URL used by manual connection tests and balancer health checks'), textControl('probeURL', draft.probeURL, t('出站测试 URL', 'Outbound test URL'), 'type="url"')),
     ].join('')) + settingSection(t('日志', 'Logs'), [
       settingRow(t('日志级别', 'Log level'), t('调试级别可能包含连接信息', 'Debug may include connection details'), selectControl('logLevel', draft.logLevel, ['none', 'error', 'warning', 'info', 'debug'].map(value => [value, value]), t('日志级别', 'Log level'))),
       settingRow(t('访问日志', 'Access log'), t('记录每个连接，输出到核心日志', 'Record each connection in the core log'), toggle('accessLog', draft.accessLog, t('访问日志', 'Access log'))),
@@ -82,17 +87,17 @@ export function initXraySettings(root: HTMLElement, icons: () => void, persisten
   }
 
   // ---- 表格页 ----
-  const actions = (kind: string, index: number, count: number) => `<div class="row-actions">${button('↑', `data-op="${kind}:up" data-index="${index}" aria-label="${t('上移', 'Move up')}" ${index === 0 ? 'disabled' : ''}`, 'icon-button')}${button('↓', `data-op="${kind}:down" data-index="${index}" aria-label="${t('下移', 'Move down')}" ${index === count - 1 ? 'disabled' : ''}`, 'icon-button')}${button(t('编辑', 'Edit'), `data-op="${kind}:edit" data-index="${index}"`, 'text-button')}${button(t('删除', 'Delete'), `data-op="${kind}:delete" data-index="${index}"`, 'text-button danger-text')}</div>`;
+  const actions = (kind: string, index: number, count: number) => `<div class="row-actions">${button('↑', `data-op="${kind}:up" data-index="${index}" aria-label="${t('上移', 'Move up')}" ${index === 0 ? 'disabled' : ''}`, 'icon-button')}${button('↓', `data-op="${kind}:down" data-index="${index}" aria-label="${t('下移', 'Move down')}" ${index === count - 1 ? 'disabled' : ''}`, 'icon-button')}${kind === 'outbound' ? button('⚡', `data-op="outbound:test" data-index="${index}" title="${t('连接测试', 'Test connection')}" aria-label="${t('连接测试', 'Test connection')}" ${probeController || !persistent ? 'disabled' : ''}`, 'icon-button') : ''}${button(t('编辑', 'Edit'), `data-op="${kind}:edit" data-index="${index}"`, 'text-button')}${button(t('删除', 'Delete'), `data-op="${kind}:delete" data-index="${index}"`, 'text-button danger-text')}</div>`;
   const table = (heads: string[], rows: string[], empty: string) => rows.length ? `<div class="table-scroll"><table class="xray-table"><thead><tr>${heads.map(head => `<th scope="col">${head}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table></div>` : `<p class="form-intro">${empty}</p>`;
   function routingTab(p: Parts): string {
     return `<div class="settings-table-actions">${button(t('添加规则', 'Add rule'), 'data-op="rule:add"', 'primary-button')}</div><p class="form-hint">${t('从上到下匹配，先命中的规则生效；都不匹配时走第一个出站。', 'Rules match top to bottom; the first match wins. Unmatched traffic uses the first outbound.')}</p>` +
-      table(['#', t('匹配条件', 'Conditions'), t('目标', 'Target'), t('操作', 'Actions')], p.rules.map((rule, index) => `<tr><td>${index + 1}</td><td>${esc(ruleSummary(rule))}</td><td><span class="tag-chip">${esc(String(rule.balancerTag ? `${t('均衡', 'Balancer')} · ${rule.balancerTag}` : rule.outboundTag ?? ''))}</span></td><td>${actions('rule', index, p.rules.length)}</td></tr>`), t('还没有路由规则，所有流量走第一个出站。', 'No routing rules yet; all traffic uses the first outbound.'));
+      table(['#', t('匹配条件', 'Conditions'), t('目标', 'Target'), t('操作', 'Actions')], p.rules.map((rule, index) => `<tr data-routing-index="${index}"><td data-label="#">${index + 1}</td><td data-label="${t('匹配条件', 'Conditions')}">${esc(ruleSummary(rule, workspace))}</td><td data-label="${t('目标', 'Target')}"><span class="tag-chip">${esc(String(rule.balancerTag ? `${t('均衡', 'Balancer')} · ${rule.balancerTag}` : rule.outboundTag ?? ''))}</span></td><td data-label="${t('操作', 'Actions')}">${actions('rule', index, p.rules.length)}</td></tr>`), t('还没有路由规则，所有流量走第一个出站。', 'No routing rules yet; all traffic uses the first outbound.'));
   }
   function outboundsTab(p: Parts): string {
     return `<div class="settings-table-actions">${button(t('添加出站', 'Add outbound'), 'data-op="outbound:add"', 'primary-button')}${persistent ? button('WARP', 'data-op="warp:open"', 'secondary-button') : ''}</div><p class="form-hint">${t('第一个出站是默认出站。', 'The first outbound is the default.')}</p>` +
       table(['#', t('标识', 'Tag'), t('协议', 'Protocol'), t('地址', 'Address'), t('流量', 'Traffic'), t('操作', 'Actions')], p.outbounds.map((item, index) => {
         const used = traffic[String(item.tag)];
-        return `<tr><td>${index + 1}${index === 0 ? ` <small class="table-secondary">${t('默认', 'default')}</small>` : ''}</td><td>${esc(String(item.tag ?? ''))}</td><td><span class="tag-chip">${esc(String(item.protocol ?? ''))}</span></td><td>${esc(outboundAddress(item))}</td><td>${used ? `↑ ${bytes(used.uplink)} / ↓ ${bytes(used.downlink)}` : '—'}</td><td>${actions('outbound', index, p.outbounds.length)}</td></tr>`;
+        return `<tr data-outbound-tag="${esc(String(item.tag))}" tabindex="-1" class="${focusedOutbounds.has(String(item.tag)) ? 'outbound-highlight' : ''}"><td data-label="#">${index + 1}${index === 0 ? ` <small class="table-secondary">${t('默认', 'default')}</small>` : ''}</td><td data-label="${t('标识', 'Tag')}">${esc(String(item.tag ?? ''))}</td><td data-label="${t('协议', 'Protocol')}"><span class="tag-chip">${esc(String(item.protocol ?? ''))}</span></td><td data-label="${t('地址', 'Address')}">${esc(outboundAddress(item))}</td><td data-label="${t('流量', 'Traffic')}">${used ? `↑ ${bytes(used.uplink)} / ↓ ${bytes(used.downlink)}` : '—'}</td><td data-label="${t('操作', 'Actions')}">${actions('outbound', index, p.outbounds.length)}${listProbe?.index === index && listProbe.snapshot === JSON.stringify(draft) ? `<p class="outbound-probe-result ${listProbe.failed ? 'danger-text' : ''}" role="status">${esc(listProbe.message)}</p>` : ''}</td></tr>`;
       }), t('至少需要一个出站。', 'At least one outbound is required.'));
   }
   function balancersTab(p: Parts): string {
@@ -130,10 +135,20 @@ export function initXraySettings(root: HTMLElement, icons: () => void, persisten
       <section class="card xray-settings-card"><div class="xray-settings-tabs" role="tablist" aria-label="${t('Xray 设置分类', 'Xray setting categories')}">${tabs.map(([id, label]) => `<button type="button" role="tab" id="xray-tab-${id}" aria-selected="${id === tab}" data-settings-tab="${id}">${label}</button>`).join('')}</div>
       <form id="xray-settings-form" novalidate><fieldset class="xray-edit-fields" ${!loaded || saving || loading ? 'disabled' : ''}>${body}</fieldset></form></section>`;
     icons();
+    if (focusPending && tab === 'outbounds' && loaded && !loading) {
+      focusPending = false;
+      // 导航会先滚回页首，定位放到该次导航完成之后。
+      queueMicrotask(() => {
+        if (root.hidden || tab !== 'outbounds') return;
+        const row = [...root.querySelectorAll<HTMLElement>('[data-outbound-tag]')].find(item => focusedOutbounds.has(item.dataset.outboundTag!));
+        row?.scrollIntoView({ block: 'center', inline: 'nearest' }); row?.focus({ preventScroll: true });
+      });
+    }
   }
 
   // ---- 弹窗 ----
   function openDialog(title: string, fields: string, submit: (form: HTMLFormElement) => void, onInput?: (form: HTMLFormElement) => void, labels: [string, string] = [t('取消', 'Cancel'), t('确定', 'OK')]): void {
+    cancelProbe();
     dialog.innerHTML = `<form novalidate><header class="dialog-heading"><h2>${esc(title)}</h2><button type="button" class="icon-button" data-close aria-label="${t('关闭弹窗', 'Close dialog')}">×</button></header><div class="edit-body">${fields}<p class="form-error" role="alert" hidden></p></div><footer>${button(labels[0], 'data-close')}<button class="primary-button">${labels[1]}</button></footer></form>`;
     const form = dialog.querySelector('form')!;
     dialog.querySelectorAll('[data-close]').forEach(item => item.addEventListener('click', () => dialog.close()));
@@ -241,16 +256,69 @@ export function initXraySettings(root: HTMLElement, icons: () => void, persisten
     }
     return next;
   }
+  async function requestProbe(data: SettingsDraft, tag: string, controller: AbortController): Promise<string> {
+    const result = await api<{ latencyMs: number }>('xray/outbound-test', { ...jsonBody('POST', { data, tag }), signal: controller.signal });
+    return `${t('连接成功', 'Connected')} · ${result.latencyMs} ms`;
+  }
+  async function testOutbound(index: number): Promise<void> {
+    if (probeController || !persistent) return;
+    const outbound = parts()?.outbounds[index]; if (!outbound) return;
+    const controller = new AbortController(); probeController = controller;
+    const result = { index, snapshot: JSON.stringify(draft), message: t('正在测试…', 'Testing…'), failed: false };
+    listProbe = result; paint();
+    try { result.message = await requestProbe(structuredClone(draft), String(outbound.tag), controller); }
+    catch (reason) { result.message = (reason as Error).message; result.failed = true; }
+    finally {
+      if (probeController === controller) probeController = null;
+      if (!controller.signal.aborted && listProbe === result && result.snapshot === JSON.stringify(draft)) paint();
+    }
+  }
+  function wireOutboundTest(read: () => Json, index: number | null): () => void {
+    const element = dialog.querySelector('form')!;
+    element.querySelector('footer')!.insertAdjacentHTML('afterbegin', `<div class="outbound-probe-action">${button(`⚡ ${t('连接测试', 'Test connection')}`, `data-outbound-test ${persistent ? '' : 'disabled'}`)}<output class="outbound-probe-result" aria-live="polite"></output></div>`);
+    const test = element.querySelector<HTMLButtonElement>('[data-outbound-test]')!;
+    const output = element.querySelector<HTMLOutputElement>('output')!;
+    let active: AbortController | null = null;
+    const reset = () => { active?.abort(); if (probeController === active) probeController = null; active = null; output.textContent = ''; output.classList.remove('danger-text'); test.disabled = !persistent; };
+    element.addEventListener('input', reset);
+    element.addEventListener('change', reset);
+    dialog.addEventListener('close', reset, { once: true });
+    test.addEventListener('click', async () => {
+      if (active || !persistent) return;
+      cancelProbe();
+      const controller = new AbortController(); active = probeController = controller;
+      test.disabled = true; output.classList.remove('danger-text'); output.textContent = t('正在测试…', 'Testing…');
+      try {
+        const outbound = read(), current = parts();
+        if (!current || !outbound || typeof outbound !== 'object' || Array.isArray(outbound) || typeof outbound.tag !== 'string' || !outbound.tag.trim()) throw new Error(t('请填写有效的出站配置与标识。', 'Enter a valid outbound configuration and tag.'));
+        if (current.outbounds.some((item, i) => i !== index && item.tag === outbound.tag)) throw new Error(t('出站标识重复。', 'Duplicate outbound tag.'));
+        const data = writeParts(draft, { ...current, outbounds: index === null ? [...current.outbounds, outbound] : current.outbounds.map((item, i) => i === index ? outbound : item) });
+        const message = await requestProbe(data, outbound.tag, controller);
+        if (!controller.signal.aborted) output.textContent = message;
+      } catch (reason) {
+        if (!controller.signal.aborted) { output.textContent = (reason as Error).message; output.classList.add('danger-text'); }
+      } finally {
+        if (probeController === controller) probeController = null;
+        if (active === controller) { active = null; test.disabled = false; }
+      }
+    });
+    return reset;
+  }
   function outboundDialog(index: number | null): void {
     const p = parts(); if (!p) return;
     const initial = index === null ? { ...emptyOutbound(), tag: `proxy-${p.outbounds.length + 1}` } : outboundForm(p.outbounds[index]);
-    if (!initial) { jsonDialog(t('编辑出站', 'Edit outbound'), p.outbounds[index!], next => change(current => ({ ...current, outbounds: current.outbounds.map((item, i) => i === index ? next : item) }))); return; }
+    if (!initial) {
+      jsonDialog(t('编辑出站', 'Edit outbound'), p.outbounds[index!], next => change(current => ({ ...current, outbounds: current.outbounds.map((item, i) => i === index ? next : item) })));
+      wireOutboundTest(() => { try { return JSON.parse(value(dialog.querySelector('form')!, 'json')); } catch { throw new Error(t('JSON 格式无效。', 'Invalid JSON.')); } }, index);
+      return;
+    }
     let form = initial;
+    let resetTest = () => {};
     const oldTag = index === null ? '' : String(p.outbounds[index].tag);
-    const refresh = (element: HTMLFormElement) => { form = readOutbound(element, form); element.querySelector('.edit-body')!.innerHTML = `${outboundFields(form)}<p class="form-error" role="alert" hidden></p>`; wireImport(element); };
+    const refresh = (element: HTMLFormElement) => { resetTest(); form = readOutbound(element, form); element.querySelector('.edit-body')!.innerHTML = `${outboundFields(form)}<p class="form-error" role="alert" hidden></p>`; wireImport(element); };
     const wireImport = (element: HTMLFormElement) => element.querySelector('[data-import]')?.addEventListener('click', () => {
       const message = element.querySelector<HTMLElement>('.form-error')!;
-      try { form = { ...outboundFromLink(value(element, 'link')) }; element.querySelector('.edit-body')!.innerHTML = `${outboundFields(form)}<p class="form-error" role="alert" hidden></p>`; wireImport(element); }
+      try { resetTest(); form = { ...outboundFromLink(value(element, 'link')) }; element.querySelector('.edit-body')!.innerHTML = `${outboundFields(form)}<p class="form-error" role="alert" hidden></p>`; wireImport(element); }
       catch (reason) { message.textContent = (reason as Error).message; message.hidden = false; }
     });
     openDialog(index === null ? t('添加出站', 'Add outbound') : t('编辑出站', 'Edit outbound'), outboundFields(form), element => {
@@ -260,6 +328,7 @@ export function initXraySettings(root: HTMLElement, icons: () => void, persisten
       if (index !== null && oldTag !== outbound.tag && referenced(current, oldTag)) throw new Error(t('该出站正被路由或负载均衡使用，不能改名。', 'This outbound is used by routing or balancers and cannot be renamed.'));
       change(now => ({ ...now, outbounds: index === null ? [...now.outbounds, outbound] : now.outbounds.map((item, i) => i === index ? outbound : item) }));
     }, element => { const before = `${form.protocol}|${form.network}|${form.security}`; form = readOutbound(element, form); if (`${form.protocol}|${form.network}|${form.security}` !== before) refresh(element); });
+    resetTest = wireOutboundTest(() => outboundFromForm(readOutbound(dialog.querySelector('form')!, form)), index);
     wireImport(dialog.querySelector('form')!);
   }
   // Cloudflare WARP（参照OUI）：服务器注册免费设备并生成tag为warp的WireGuard出站，加入草稿后需“保存”才生效。
@@ -349,6 +418,8 @@ export function initXraySettings(root: HTMLElement, icons: () => void, persisten
     const [kind, action] = op.split(':');
     if (kind === 'warp') { void warpDialog(); return; }
     const p = parts(); if (!p) return;
+    if (kind === 'outbound' && action === 'test') { await testOutbound(index); return; }
+    const probing = !!probeController; cancelProbe(); listProbe = null; if (probing) paint();
     if (action === 'add') void ({ rule: ruleDialog, outbound: outboundDialog, balancer: balancerDialog, dns: dnsDialog } as Record<string, (i: number | null) => unknown>)[kind](null);
     if (action === 'edit') void ({ rule: ruleDialog, outbound: outboundDialog, balancer: balancerDialog, dns: dnsDialog } as Record<string, (i: number | null) => unknown>)[kind](index);
     if (action === 'up' || action === 'down') {
@@ -380,6 +451,7 @@ export function initXraySettings(root: HTMLElement, icons: () => void, persisten
   root.addEventListener('change', event => {
     const element = event.target as HTMLInputElement;
     if (!loaded || saving || loading) return;
+    cancelProbe(); listProbe = null;
     if (['freedomStrategy', 'routingStrategy', 'probeURL', 'logLevel'].includes(element.name)) { draft = { ...draft, [element.name]: element.value }; if (element.name === 'probeURL') { const p = parts(); if (p) draft = writeParts(draft, syncObservatory(p, draft.probeURL)); } paint(); return; }
     if (element.name === 'accessLog' || element.name === 'dnsLog') { draft = { ...draft, [element.name]: element.checked }; paint(); return; }
     if (element.hasAttribute('data-basic-torrent')) { change(p => ({ ...p, outbounds: ensureOutbound(p.outbounds, 'block', { tag: 'block', protocol: 'blackhole', settings: {} }), rules: setRuleValues(p.rules, 'block', 'protocol', element.checked ? ['bittorrent'] : []) })); return; }
@@ -399,6 +471,7 @@ export function initXraySettings(root: HTMLElement, icons: () => void, persisten
   root.addEventListener('input', event => {
     const element = event.target as HTMLTextAreaElement;
     if (element.id !== 'xray-json-editor' || part === 'preview') return;
+    cancelProbe(); listProbe = null;
     try { JSON.parse(element.value); jsonError = ''; } catch { jsonError = t('JSON 格式无效，修正前无法保存。', 'Invalid JSON; fix it before saving.'); }
     draft = { ...draft, [part]: element.value };
     updateStatus();
@@ -409,6 +482,7 @@ export function initXraySettings(root: HTMLElement, icons: () => void, persisten
 
   async function save(): Promise<void> {
     if (!loaded || saving || loading || reloadRequired || !dirty()) return;
+    cancelProbe(); listProbe = null;
     error = ''; feedback = '';
     try {
       buildSettings(draft, reverseTags());
@@ -438,6 +512,7 @@ export function initXraySettings(root: HTMLElement, icons: () => void, persisten
   async function load(force = false): Promise<void> {
     if ((!force && loaded) || loading || saving) return;
     if (force && loaded && dirty() && !await confirmAction(t('刷新会丢弃未保存的修改。', 'Refreshing discards unsaved changes.'), { title: t('刷新 Xray 设置', 'Refresh Xray settings'), confirmLabel: t('刷新', 'Refresh') })) return;
+    cancelProbe(); listProbe = null;
     loading = true; error = ''; feedback = ''; paint();
     try {
       const [document, current] = await Promise.all([api<{ revision: number; data: SettingsDraft | null }>('settings'), api<{ data: Workspace | null }>('workspace').catch(() => null)]);
@@ -463,6 +538,7 @@ export function initXraySettings(root: HTMLElement, icons: () => void, persisten
   }
   return {
     render: () => { visible = true; paint(); if (!loaded) void load(); else void refreshTraffic(); },
+    showOutbounds: tags => { tab = 'outbounds'; focusedOutbounds = new Set(tags); focusPending = true; if (persistent && !dirty()) void load(true); },
     setRuntime: (status, at) => { runtime = status; runtimeAt = at; updateStatus(); },
   };
 }

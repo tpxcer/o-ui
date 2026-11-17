@@ -283,6 +283,24 @@ func TestOfficialCommonOutbounds(t *testing.T) {
 			transport := &http.Transport{Proxy: http.ProxyURL(proxyURL), DisableKeepAlives: true}
 			defer transport.CloseIdleConnections()
 			client := &http.Client{Transport: transport, Timeout: 3 * time.Second}
+			if !check.blocked {
+				t.Run("manual-outbound-probe", func(t *testing.T) {
+					probe := settings
+					probe.ProbeURL = origin.URL
+					payload, _ := json.Marshal(probe)
+					ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+					defer cancel()
+					beforeHits, beforeHTTP, beforeSOCKS := hits.Load(), httpForward.Load(), socksForward.Load()
+					_, _, probeErr := rt.probeOutbound(ctx, payload, "proxy")
+					if check.bad {
+						if probeErr == nil || hits.Load() != beforeHits {
+							t.Fatal("manual probe accepted bad authentication or bypassed proxy")
+						}
+					} else if probeErr != nil || hits.Load() != beforeHits+1 || check.protocol == "http" && httpForward.Load() != beforeHTTP+1 || check.protocol == "socks" && socksForward.Load() != beforeSOCKS+1 {
+						t.Fatal("manual probe failed to use selected proxy", probeErr)
+					}
+				})
+			}
 			before, beforeHTTP, beforeSOCKS := hits.Load(), httpForward.Load(), socksForward.Load()
 			attemptHTTP, attemptSOCKS := httpAttempts.Load(), socksAttempts.Load()
 			response, requestErr := client.Get(origin.URL)

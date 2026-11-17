@@ -1,4 +1,4 @@
-import { createIcons, Gauge, LogIn, Users, Settings, Wrench, PanelLeftClose,
+import { createIcons, Link, Gauge, LogIn, Users, Settings, Wrench, PanelLeftClose,
   PanelLeftOpen, Moon, Sun, Eye, EyeOff, ArrowUp, ArrowDown, List, Power, RotateCw,
   RefreshCw, SlidersHorizontal, DatabaseBackup, Menu, X,
   Info, Plus, Search, Pencil, Trash2, CalendarDays, Shuffle, QrCode, Zap, LogOut, GripVertical, Bell, BellOff, SunMoon, ChevronDown, ChevronLeft, ChevronRight } from 'lucide';
@@ -29,7 +29,7 @@ document.addEventListener('click', event => {
   if (next === 'zh' || next === 'en') setLang(next);
 });
 
-const icons = { Gauge, LogIn, Users, Settings, Wrench, PanelLeftClose,
+const icons = { Link, Gauge, LogIn, Users, Settings, Wrench, PanelLeftClose,
   PanelLeftOpen, Moon, Sun, Eye, EyeOff, ArrowUp, ArrowDown, List, Power, RotateCw,
   RefreshCw, SlidersHorizontal, DatabaseBackup, Menu, X,
   Info, Plus, Search, Pencil, Trash2, CalendarDays, Shuffle, QrCode, Zap, LogOut, GripVertical, Bell, BellOff, SunMoon, ChevronDown, ChevronLeft, ChevronRight };
@@ -387,7 +387,7 @@ const logs = initLogs(refreshIcons);
 if (authenticated) initMonitor(document.querySelector<HTMLElement>('#home-view')!, () => latestRuntime);
 const serverInfo = authenticated ? initServerInfo(document.querySelector<HTMLElement>('#home-view')!, () => showPrivate) : null;
 if (authenticated) window.setInterval(() => { if (!document.hidden) void runtime.refresh(); }, 5000);
-management = initManagement(document.querySelector('#workspace-view')!, refreshIcons, navigate, showDetail, authenticated, () => { void runtime.refresh(); });
+management = initManagement(document.querySelector('#workspace-view')!, refreshIcons, navigate, showDetail, authenticated, () => { void runtime.refresh(); }, tags => { xraySettings?.showOutbounds(tags); navigate('xray'); });
 const core = initCore(refreshIcons, status => {
   // 按钮固定写“切换版本”，当前选用的版本放在悬停提示与读屏名称里。
   const button = document.querySelector<HTMLElement>('[data-action="core-version"]');

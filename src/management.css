@@ -336,3 +336,10 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent-bg); wi
 .ip-limit-card .form-intro { margin: 0; }
 .ip-limit-settings { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 12px; margin: 12px 0 8px; }
 .ip-limit-settings .form-field { width: 150px; margin: 0; }
+
+.client-name-line { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; }
+.client-name-line > strong { min-width: 0; }
+.client-name-line > span:empty { display: none; }
+.client-chain { display: inline-flex; align-items: center; gap: 4px; padding: 2px 0; border: 0; background: transparent; color: var(--warning); font-size: 12px; line-height: 20px; white-space: nowrap; }
+.client-chain svg { width: 15px; height: 15px; flex-shrink: 0; }
+.client-chain:hover { text-decoration: underline; }
