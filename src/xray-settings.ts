@@ -1,4 +1,4 @@
-import { escapeHtml as esc, type Workspace } from './workspace.ts';
+import { clientInboundIds, escapeHtml as esc, type Workspace } from './workspace.ts';
 import { buildSettings, defaultSettings, freedomStrategies, routingStrategies } from './xray-settings-model.ts';
 import type { SettingsDraft } from './xray-settings-model.ts';
 import { api, APIError, confirmSaved, jsonBody, uncertainSave } from './api.ts';
@@ -185,7 +185,9 @@ export function initXraySettings(root: HTMLElement, icons: () => void, persisten
     // 入站标签按用户要求只能选一个；已有多个入站标签的规则改用JSON编辑，避免保存时丢掉其余标签。
     if (!existing || existing.inboundTag.length > 1) { jsonDialog(t('编辑路由规则', 'Edit routing rule'), p.rules[index!], next => change(current => ({ ...current, rules: current.rules.map((rule, i) => i === index ? next : rule) }))); return; }
     const inbounds: [string, string][] = [...workspace.inbounds.map(item => [`in-${item.id}`, item.name] as [string, string]), ...p.outbounds.map(outboundReverseTag).filter(Boolean).map(tag => [tag, `${t('反向代理', 'Reverse')} · ${tag}`] as [string, string])];
+    for (const tag of existing.inboundTag) if (!inbounds.some(([key]) => key === tag)) inbounds.push([tag, tag]);
     const users: [string, string][] = workspace.clients.map(item => [`client-${item.id}`, item.name]);
+    for (const tag of lines(existing.user)) if (!users.some(([key]) => key === tag)) users.push([tag, tag]);
     const none = (label: string): [string, string] => ['', `(${label})`];
     // 布局与字段顺序参照OUI的路由规则弹窗：标签在左、输入在右（手机上下排列），多项用逗号分隔。
     const comma = t('多个项目请用逗号分隔', 'Separate multiple items with commas');
@@ -193,6 +195,25 @@ export function initXraySettings(root: HTMLElement, icons: () => void, persisten
     const row = (label: string, control: string, hint = '') => `<label class="rule-row"><span class="rule-label">${label}${hint ? help(hint) : ''}</span>${control}</label>`;
     const group = (label: string, control: string) => `<div class="rule-row is-top" role="group" aria-label="${esc(label)}"><span class="rule-label">${label}</span>${control}</div>`;
     const chips = (name: string, current: string[], options: [string, string][]) => `<div class="rule-chips">${options.map(([key, label]) => `<label class="check-field"><input type="checkbox" name="${name}" value="${esc(key)}" ${current.includes(key) ? 'checked' : ''}><span>${esc(label)}</span></label>`).join('')}</div>`;
+    const updateUsers = (form: HTMLFormElement) => {
+      const inbound = value(form, 'inboundTag');
+      let available = 0;
+      const invalid: string[] = [];
+      form.querySelectorAll<HTMLInputElement>('[name="userTag"]').forEach(input => {
+        const client = workspace.clients.find(item => `client-${item.id}` === input.value);
+        const matches = !inbound || !!client && clientInboundIds(client).some(id => `in-${id}` === inbound);
+        input.closest('label')!.hidden = !matches;
+        input.disabled = !matches;
+        if (matches) available++;
+        else if (input.checked) invalid.push(client?.name ?? input.value);
+      });
+      form.querySelector<HTMLElement>('[data-rule-no-users]')!.hidden = available > 0;
+      const warning = form.querySelector<HTMLElement>('[data-rule-user-mismatch]')!;
+      warning.hidden = !invalid.length;
+      warning.textContent = invalid.length ? `${t('已选用户不属于当前入站，请切回原入站或清除不匹配的选择：', 'Selected users do not belong to this inbound; switch back or clear the mismatched selections: ')}${invalid.join(', ')}` : '';
+      form.querySelector<HTMLElement>('[data-clear-rule-users]')!.hidden = !invalid.length;
+      return invalid.length === 0;
+    };
     const attrRow = ([name, value]: [string, string]) => `<div class="attr-row"><span class="attr-index"></span><input name="attrName" value="${esc(name)}" placeholder="${t('名称', 'Name')}" aria-label="${t('属性名称', 'Attribute name')}" autocomplete="off"><input name="attrValue" value="${esc(value)}" placeholder="${t('值', 'Value')}" aria-label="${t('属性值', 'Attribute value')}" autocomplete="off">${button('−', `data-attr-remove aria-label="${t('删除属性', 'Remove attribute')}"`, 'icon-button bordered')}</div>`;
     const ip = 'placeholder="0.0.0.0/8, fc00::/7, geoip:cn"', ports = 'placeholder="53,443,1000-2000"';
     openDialog(index === null ? t('+ 路由规则', '+ Routing rule') : t('编辑路由规则', 'Edit routing rule'), `<div class="rule-form">${[
@@ -204,16 +225,24 @@ export function initXraySettings(root: HTMLElement, icons: () => void, persisten
       group(t('属性', 'Attributes'), `<div class="attr-rows" data-attr-rows>${existing.attrs.map(attrRow).join('')}${button('+', `data-attr-add aria-label="${t('添加属性', 'Add attribute')}"`, 'icon-button bordered')}</div>`),
       row('IP', input('ip', existing.ip, ip), comma),
       row(t('域名', 'Domain'), input('domain', existing.domain, 'placeholder="google.com, geosite:cn"'), comma),
-      users.length ? group(t('用户', 'User'), chips('userTag', lines(existing.user), users)) : '',
+      group(t('用户', 'User'), `<div>${chips('userTag', lines(existing.user), users)}<p class="form-hint" data-rule-no-users hidden>${t('没有可选客户端。', 'No clients available.')}</p><p class="form-hint danger-text" data-rule-user-mismatch role="status" hidden></p>${button(t('清除不匹配的选择', 'Clear mismatched selections'), 'data-clear-rule-users hidden', 'text-button')}<p class="form-hint">${t('不勾选用户时，不限制客户端。', 'Leaving all users unchecked does not restrict clients.')}</p></div>`),
       row(t('端口', 'Port'), input('port', existing.port, ports), comma),
       inbounds.length ? row(t('入站标签', 'Inbound tag'), select('inboundTag', existing.inboundTag[0] ?? '', [none(t('无', 'None')), ...inbounds])) : '',
       row(t('出站标签', 'Outbound tag'), select('outboundTag', existing.outboundTag, [none(t('无', 'None')), ...p.outbounds.map(item => [String(item.tag), String(item.tag)] as [string, string]), ...reverseTags().map(tag => [tag, `${t('反向代理', 'Reverse')} · ${tag}`] as [string, string])])),
       row(t('负载均衡标签', 'Balancer tag'), select('balancerTag', existing.balancerTag, [none(t('无', 'None')), ...p.balancers.map(item => [String(item.tag), String(item.tag)] as [string, string])]), t('通过已配置的负载均衡转发流量', 'Route traffic through a configured balancer')),
     ].join('')}</div>`, form => {
+      if (!updateUsers(form)) throw new Error(t('所选用户与入站不匹配，请切回原入站或清除不匹配的选择后再保存。', 'Selected users do not match the inbound; switch back or clear mismatched selections before saving.'));
       const data = new FormData(form), names = data.getAll('attrName').map(String), values = data.getAll('attrValue').map(String);
       const rule = ruleFromForm({ sourceIP: value(form, 'sourceIP'), sourcePort: value(form, 'sourcePort'), vlessRoute: value(form, 'vlessRoute'), network: value(form, 'network'), protocol: checked(form, 'protocol'), attrs: names.map((name, i) => [name, values[i] ?? ''] as [string, string]), ip: value(form, 'ip'), domain: value(form, 'domain'), user: checked(form, 'userTag').join(','), port: value(form, 'port'), inboundTag: value(form, 'inboundTag') ? [value(form, 'inboundTag')] : [], outboundTag: value(form, 'outboundTag'), balancerTag: value(form, 'balancerTag') });
       change(current => ({ ...current, rules: index === null ? [...current.rules, rule] : current.rules.map((item, i) => i === index ? rule : item) }));
-    }, undefined, [t('关闭', 'Close'), index === null ? t('创建', 'Create') : t('保存', 'Save')]);
+    }, updateUsers, [t('关闭', 'Close'), index === null ? t('创建', 'Create') : t('保存', 'Save')]);
+    const form = dialog.querySelector('form')!;
+    updateUsers(form);
+    form.querySelector('[data-clear-rule-users]')!.addEventListener('click', () => {
+      form.querySelectorAll<HTMLInputElement>('[name="userTag"]').forEach(input => { if (input.disabled) input.checked = false; });
+      updateUsers(form);
+      form.querySelector<HTMLElement>('.form-error')!.hidden = true;
+    });
     // 属性行可增删，序号随之重排。
     const rows = dialog.querySelector<HTMLElement>('[data-attr-rows]')!;
     const renumber = () => rows.querySelectorAll('.attr-index').forEach((cell, i) => { cell.textContent = String(i + 1); });
